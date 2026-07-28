@@ -5,7 +5,7 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 ## Arquitectura
 
 - Backend Spring Boot en Amazon ECS con Fargate ARM64, detrás de un Application Load Balancer.
-- Gotenberg Chromium en una EC2 Graviton pequeña.
+- Generación PDF embebida en el backend con OpenHTMLToPDF.
 - Grafana Alloy en una EC2 Graviton pequeña como gateway OTLP hacia Grafana Cloud.
 - Amazon RDS for MySQL privado, cifrado y con almacenamiento autoescalable.
 - Amazon ElastiCache Serverless for Valkey privado, TLS y RBAC.
@@ -15,7 +15,7 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 - Estado remoto S3 cifrado, versionado y con locking nativo de S3.
 - Auto Scaling del backend, alarmas de CloudWatch y presupuesto mensual opcional.
 
-La configuración económica evita NAT Gateway por defecto. Fargate y las dos EC2 reciben salida a Internet, pero sus security groups solo permiten entradas explícitas. RDS y Valkey permanecen en subredes privadas.
+La configuración económica evita NAT Gateway por defecto. Fargate y la EC2 de Alloy reciben salida a Internet, pero sus security groups solo permiten entradas explícitas. RDS y Valkey permanecen en subredes privadas.
 
 ## Versiones fijadas
 
@@ -23,7 +23,6 @@ La configuración económica evita NAT Gateway por defecto. Fargate y las dos EC
 - AWS Provider `6.56.x`.
 - Random Provider `3.9.x`.
 - Grafana Alloy `1.18.0`.
-- Gotenberg `8.34.0-chromium`.
 
 Las restricciones admiten parches compatibles, pero evitan actualizaciones mayores accidentales.
 
@@ -119,8 +118,11 @@ $env:TF_VAR_backend_memory = "4096"
 $env:TF_VAR_backend_desired_count = "1"
 $env:TF_VAR_backend_max_count = "4"
 
-# Helpers EC2
-$env:TF_VAR_gotenberg_instance_type = "t4g.small"
+# Protección de memoria del render PDF embebido
+$env:TF_VAR_pdf_max_concurrent_renders = "2"
+$env:TF_VAR_pdf_max_pdf_size = "25MB"
+
+# Gateway de telemetría
 $env:TF_VAR_alloy_instance_type = "t4g.micro"
 ```
 
@@ -135,7 +137,7 @@ El presupuesto detallado y sus controles están en `docs/COSTS.md`.
 - El bucket de auditoría tiene Object Lock en modo COMPLIANCE y `prevent_destroy`.
 - El rol de la tarea ECS solo puede publicar en su Firehose y operar sobre el bucket de aplicación.
 - Las credenciales de Grafana solo son legibles por la EC2 de Alloy.
-- Gotenberg y Alloy solo aceptan tráfico del security group del backend.
+- Alloy solo acepta tráfico OTLP del security group del backend.
 - La eliminación accidental de ALB, RDS y buckets se controla mediante variables o protecciones explícitas.
 
 ## Destrucción

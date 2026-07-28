@@ -127,39 +127,33 @@ variable "backend_extra_environment" {
   default = {}
 }
 
-variable "gotenberg_instance_type" {
-  type    = string
-  default = "t4g.small"
+variable "pdf_max_concurrent_renders" {
+  description = "Máximo de PDFs renderizados simultáneamente por tarea Fargate."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.pdf_max_concurrent_renders >= 1
+    error_message = "pdf_max_concurrent_renders debe ser al menos 1."
+  }
 }
 
-variable "gotenberg_instance_count" {
-  type    = number
-  default = 1
+variable "pdf_acquire_timeout" {
+  description = "Tiempo máximo que una solicitud espera por un cupo de render."
+  type        = string
+  default     = "30s"
 }
 
-variable "gotenberg_root_volume_size" {
-  type    = number
-  default = 12
+variable "pdf_max_html_size" {
+  description = "Tamaño máximo del HTML procesado por OpenHTMLToPDF."
+  type        = string
+  default     = "5MB"
 }
 
-variable "gotenberg_image" {
-  type    = string
-  default = "gotenberg/gotenberg:8.34.0-chromium"
-}
-
-variable "gotenberg_memory_limit" {
-  type    = string
-  default = "1600m"
-}
-
-variable "gotenberg_cpu_limit" {
-  type    = string
-  default = "1.5"
-}
-
-variable "gotenberg_max_queue_size" {
-  type    = number
-  default = 20
+variable "pdf_max_pdf_size" {
+  description = "Tamaño máximo del PDF generado en memoria."
+  type        = string
+  default     = "25MB"
 }
 
 variable "alloy_instance_type" {

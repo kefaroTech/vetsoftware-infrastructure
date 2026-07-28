@@ -22,9 +22,10 @@ create_certificate = true
 # Para comenzar más pequeño:
 # backend_cpu                 = 512
 # backend_memory              = 2048
+# pdf_max_concurrent_renders  = 1
+# pdf_max_pdf_size            = "15MB"
 # database_instance_class     = "db.t4g.micro"
 # database_max_allocated_storage = 50
-# gotenberg_instance_type     = "t4g.small"
 # alloy_instance_type         = "t4g.micro"
 # valkey_maximum_data_storage_gb  = 10
 # valkey_maximum_ecpu_per_second  = 5000

@@ -17,11 +17,6 @@ variable "backend_port" {
   default = 8080
 }
 
-variable "gotenberg_port" {
-  type    = number
-  default = 3000
-}
-
 variable "alloy_grpc_port" {
   type    = number
   default = 4317

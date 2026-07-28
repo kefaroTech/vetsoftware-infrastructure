@@ -67,33 +67,6 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_backend" {
   description                  = "ALB to backend"
 }
 
-resource "aws_security_group" "gotenberg" {
-  name_prefix = "${var.name}-gotenberg-"
-  description = "Private Gotenberg service"
-  vpc_id      = var.vpc_id
-  tags        = merge(var.tags, { Name = "${var.name}-gotenberg" })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "gotenberg_from_backend" {
-  security_group_id            = aws_security_group.gotenberg.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = var.gotenberg_port
-  to_port                      = var.gotenberg_port
-  ip_protocol                  = "tcp"
-  description                  = "PDF requests from backend"
-}
-
-resource "aws_vpc_security_group_egress_rule" "gotenberg_all" {
-  security_group_id = aws_security_group.gotenberg.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-  description       = "Image pulls and updates"
-}
-
 resource "aws_security_group" "alloy" {
   name_prefix = "${var.name}-alloy-"
   description = "Private Grafana Alloy OTLP gateway"

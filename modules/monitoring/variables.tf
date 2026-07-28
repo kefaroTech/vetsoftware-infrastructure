@@ -38,10 +38,6 @@ variable "database_identifier" {
   type = string
 }
 
-variable "gotenberg_instance_ids" {
-  type = list(string)
-}
-
 variable "alloy_instance_ids" {
   type = list(string)
 }

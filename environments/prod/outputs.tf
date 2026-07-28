@@ -25,10 +25,6 @@ output "valkey_endpoint" {
   value       = module.cache.endpoint
 }
 
-output "gotenberg_private_dns" {
-  value = aws_route53_record.gotenberg.fqdn
-}
-
 output "alloy_private_dns" {
   value = aws_route53_record.alloy.fqdn
 }

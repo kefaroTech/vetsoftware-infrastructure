@@ -14,7 +14,10 @@ locals {
     SERVER_FORWARD_HEADERS_STRATEGY     = "framework"
     DB_URL                              = "jdbc:mysql://${module.database.endpoint}:${module.database.port}/${module.database.database_name}?sslMode=VERIFY_IDENTITY&enabledTLSProtocols=TLSv1.2,TLSv1.3&serverTimezone=UTC"
     DB_USERNAME                         = module.database.master_username
-    GOTENBERG_URL                       = "http://${aws_route53_record.gotenberg.fqdn}:3000"
+    PDF_MAX_CONCURRENT_RENDERS          = tostring(var.pdf_max_concurrent_renders)
+    PDF_ACQUIRE_TIMEOUT                 = var.pdf_acquire_timeout
+    PDF_MAX_HTML_SIZE                   = var.pdf_max_html_size
+    PDF_MAX_PDF_SIZE                    = var.pdf_max_pdf_size
     OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "http://${aws_route53_record.alloy.fqdn}:4318/v1/metrics"
     OTEL_EXPORTER_OTLP_LOGS_ENDPOINT    = "http://${aws_route53_record.alloy.fqdn}:4318/v1/logs"
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  = "http://${aws_route53_record.alloy.fqdn}:4318/v1/traces"

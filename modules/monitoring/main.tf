@@ -144,46 +144,6 @@ resource "aws_cloudwatch_metric_alarm" "database_storage" {
   tags = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "gotenberg_status" {
-  for_each = { for index, instance_id in var.gotenberg_instance_ids : tostring(index) => instance_id }
-
-  alarm_name          = "${var.name}-gotenberg-${each.value}-status"
-  alarm_description   = "EC2 instance status check failed"
-  namespace           = "AWS/EC2"
-  metric_name         = "StatusCheckFailed"
-  statistic           = "Maximum"
-  period              = 60
-  evaluation_periods  = 2
-  threshold           = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  treat_missing_data  = "breaching"
-  alarm_actions       = local.alarm_actions
-
-  dimensions = { InstanceId = each.value }
-  tags       = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "gotenberg_recovery" {
-  for_each = { for index, instance_id in var.gotenberg_instance_ids : tostring(index) => instance_id }
-
-  alarm_name          = "${var.name}-gotenberg-${each.key}-system-recovery"
-  alarm_description   = "Recover the EC2 instance after an underlying system failure"
-  namespace           = "AWS/EC2"
-  metric_name         = "StatusCheckFailed_System"
-  statistic           = "Minimum"
-  period              = 60
-  evaluation_periods  = 2
-  threshold           = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  treat_missing_data  = "missing"
-  alarm_actions = concat(local.alarm_actions, [
-    "arn:aws:automate:${var.aws_region}:ec2:recover"
-  ])
-
-  dimensions = { InstanceId = each.value }
-  tags       = var.tags
-}
-
 resource "aws_cloudwatch_metric_alarm" "alloy_status" {
   for_each = { for index, instance_id in var.alloy_instance_ids : tostring(index) => instance_id }
 

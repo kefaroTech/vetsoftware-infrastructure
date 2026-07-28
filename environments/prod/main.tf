@@ -84,37 +84,6 @@ resource "aws_route53_zone" "private" {
   tags = local.common_tags
 }
 
-module "gotenberg" {
-  source = "../../modules/ec2_service"
-
-  name               = local.name
-  service_name       = "gotenberg"
-  instance_type      = var.gotenberg_instance_type
-  instance_count     = var.gotenberg_instance_count
-  subnet_ids         = module.network.public_subnet_ids
-  security_group_ids = [module.security.gotenberg_security_group_id]
-  root_volume_size   = var.gotenberg_root_volume_size
-  log_retention_days = var.log_retention_days
-  user_data = templatefile("${path.module}/../../templates/gotenberg-user-data.sh.tftpl", {
-    image          = var.gotenberg_image
-    memory_limit   = var.gotenberg_memory_limit
-    cpu_limit      = var.gotenberg_cpu_limit
-    aws_region     = var.aws_region
-    log_group_name = "/${local.name}/gotenberg"
-    port           = 3000
-    max_queue_size = var.gotenberg_max_queue_size
-  })
-  tags = local.common_tags
-}
-
-resource "aws_route53_record" "gotenberg" {
-  zone_id = aws_route53_zone.private.zone_id
-  name    = "gotenberg.${local.private_zone_name}"
-  type    = "A"
-  ttl     = 30
-  records = module.gotenberg.private_ips
-}
-
 module "alloy" {
   source = "../../modules/ec2_service"
 
@@ -201,7 +170,6 @@ module "backend" {
 
   depends_on = [
     aws_route53_record.alloy,
-    aws_route53_record.gotenberg,
   ]
 }
 
@@ -217,7 +185,6 @@ module "monitoring" {
   alb_arn_suffix          = module.alb.arn_suffix
   target_group_arn_suffix = module.alb.target_group_arn_suffix
   database_identifier     = module.database.identifier
-  gotenberg_instance_ids  = module.gotenberg.instance_ids
   alloy_instance_ids      = module.alloy.instance_ids
   tags                    = local.common_tags
 }
