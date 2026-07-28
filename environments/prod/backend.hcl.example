@@ -1,0 +1,8 @@
+bucket       = "vetsoftware-terraform-state-ACCOUNT_ID"
+key          = "vetsoftware/prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true
+
+# Si bootstrap creó una KMS key, agregue su ARN:
+# kms_key_id = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"

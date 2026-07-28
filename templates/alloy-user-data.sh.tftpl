@@ -1,0 +1,85 @@
+#!/bin/bash
+set -euo pipefail
+
+dnf install -y docker jq
+systemctl enable --now docker
+
+install -d -m 0755 /etc/alloy /var/lib/alloy
+
+cat >/etc/alloy/config.alloy <<'ALLOY'
+${alloy_config}
+ALLOY
+chmod 0644 /etc/alloy/config.alloy
+
+cat >/usr/local/bin/refresh-alloy-secrets <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+temporary_file="$(mktemp /etc/alloy/alloy.env.XXXXXX)"
+chmod 0600 "$temporary_file"
+
+aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${grafana_secret_arn}' --query SecretString --output text \
+  | jq -r '"OTLP_USERNAME=" + .OTLP_USERNAME + "\nOTLP_API_KEY=" + .OTLP_API_KEY' \
+  >"$temporary_file"
+
+if [[ -f /etc/alloy/alloy.env ]] && cmp -s "$temporary_file" /etc/alloy/alloy.env; then
+  rm -f "$temporary_file"
+  exit 0
+fi
+
+mv -f "$temporary_file" /etc/alloy/alloy.env
+
+if systemctl is-active --quiet alloy.service; then
+  systemctl restart alloy.service
+fi
+SCRIPT
+chmod 0750 /usr/local/bin/refresh-alloy-secrets
+
+docker pull '${image}'
+
+cat >/etc/systemd/system/alloy.service <<'UNIT'
+[Unit]
+Description=Grafana Alloy OTLP gateway
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+ExecStartPre=/usr/local/bin/refresh-alloy-secrets
+ExecStartPre=-/usr/bin/docker rm -f alloy
+ExecStart=/usr/bin/docker run --rm --name alloy --network host --init --memory=${container_memory_limit} --cpus=${container_cpu_limit} --security-opt=no-new-privileges --env-file=/etc/alloy/alloy.env --volume=/etc/alloy/config.alloy:/etc/alloy/config.alloy:ro --volume=/var/lib/alloy:/var/lib/alloy --log-driver=awslogs --log-opt awslogs-region=${aws_region} --log-opt awslogs-group=${log_group_name} --log-opt awslogs-stream=alloy '${image}' run /etc/alloy/config.alloy --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:12345
+ExecStop=/usr/bin/docker stop -t 30 alloy
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat >/etc/systemd/system/alloy-secret-refresh.service <<'UNIT'
+[Unit]
+Description=Refresh Grafana Cloud credentials used by Alloy
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/refresh-alloy-secrets
+UNIT
+
+cat >/etc/systemd/system/alloy-secret-refresh.timer <<'UNIT'
+[Unit]
+Description=Refresh Alloy credentials periodically
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1h
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now alloy.service alloy-secret-refresh.timer

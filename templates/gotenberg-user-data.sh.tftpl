@@ -1,0 +1,61 @@
+#!/bin/bash
+set -euo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+docker pull '${image}'
+
+cat >/etc/systemd/system/gotenberg.service <<'UNIT'
+[Unit]
+Description=Gotenberg Chromium PDF service
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+ExecStartPre=-/usr/bin/docker rm -f gotenberg
+ExecStart=/usr/bin/docker run --rm --name gotenberg --network host --init --memory=${memory_limit} --cpus=${cpu_limit} --security-opt=no-new-privileges --log-driver=awslogs --log-opt awslogs-region=${aws_region} --log-opt awslogs-group=${log_group_name} --log-opt awslogs-stream=gotenberg '${image}' gotenberg --api-port=${port} --chromium-max-queue-size=${max_queue_size}
+ExecStop=/usr/bin/docker stop -t 30 gotenberg
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat >/usr/local/bin/gotenberg-healthcheck <<'SCRIPT'
+#!/bin/bash
+if ! curl --fail --silent --max-time 5 http://127.0.0.1:${port}/health >/dev/null; then
+  systemctl restart gotenberg.service
+fi
+SCRIPT
+chmod 0755 /usr/local/bin/gotenberg-healthcheck
+
+cat >/etc/systemd/system/gotenberg-healthcheck.service <<'UNIT'
+[Unit]
+Description=Check Gotenberg health
+After=gotenberg.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gotenberg-healthcheck
+UNIT
+
+cat >/etc/systemd/system/gotenberg-healthcheck.timer <<'UNIT'
+[Unit]
+Description=Run Gotenberg health check periodically
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=30
+RandomizedDelaySec=5
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now gotenberg.service gotenberg-healthcheck.timer

@@ -1,0 +1,15 @@
+output "endpoint" {
+  value = aws_elasticache_serverless_cache.this.endpoint[0].address
+}
+
+output "port" {
+  value = aws_elasticache_serverless_cache.this.endpoint[0].port
+}
+
+output "connection_secret_arn" {
+  value = aws_secretsmanager_secret.connection.arn
+}
+
+output "name" {
+  value = aws_elasticache_serverless_cache.this.name
+}

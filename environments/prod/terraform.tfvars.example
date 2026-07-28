@@ -1,0 +1,33 @@
+# Copie este archivo a terraform.tfvars. Nunca guarde secretos aquí.
+aws_region  = "us-east-1"
+environment = "prod"
+
+# Debe ser una etiqueta inmutable o, preferiblemente, un digest sha256.
+backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware@sha256:REEMPLAZAR"
+
+# Grafana Cloud > Connections > OpenTelemetry > OTLP endpoint.
+grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
+
+cors_allowed_origins          = ["https://app.example.com"]
+email_from                    = "VetSoftware <noreply@example.com>"
+registration_verification_url = "https://app.example.com/verificar"
+password_reset_url             = "https://app.example.com/restablecer"
+login_url                      = "https://app.example.com/login"
+
+# HTTPS administrado por ACM y DNS Route53 (opcional).
+api_domain_name   = "api.example.com"
+route53_zone_id   = "Z0000000000000000000"
+create_certificate = true
+
+# Para comenzar más pequeño:
+# backend_cpu                 = 512
+# backend_memory              = 2048
+# database_instance_class     = "db.t4g.micro"
+# database_max_allocated_storage = 50
+# gotenberg_instance_type     = "t4g.small"
+# alloy_instance_type         = "t4g.micro"
+# valkey_maximum_data_storage_gb  = 10
+# valkey_maximum_ecpu_per_second  = 5000
+
+alarm_email       = "infra@example.com"
+monthly_budget_usd = 180

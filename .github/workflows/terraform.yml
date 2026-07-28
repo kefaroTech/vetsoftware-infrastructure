@@ -1,0 +1,59 @@
+name: Terraform quality
+
+on:
+  pull_request:
+    paths:
+      - "**/*.tf"
+      - "**/*.tftpl"
+      - ".terraform-version"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.tf"
+      - "**/*.tftpl"
+      - ".terraform-version"
+      - ".github/workflows/terraform.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+
+      - uses: terraform-linters/setup-tflint@v6.3.0
+        with:
+          tflint_version: v0.64.0
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Lint Terraform
+        run: |
+          tflint --init
+          tflint --chdir=bootstrap --format=compact
+          tflint --chdir=environments/prod --format=compact
+
+      - name: Validate bootstrap
+        working-directory: bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate production
+        working-directory: environments/prod
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform test

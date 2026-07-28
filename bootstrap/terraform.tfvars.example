@@ -1,0 +1,9 @@
+project_name = "vetsoftware"
+environment  = "prod"
+aws_region   = "us-east-1"
+enable_kms   = true
+
+tags = {
+  Owner      = "VetSoftware"
+  CostCenter = "production"
+}
