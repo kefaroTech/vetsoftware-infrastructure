@@ -16,16 +16,16 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 - Estado remoto S3 cifrado, versionado y con locking nativo de S3.
 - Auto Scaling del backend, alarmas de CloudWatch y presupuesto mensual opcional.
 - CMK con rotación por entorno, VPC Flow Logs y logs del ALB en CloudWatch.
-- Endpoints privados para APIs AWS y CIDR explícitos para dependencias SaaS.
+- Salida HTTPS pública explícita para APIs AWS y dependencias SaaS, sin entrada pública al backend.
 
-La configuración evita NAT Gateway. S3 usa un endpoint Gateway y ECR, Logs, Secrets Manager, Firehose y SSM usan endpoints Interface compartidos. RDS y Valkey permanecen en subredes privadas.
+La configuración evita NAT Gateway e Interface Endpoints de pago. S3 conserva su endpoint Gateway gratuito; ECR, Logs, Secrets Manager, Firehose y SSM se consumen por HTTPS mediante las IPv4 públicas de Fargate y Alloy. RDS y Valkey permanecen en subredes privadas.
 
 ## Entornos
 
 - `environments/prod`: infraestructura completa y protegida, con VPC, ALB, Alloy, RDS, Valkey y archivo de auditoría propios.
-- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC, los endpoints privados y el ALB interno de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC y el ALB interno de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
 
-Compartir red, endpoints y ALB reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes. El host `dev-api.kefaro.tech` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
+Compartir red y ALB reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes. El host `dev-api.kefaro.tech` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
 
 ## Versiones fijadas
 
@@ -93,7 +93,6 @@ $env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/ve
 
 $env:TF_VAR_api_domain_name = "api.kefaro.tech"
 $env:TF_VAR_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REEMPLAZAR"
-$env:TF_VAR_approved_external_https_ipv4_cidrs = '["CIDR_REAL_DE_PROVEEDOR/32"]'
 
 $env:TF_VAR_cors_allowed_origins = '["https://app.vetsoftware.co","https://admin.vetsoftware.co"]'
 $env:TF_VAR_email_from = "VetSoftware <notificaciones@vetsoftware.co>"

@@ -38,15 +38,16 @@ resource "aws_vpc_security_group_ingress_rule" "backend_from_alb" {
   description                  = "Backend only from internal ALB"
 }
 
-resource "aws_vpc_security_group_egress_rule" "backend_external_https" {
-  for_each = toset(var.approved_external_https_ipv4_cidrs)
-
+# Excepcion de costo aprobada: las APIs publicas de AWS no ofrecen prefix lists
+# estables por servicio. IAM y TLS siguen limitando cada operacion de aplicacion.
+#trivy:ignore:AVD-AWS-0104
+resource "aws_vpc_security_group_egress_rule" "backend_public_https" {
   security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  description       = "HTTPS to explicitly approved external services"
+  description       = "HTTPS to public AWS APIs and external services"
 }
 
 resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
@@ -107,62 +108,16 @@ resource "aws_vpc_security_group_ingress_rule" "alloy_http_from_backend" {
   description                  = "OTLP HTTP from backend"
 }
 
-resource "aws_vpc_security_group_egress_rule" "alloy_external_https" {
-  for_each = toset(var.approved_external_https_ipv4_cidrs)
-
+# Alloy requiere ECR, Secrets Manager, CloudWatch y SSM mediante sus endpoints
+# publicos. La instancia no acepta ingreso publico y conserva IAM de minimo privilegio.
+#trivy:ignore:AVD-AWS-0104
+resource "aws_vpc_security_group_egress_rule" "alloy_public_https" {
   security_group_id = aws_security_group.alloy.id
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  description       = "HTTPS export to explicitly approved Grafana endpoints"
-}
-
-resource "aws_security_group" "vpc_endpoints" {
-  name_prefix = "${var.name}-vpc-endpoints-"
-  description = "PrivateLink endpoints for approved AWS APIs"
-  vpc_id      = var.vpc_id
-  tags        = merge(var.tags, { Name = "${var.name}-vpc-endpoints" })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "endpoints_from_backend" {
-  security_group_id            = aws_security_group.vpc_endpoints.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "AWS APIs from backend tasks"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "endpoints_from_alloy" {
-  security_group_id            = aws_security_group.vpc_endpoints.id
-  referenced_security_group_id = aws_security_group.alloy.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "AWS APIs from Alloy instances"
-}
-
-resource "aws_vpc_security_group_egress_rule" "backend_to_endpoints" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = aws_security_group.vpc_endpoints.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Backend to private AWS API endpoints"
-}
-
-resource "aws_vpc_security_group_egress_rule" "alloy_to_endpoints" {
-  security_group_id            = aws_security_group.alloy.id
-  referenced_security_group_id = aws_security_group.vpc_endpoints.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Alloy to private AWS API endpoints"
+  description       = "HTTPS to public AWS APIs and Grafana Cloud"
 }
 
 resource "aws_security_group" "database" {

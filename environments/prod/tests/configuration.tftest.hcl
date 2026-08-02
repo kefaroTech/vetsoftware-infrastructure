@@ -52,15 +52,14 @@ run "production_configuration_plans" {
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 
-    grafana_otlp_endpoint              = "https://otlp.example.test/otlp"
-    api_domain_name                    = "api.example.test"
-    certificate_arn                    = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
-    approved_external_https_ipv4_cidrs = ["203.0.113.10/32"]
-    cors_allowed_origins               = ["https://app.example.test"]
-    email_from                         = "VetSoftware <noreply@example.test>"
-    registration_verification_url      = "https://app.example.test/verify"
-    password_reset_url                 = "https://app.example.test/reset"
-    login_url                          = "https://app.example.test/login"
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    api_domain_name               = "api.example.test"
+    certificate_arn               = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+    cors_allowed_origins          = ["https://app.example.test"]
+    email_from                    = "VetSoftware <noreply@example.test>"
+    registration_verification_url = "https://app.example.test/verify"
+    password_reset_url            = "https://app.example.test/reset"
+    login_url                     = "https://app.example.test/login"
 
     monthly_budget_usd = 0
   }
@@ -78,5 +77,18 @@ run "production_configuration_plans" {
       !output.database_hardening.skip_final_snapshot
     )
     error_message = "RDS prod debe conservar backup, IAM DB Auth, deletion protection y snapshot final."
+  }
+
+  assert {
+    condition = (
+      output.network_egress_profile.assign_public_ip &&
+      output.network_egress_profile.interface_endpoints == 0 &&
+      output.network_egress_profile.s3_gateway_endpoint &&
+      output.network_egress_profile.backend_cidr == "0.0.0.0/0" &&
+      output.network_egress_profile.backend_port == 443 &&
+      output.network_egress_profile.alloy_cidr == "0.0.0.0/0" &&
+      output.network_egress_profile.alloy_port == 443
+    )
+    error_message = "Prod debe usar salida HTTPS publica explicita, Fargate con IP publica, cero Interface Endpoints y S3 Gateway."
   }
 }

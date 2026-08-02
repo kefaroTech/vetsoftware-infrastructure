@@ -27,11 +27,11 @@ El ALB tiene esquema `internal`, solo escucha HTTPS/443 y su security group acep
 
 Cada tarea incluye un sidecar `cloudflared` fijado por digest y autenticado con un token independiente por entorno. El transporte se fuerza a HTTP/2 y solo permite TCP/7844 hacia los rangos oficiales de Cloudflare. La configuracion de host publico y origen se completa en Cloudflare siguiendo [Cloudflare Tunnel](CLOUDFLARE_TUNNEL.md).
 
-## Salida controlada sin NAT Gateway
+## Salida publica economica sin NAT ni PrivateLink
 
-La VPC crea endpoints Interface en dos AZ para ECR API/DKR, CloudWatch Logs, Secrets Manager, Firehose, SSM, SSM Messages y EC2 Messages. S3 usa un endpoint Gateway. Los security groups permiten HTTPS hacia el grupo de endpoints y no hacia toda Internet.
+Fargate y Alloy conservan IPv4 publica y permiten exclusivamente TCP/443 hacia Internet para consumir ECR, CloudWatch Logs, Secrets Manager, Firehose, SSM, Grafana Cloud, Resend y reCAPTCHA. S3 usa un endpoint Gateway gratuito. El ALB permanece interno y los security groups no permiten ingreso publico hacia las tareas ni Alloy.
 
-Resend, reCAPTCHA, Grafana Cloud y cualquier SaaS adicional deben declarar sus CIDR reales en `approved_external_https_ipv4_cidrs`. La ruta `0.0.0.0/0` esta prohibida por validacion y por el escaneo IaC. Esta postura aumenta el costo fijo de PrivateLink y exige mantenimiento operativo de los rangos externos.
+La apertura HTTPS `0.0.0.0/0` es una decision FinOps explicita: elimina ocho Interface Endpoints en dos AZ y su costo fijo. TLS, IAM de minimo privilegio, IMDSv2, los security groups de ingreso, Cloudflare Tunnel en TCP/7844 y la separacion de RDS/Valkey siguen vigentes. El gate solo acepta `AWS-0104` en las tres reglas identificadas; cualquier otra supresion permanece bloqueada.
 
 ## Datos y cifrado
 
@@ -48,7 +48,7 @@ Los valores ingresan como variables efimeras de Terraform 1.15 y se escriben med
 - ECS escala por CPU y memoria entre `backend_min_count` y `backend_max_count`; cada replica abre conexiones independientes al mismo tunel del entorno.
 - RDS autoescala almacenamiento hasta `database_max_allocated_storage` y puede habilitarse Multi-AZ.
 - Valkey escala automaticamente dentro de sus topes de almacenamiento y ECPU.
-- Desarrollo comparte VPC, endpoints privados y ALB con produccion, pero mantiene task, target group, RDS, Valkey, KMS, bucket y secretos separados.
+- Desarrollo comparte VPC y ALB con produccion, pero mantiene task, target group, RDS, Valkey, KMS, bucket y secretos separados.
 - Desarrollo conserva `db.t4g.micro`, siete dias de backup y alarma de memoria libre a 256 MiB.
 
 Cloudflare Pages, las rutas de Tunnel y Grafana Cloud se configuran fuera de AWS; Terraform aprovisiona y protege el origen y los conectores necesarios.

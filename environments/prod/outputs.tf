@@ -61,3 +61,12 @@ output "grafana_secret_arn" {
 output "monthly_budget_usd" {
   value = var.monthly_budget_usd
 }
+
+output "network_egress_profile" {
+  description = "Contrato de salida economica: Fargate publico, APIs AWS por HTTPS y S3 por Gateway Endpoint."
+  value = merge(module.security.public_https_egress, {
+    assign_public_ip    = module.backend.assign_public_ip
+    interface_endpoints = 0
+    s3_gateway_endpoint = true
+  })
+}

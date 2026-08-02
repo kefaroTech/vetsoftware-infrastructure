@@ -11,22 +11,6 @@ variable "backend_port" {
   default = 8080
 }
 
-variable "approved_external_https_ipv4_cidrs" {
-  description = "CIDR concretos de SaaS externos autorizados; nunca se permite una ruta universal."
-  type        = list(string)
-
-  validation {
-    condition = (
-      length(var.approved_external_https_ipv4_cidrs) > 0 &&
-      alltrue([
-        for cidr in var.approved_external_https_ipv4_cidrs :
-        can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
-      ])
-    )
-    error_message = "Declare al menos un CIDR IPv4 valido y especifico; 0.0.0.0/0 esta prohibido."
-  }
-}
-
 variable "cloudflare_tunnel_ipv4_cidrs" {
   description = "Rangos oficiales usados por los endpoints de Cloudflare Tunnel en el puerto 7844."
   type        = list(string)
