@@ -1,6 +1,6 @@
 # Gate de calidad Terraform
 
-El repositorio aplica una politica fail-closed antes de cada commit y en GitHub Actions. El mismo ejecutor valida local y CI para impedir diferencias de comportamiento.
+El repositorio aplica una politica fail-closed antes de cada commit y en GitHub Actions. El mismo ejecutor comparte los controles, pero adapta el alcance: pre-commit valida el snapshot preparado y sus dependencias directas; CI valida el repositorio completo.
 
 ## Controles obligatorios
 
@@ -10,12 +10,16 @@ El modo `full`, usado por `.githooks/pre-commit`, ejecuta en este orden:
 2. Rechazo de cambios IaC relevantes sin preparar para que el snapshot validado sea exactamente el que se confirma.
 3. Rechazo de archivos, argumentos o comentarios que desactiven controles de seguridad.
 4. Gitleaks sobre el contenido preparado.
-5. Versiones exactas Terraform `1.15.8` y TFLint `0.64.0`.
-6. `terraform fmt -check -diff -recursive`.
-7. TFLint con severidad minima `notice` en bootstrap, dev, prod y el modulo de roles OIDC.
-8. `terraform init -backend=false -input=false -lockfile=readonly` y `terraform validate -json`; cualquier error o advertencia bloquea.
-9. `terraform test` en prod, dev y `modules/github_iac_roles`.
-10. Trivy `0.71.2`, fijado por digest, para incidencias `MEDIUM`, `HIGH` y `CRITICAL`.
+5. Calculo del alcance desde `git diff --cached`: archivos Terraform preparados, raices consumidoras y contratos afectados.
+6. Versiones exactas Terraform `1.15.8` y TFLint `0.64.0` cuando existen cambios IaC afectados.
+7. `terraform fmt -check -diff` unicamente sobre archivos Terraform preparados.
+8. TFLint, `terraform init -backend=false -input=false -lockfile=readonly` y `terraform validate -json` solo en las raices afectadas; cualquier error o advertencia bloquea.
+9. `terraform test` solo para las raices afectadas que poseen contratos.
+10. Trivy `0.71.2`, fijado por digest, para incidencias `MEDIUM`, `HIGH` y `CRITICAL` en las raices afectadas.
+
+Los modulos compartidos usan un mapa de impacto explicito. Por ejemplo, un cambio en `modules/database` valida `environments/dev` y `environments/prod`; un cambio en `modules/ecr` valida `bootstrap`. Un modulo nuevo sin mapa bloquea el commit hasta declarar sus consumidores. Los cambios al propio gate, a TFLint, a la version de Terraform o al workflow fuerzan una comprobacion completa porque pueden afectar a todas las raices.
+
+El modo `ci` conserva formato recursivo, lint, validaciones, contratos y Trivy sobre todo el repositorio. Esta validacion global es el check obligatorio para impedir que la optimizacion local o un hook omitido introduzcan deuda.
 
 El hook no ejecuta `terraform plan`, `apply`, state remoto ni operaciones que requieran credenciales AWS.
 
@@ -33,7 +37,7 @@ Desarrollo conserva `db.t4g.micro` por decision de costo. El contrato automatiza
 ## Ejecucion y logs
 
 ```powershell
-# Gate completo; requiere que todos los cambios IaC esten preparados
+# Gate pre-commit incremental; requiere que todos los cambios IaC esten preparados
 ./scripts/quality/terraform-gate.ps1 -Mode full
 
 # Solo formato, lint, validate y tests
