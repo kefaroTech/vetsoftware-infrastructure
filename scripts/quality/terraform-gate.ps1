@@ -31,6 +31,7 @@ $logFile = Join-Path $logDirectory "terraform-gate-$timestamp-$Mode.log"
 $latestLog = Join-Path $logDirectory "latest-$Mode.log"
 $script:stepNumber = 0
 $script:startedAt = Get-Date
+$script:stagedPaths = @()
 $exitCode = 0
 
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
@@ -109,13 +110,19 @@ function Invoke-StagedHygiene {
     Write-Step "Higiene del snapshot preparado"
     Invoke-NativeCommand -Command "git" -Arguments @("diff", "--cached", "--check") -FailureMessage "Git detecto whitespace invalido en los cambios preparados"
 
-    $stagedPaths = @(& git diff --cached --name-only --diff-filter=ACMR)
+    $stagedPaths = @(& git diff --cached --name-only --diff-filter=ACMRD)
     if ($LASTEXITCODE -ne 0) {
         throw "No fue posible enumerar los archivos preparados."
     }
+    $script:stagedPaths = @($stagedPaths | ForEach-Object { $_.Replace("\", "/") })
+
+    $presentStagedPaths = @(& git diff --cached --name-only --diff-filter=ACMR)
+    if ($LASTEXITCODE -ne 0) {
+        throw "No fue posible enumerar los archivos presentes en el snapshot preparado."
+    }
 
     $blockedPaths = @(
-        foreach ($path in $stagedPaths) {
+        foreach ($path in $presentStagedPaths) {
             $normalized = $path.Replace("\", "/")
             if (
                 $normalized -match '(^|/)\.terraform/' -or
@@ -165,9 +172,18 @@ function Invoke-SecretScan {
 }
 
 function Assert-NoSecuritySuppressions {
-    param([Parameter()][switch]$Cached)
+    param(
+        [Parameter()][switch]$Cached,
+        [Parameter()][switch]$ChangedOnly,
+        [Parameter()][string[]]$Paths = @()
+    )
 
     Write-Step "Politica cero tolerancia: sin exclusiones de seguridad"
+    if ($ChangedOnly -and $Paths.Count -eq 0) {
+        Write-Host "Sin archivos preparados: no hay exclusiones nuevas que analizar." -ForegroundColor Green
+        return
+    }
+
     $forbiddenTokens = @(
         ("trivy" + ":ignore"),
         ("tfsec" + ":ignore"),
@@ -183,7 +199,13 @@ function Assert-NoSecuritySuppressions {
         if ($Cached) {
             $arguments += "--cached"
         }
-        $arguments += @("-n", "-I", "-e", $token, "--", ".")
+        $arguments += @("-n", "-I", "-e", $token, "--")
+        if ($ChangedOnly) {
+            $arguments += $Paths
+        }
+        else {
+            $arguments += "."
+        }
         $result = @(& git @arguments 2>&1)
         $grepExitCode = $LASTEXITCODE
 
@@ -200,6 +222,113 @@ function Assert-NoSecuritySuppressions {
     }
 
     Write-Host "No existen marcadores ni archivos de exclusion de seguridad." -ForegroundColor Green
+}
+
+function Get-PreCommitScope {
+    param([Parameter(Mandatory)][string[]]$Paths)
+
+    $roots = @()
+    $scanTargets = @()
+    $formatFiles = @()
+    $runAll = $false
+
+    foreach ($path in $Paths) {
+        $normalized = $path.Replace("\", "/")
+
+        $isTerraformCode = (
+            $normalized -match '\.tf$' -or
+            $normalized -match '\.tfvars(\.example)?$' -or
+            $normalized -match '\.tftest\.hcl$' -or
+            $normalized -match '\.hcl(\.example)?$' -or
+            $normalized -match '\.tftpl$'
+        )
+
+        if ($normalized -match '\.(tf|tfvars|tftest\.hcl)$' -and (Test-Path -LiteralPath (Join-Path $repositoryRoot $normalized) -PathType Leaf)) {
+            $formatFiles += $normalized
+        }
+
+        if (
+            $normalized -eq ".terraform-version" -or
+            $normalized -eq ".tflint.hcl" -or
+            $normalized -eq ".githooks/pre-commit" -or
+            $normalized -eq ".github/workflows/terraform.yml" -or
+            $normalized.StartsWith("scripts/quality/") -or
+            $normalized.StartsWith("scripts/security/")
+        ) {
+            $runAll = $true
+            continue
+        }
+
+        if (-not $isTerraformCode) {
+            continue
+        }
+
+        if ($normalized.StartsWith("bootstrap/")) {
+            $roots += "bootstrap"
+            $scanTargets += "bootstrap"
+            continue
+        }
+        if ($normalized.StartsWith("environments/prod/")) {
+            $roots += "environments/prod"
+            $scanTargets += "environments/prod"
+            continue
+        }
+        if ($normalized.StartsWith("environments/dev/")) {
+            $roots += "environments/dev"
+            $scanTargets += "environments/dev"
+            continue
+        }
+
+        if ($normalized -match '^modules/([^/]+)/') {
+            $moduleName = $Matches[1]
+            switch ($moduleName) {
+                "ecr" {
+                    $roots += "bootstrap"
+                    $scanTargets += "bootstrap"
+                }
+                "github_iac_roles" {
+                    $roots += @("bootstrap", "modules/github_iac_roles")
+                    $scanTargets += @("bootstrap", "modules/github_iac_roles")
+                }
+                "scheduled_shutdown" {
+                    $roots += "environments/dev"
+                    $scanTargets += "environments/dev"
+                }
+                { $_ -in @("ec2_service", "storage_audit") } {
+                    $roots += "environments/prod"
+                    $scanTargets += "environments/prod"
+                }
+                { $_ -in @("alb", "cache", "database", "ecs_backend", "kms", "monitoring", "network", "secrets", "security") } {
+                    $roots += @("environments/prod", "environments/dev")
+                    $scanTargets += @("environments/prod", "environments/dev")
+                }
+                default {
+                    throw "Modulo Terraform sin mapa de impacto incremental: $moduleName. Actualice Get-PreCommitScope antes de confirmar."
+                }
+            }
+        }
+    }
+
+    if ($runAll) {
+        $roots = $terraformRoots
+        $scanTargets = $terraformRoots
+    }
+
+    $roots = @($roots | Sort-Object -Unique)
+    $scanTargets = @($scanTargets | Sort-Object -Unique)
+    $formatFiles = @($formatFiles | Sort-Object -Unique)
+
+    Write-Step "Alcance incremental calculado desde Git staged"
+    Write-Host "Archivos preparados: $($Paths.Count)"
+    Write-Host "Archivos Terraform para fmt: $(if ($formatFiles.Count) { $formatFiles -join ', ' } else { 'ninguno' })"
+    Write-Host "Raices afectadas: $(if ($roots.Count) { $roots -join ', ' } else { 'ninguna' })"
+    Write-Host "Objetivos Trivy: $(if ($scanTargets.Count) { $scanTargets -join ', ' } else { 'ninguno' })"
+
+    return [PSCustomObject]@{
+        Roots       = $roots
+        ScanTargets = $scanTargets
+        FormatFiles = $formatFiles
+    }
 }
 
 function Assert-Toolchain {
@@ -228,16 +357,32 @@ function Assert-Toolchain {
 }
 
 function Invoke-TerraformFormat {
-    Write-Step "terraform fmt -check -diff -recursive"
-    Invoke-NativeCommand -Command "terraform" -Arguments @("-chdir=$repositoryRoot", "fmt", "-check", "-diff", "-recursive") -FailureMessage "Terraform encontro archivos sin formato; ejecute terraform fmt -recursive"
+    param([Parameter()][string[]]$Files = @())
+
+    if ($Files.Count -eq 0) {
+        Write-Step "terraform fmt -check -diff -recursive"
+        Invoke-NativeCommand -Command "terraform" -Arguments @("-chdir=$repositoryRoot", "fmt", "-check", "-diff", "-recursive") -FailureMessage "Terraform encontro archivos sin formato; ejecute terraform fmt -recursive"
+        return
+    }
+
+    Write-Step "terraform fmt sobre archivos preparados"
+    Push-Location $repositoryRoot
+    try {
+        Invoke-NativeCommand -Command "terraform" -Arguments (@("fmt", "-check", "-diff") + $Files) -FailureMessage "Terraform encontro archivos preparados sin formato; ejecute terraform fmt sobre esos archivos"
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 function Invoke-Tflint {
+    param([Parameter()][string[]]$Roots = $terraformRoots)
+
     Write-Step "TFLint estricto (severidad minima: notice)"
     Push-Location $repositoryRoot
     try {
         Invoke-NativeCommand -Command "tflint" -Arguments @("--init") -FailureMessage "tflint --init fallo"
-        foreach ($root in $terraformRoots) {
+        foreach ($root in $Roots) {
             Write-Host "TFLint: $root"
             Invoke-NativeCommand -Command "tflint" -Arguments @("--chdir=$root", "--format=compact", "--minimum-failure-severity=notice") -FailureMessage "TFLint encontro incidencias en $root"
         }
@@ -274,17 +419,26 @@ function Invoke-TerraformValidate {
 }
 
 function Invoke-TerraformQuality {
+    param(
+        [Parameter()][string[]]$Roots = $terraformRoots,
+        [Parameter()][string[]]$FormatFiles = @()
+    )
+
     Assert-Toolchain
-    Invoke-TerraformFormat
-    Invoke-Tflint
+    Invoke-TerraformFormat -Files $FormatFiles
+    Invoke-Tflint -Roots $Roots
 
     Write-Step "Terraform init y validate sin advertencias"
-    foreach ($root in $terraformRoots) {
+    foreach ($root in $Roots) {
         Invoke-TerraformValidate -Root $root
     }
 
     Write-Step "Contratos terraform test"
-    foreach ($root in $terraformTestRoots) {
+    $affectedTestRoots = @($terraformTestRoots | Where-Object { $_ -in $Roots })
+    if ($affectedTestRoots.Count -eq 0) {
+        Write-Host "Ninguna raiz afectada tiene contratos terraform test; paso omitido." -ForegroundColor Green
+    }
+    foreach ($root in $affectedTestRoots) {
         $absoluteRoot = Join-Path $repositoryRoot $root
         Write-Host "Terraform test: $root"
         Invoke-NativeCommand -Command "terraform" -Arguments @("-chdir=$absoluteRoot", "test", "-no-color") -FailureMessage "terraform test fallo en $root"
@@ -292,9 +446,11 @@ function Invoke-TerraformQuality {
 }
 
 function Invoke-IacSecurityScan {
+    param([Parameter()][string[]]$Targets = @())
+
     Write-Step "Trivy IaC MEDIUM/HIGH/CRITICAL"
     $shell = Get-PosixShell
-    Invoke-NativeCommand -Command $shell -Arguments @("scripts/security/scan-iac.sh") -FailureMessage "Trivy detecto una configuracion insegura o no pudo ejecutar el escaneo"
+    Invoke-NativeCommand -Command $shell -Arguments (@("scripts/security/scan-iac.sh") + $Targets) -FailureMessage "Trivy detecto una configuracion insegura o no pudo ejecutar el escaneo"
 }
 
 try {
@@ -304,10 +460,17 @@ try {
     switch ($Mode) {
         "full" {
             Invoke-StagedHygiene
-            Assert-NoSecuritySuppressions -Cached
+            $scope = Get-PreCommitScope -Paths $script:stagedPaths
+            Assert-NoSecuritySuppressions -Cached -ChangedOnly -Paths $script:stagedPaths
             Invoke-SecretScan
-            Invoke-TerraformQuality
-            Invoke-IacSecurityScan
+            if ($scope.Roots.Count -gt 0) {
+                Invoke-TerraformQuality -Roots $scope.Roots -FormatFiles $scope.FormatFiles
+                Invoke-IacSecurityScan -Targets $scope.ScanTargets
+            }
+            else {
+                Write-Step "Calidad Terraform y Trivy"
+                Write-Host "Sin cambios Terraform ni cambios del gate: validaciones pesadas omitidas." -ForegroundColor Green
+            }
         }
         "terraform" {
             Invoke-TerraformQuality
