@@ -29,6 +29,17 @@ variable "container_port" {
   default = 8080
 }
 
+variable "health_check_path" {
+  description = "Endpoint de readiness usado por Docker, ECS y el target group."
+  type        = string
+  default     = "/api/v1/actuator/health/readiness"
+
+  validation {
+    condition     = startswith(var.health_check_path, "/")
+    error_message = "health_check_path debe ser una ruta absoluta."
+  }
+}
+
 variable "cpu" {
   description = "Unidades Fargate: 1024 = 1 vCPU."
   type        = number

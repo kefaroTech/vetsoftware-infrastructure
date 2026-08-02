@@ -137,6 +137,7 @@ module "alb" {
   enable_access_logs         = var.alb_access_logs_enabled
   account_id                 = data.aws_caller_identity.current.account_id
   aws_region                 = var.aws_region
+  health_check_path          = var.backend_health_check_path
   tags                       = local.common_tags
 }
 
@@ -151,6 +152,7 @@ module "backend" {
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
   cpu_architecture      = var.backend_cpu_architecture
+  health_check_path     = var.backend_health_check_path
   desired_count         = var.backend_desired_count
   min_count             = var.backend_min_count
   max_count             = var.backend_max_count

@@ -222,7 +222,7 @@ resource "aws_lb_target_group" "backend" {
 
   health_check {
     enabled             = true
-    path                = "/api/v1/actuator/health/readiness"
+    path                = var.backend_health_check_path
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 30
@@ -289,6 +289,7 @@ module "backend" {
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
   cpu_architecture      = var.backend_cpu_architecture
+  health_check_path     = var.backend_health_check_path
   desired_count         = 1
   min_count             = 0
   max_count             = 1

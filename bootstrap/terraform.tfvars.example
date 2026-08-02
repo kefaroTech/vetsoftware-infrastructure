@@ -2,6 +2,23 @@ project_name = "vetsoftware"
 environment  = "prod"
 aws_region   = "us-east-1"
 enable_kms   = true
+github_organization = "kefaroTech"
+github_organization_id = "12345678"
+github_environment  = "production"
+ecr_images_to_keep  = 30
+# existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+github_repositories = {
+  backend       = "VetSoftware"
+  private_front = "VetSoftwareFront"
+  public_front  = "VetSoftwarePublicFront"
+}
+
+github_repository_ids = {
+  backend       = "100000001"
+  private_front = "100000002"
+  public_front  = "100000003"
+}
 
 tags = {
   Owner      = "VetSoftware"

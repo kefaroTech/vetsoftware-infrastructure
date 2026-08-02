@@ -94,3 +94,32 @@ resource "aws_s3_bucket_policy" "state" {
   bucket = aws_s3_bucket.state.id
   policy = data.aws_iam_policy_document.state.json
 }
+
+module "ecr" {
+  source = "../modules/ecr"
+
+  project_name                      = var.project_name
+  github_organization               = var.github_organization
+  github_organization_id            = var.github_organization_id
+  github_environment                = var.github_environment
+  existing_github_oidc_provider_arn = var.existing_github_oidc_provider_arn
+  images_to_keep                    = var.ecr_images_to_keep
+  repositories = {
+    backend = {
+      name                 = "${var.project_name}-backend"
+      github_repository    = var.github_repositories.backend
+      github_repository_id = var.github_repository_ids.backend
+    }
+    private_front = {
+      name                 = "${var.project_name}-front"
+      github_repository    = var.github_repositories.private_front
+      github_repository_id = var.github_repository_ids.private_front
+    }
+    public_front = {
+      name                 = "${var.project_name}-public-front"
+      github_repository    = var.github_repositories.public_front
+      github_repository_id = var.github_repository_ids.public_front
+    }
+  }
+  tags = var.tags
+}

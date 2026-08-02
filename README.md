@@ -71,7 +71,7 @@ Terraform lee automáticamente las variables prefijadas con `TF_VAR_`.
 $env:AWS_REGION = "us-east-1"
 $env:TF_VAR_project_name = "vetsoftware"
 $env:TF_VAR_environment = "prod"
-$env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware:1.0.0"
+$env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend:1.0.0"
 
 $env:TF_VAR_api_domain_name = "api.vetsoftware.co"
 $env:TF_VAR_route53_zone_id = "Z0123456789ABCDEFG"
@@ -178,3 +178,51 @@ Dev no crea bucket WORM ni protección contra borrado y puede retirarse independ
 ```powershell
 terraform -chdir=environments/dev destroy
 ```
+
+## Registro de imágenes y GitHub Actions
+
+El bootstrap también crea tres repositorios ECR inmutables:
+
+- `vetsoftware-backend`
+- `vetsoftware-front`
+- `vetsoftware-public-front`
+
+Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios.
+
+El mismo módulo crea el proveedor OIDC de GitHub y un rol IAM de mínimo privilegio por repositorio. La confianza queda limitada por los nombres e IDs inmutables de la organización y el repositorio, además del environment `production`; no se almacenan access keys en GitHub.
+
+Para repositorios nuevos, obtenga los IDs inmutables antes de aplicar el bootstrap:
+
+```powershell
+gh api orgs/kefaroTech --jq .id
+gh api repos/kefaroTech/VetSoftware --jq .id
+gh api repos/kefaroTech/VetSoftwareFront --jq .id
+gh api repos/kefaroTech/VetSoftwarePublicFront --jq .id
+```
+
+Copie los resultados en `github_organization_id` y `github_repository_ids`. GitHub incorporó estos IDs al subject OIDC de repositorios creados después del 15 de julio de 2026, por lo que los valores deben coincidir exactamente.
+
+Si la cuenta ya tiene el proveedor `token.actions.githubusercontent.com`, establezca `existing_github_oidc_provider_arn` en el bootstrap para reutilizarlo en lugar de intentar crear un duplicado.
+
+Después de aplicar el bootstrap, obtenga los valores:
+
+```powershell
+terraform -chdir=bootstrap output ecr_repository_urls
+terraform -chdir=bootstrap output github_ecr_publisher_role_arns
+```
+
+En cada repositorio GitHub abra **Settings > Environments > production > Environment variables** y configure:
+
+| Repositorio GitHub | `AWS_ECR_PUBLISH_ROLE_ARN` | Variable adicional |
+|---|---|---|
+| `VetSoftware` | output `backend` | — |
+| `VetSoftwareFront` | output `private_front` | — |
+| `VetSoftwarePublicFront` | output `public_front` | `VITE_RECAPTCHA_SITE_KEY` |
+
+`AWS_REGION` es opcional y usa `us-east-1` por omisión. Restrinja el environment `production` a la rama `main` y mantenga sus aprobadores obligatorios.
+
+En la política de Actions de la organización deben estar permitidas y fijadas por SHA estas familias: `aws-actions/configure-aws-credentials`, `aws-actions/amazon-ecr-login`, `docker/setup-qemu-action`, `docker/setup-buildx-action` y `docker/build-push-action`.
+
+Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release.
+
+Los fronts continúan desplegándose en Cloudflare Pages según la arquitectura actual. Sus imágenes ECR proporcionan un artefacto reproducible para ejecución local, recuperación o una migración futura; Terraform consume directamente la imagen ARM64 del backend mediante `backend_image_uri`.
