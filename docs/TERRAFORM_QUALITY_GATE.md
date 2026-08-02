@@ -28,10 +28,11 @@ El hook no ejecuta `terraform plan`, `apply`, state remoto ni operaciones que re
 - El resultado permitido del escaneo IaC es cero incidencias no autorizadas en todas las severidades bloqueantes configuradas.
 - No se admiten baselines, archivos de omision, politicas globales, skip flags ni comentarios inline distintos de los tres marcadores controlados de `AWS-0104`.
 - `AWS-0104` se permite exclusivamente en backend prod, Alloy prod y backend dev para TCP/443 hacia APIs publicas de AWS y SaaS. El gate valida ruta, regla y nombre exactos antes de ejecutar Trivy.
+- El gate rechaza cualquier recurso o data source `aws_lb*`, módulo `alb`, bloque ECS `load_balancer` o permiso `elasticloadbalancing:*` dentro del código Terraform.
 - Un hallazgo se corrige en el recurso, se elimina el recurso inseguro o se rediseña la arquitectura.
 - Cambiar el gate, la imagen fijada del escaner o su rango de severidades requiere la misma revision humana que cualquier cambio de seguridad.
 
-La arquitectura actual materializa esta politica con ALB interno y HTTPS obligatorio, Cloudflare Tunnel saliente restringido, HTTPS publico solo en puerto 443, S3 Gateway Endpoint, CMK con rotacion, VPC Flow Logs y RDS con backup, proteccion contra borrado, snapshot final e IAM DB Auth habilitado.
+La arquitectura actual materializa esta política sin balanceador: Cloudflare Tunnel saliente restringido entrega a `http://localhost:8080`, el backend no tiene ingress, el egress público se limita por puerto, S3 conserva su Gateway Endpoint, y siguen vigentes CMK, VPC Flow Logs y el endurecimiento de RDS.
 
 Desarrollo conserva `db.t4g.micro` por decision de costo. El contrato automatizado impide cambiarlo accidentalmente y CloudWatch alerta cuando `FreeableMemory` cae por debajo de 256 MiB.
 

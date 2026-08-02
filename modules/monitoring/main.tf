@@ -62,44 +62,33 @@ resource "aws_cloudwatch_metric_alarm" "backend_memory" {
   tags = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
-  alarm_name          = "${var.name}-alb-5xx"
-  alarm_description   = "ALB is returning server errors"
-  namespace           = "AWS/ApplicationELB"
-  metric_name         = "HTTPCode_Target_5XX_Count"
+resource "aws_cloudwatch_log_metric_filter" "cloudflare_tunnel_errors" {
+  name           = "${var.name}-cloudflare-tunnel-errors"
+  pattern        = "{ $.level = \"error\" }"
+  log_group_name = var.cloudflare_tunnel_log_group_name
+
+  metric_transformation {
+    name          = "ConnectorErrors"
+    namespace     = "VetSoftware/CloudflareTunnel"
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "cloudflare_tunnel_errors" {
+  alarm_name          = "${var.name}-cloudflare-tunnel-errors"
+  alarm_description   = "Cloudflare Tunnel connector emitted one or more errors"
+  namespace           = "VetSoftware/CloudflareTunnel"
+  metric_name         = "ConnectorErrors"
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
-  threshold           = 5
+  threshold           = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
-
-  dimensions = {
-    LoadBalancer = var.alb_arn_suffix
-    TargetGroup  = var.target_group_arn_suffix
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "alb_latency" {
-  alarm_name          = "${var.name}-alb-latency"
-  alarm_description   = "Target response time above two seconds"
-  namespace           = "AWS/ApplicationELB"
-  metric_name         = "TargetResponseTime"
-  extended_statistic  = "p95"
-  period              = 300
-  evaluation_periods  = 2
-  threshold           = 2
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-
-  dimensions = {
-    LoadBalancer = var.alb_arn_suffix
-    TargetGroup  = var.target_group_arn_suffix
-  }
+  ok_actions          = local.alarm_actions
 
   tags = var.tags
 }

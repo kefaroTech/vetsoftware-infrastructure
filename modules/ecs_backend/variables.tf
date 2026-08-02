@@ -20,17 +20,13 @@ variable "security_group_ids" {
   type = list(string)
 }
 
-variable "target_group_arn" {
-  type = string
-}
-
 variable "container_port" {
   type    = number
   default = 8080
 }
 
 variable "health_check_path" {
-  description = "Endpoint de readiness usado por Docker, ECS y el target group."
+  description = "Endpoint de readiness usado por Docker y ECS antes de iniciar cloudflared."
   type        = string
   default     = "/api/v1/actuator/health/readiness"
 

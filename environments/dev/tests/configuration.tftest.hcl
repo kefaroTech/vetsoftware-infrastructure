@@ -19,27 +19,6 @@ mock_provider "aws" {
     }
   }
 
-  mock_data "aws_lb" {
-    defaults = {
-      arn        = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/vetsoftware-prod/1234567890abcdef"
-      arn_suffix = "app/vetsoftware-prod/1234567890abcdef"
-      dns_name   = "vetsoftware-prod.us-east-1.elb.amazonaws.com"
-      zone_id    = "Z35SXDOTRQ7X7K"
-    }
-  }
-
-  mock_data "aws_lb_listener" {
-    defaults = {
-      arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/vetsoftware-prod/1234567890abcdef/abcdef1234567890"
-    }
-  }
-
-  mock_data "aws_security_group" {
-    defaults = {
-      id = "sg-0123456789abcdef0"
-    }
-  }
-
   mock_data "aws_region" {
     defaults = {
       name   = "us-east-1"
@@ -80,14 +59,13 @@ run "development_cost_profile_plans" {
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 
-    grafana_otlp_endpoint                    = "https://otlp.example.test/otlp"
-    cors_allowed_origins                     = ["https://dev.example.test"]
-    email_from                               = "VetSoftware Dev <noreply@example.test>"
-    registration_verification_url            = "https://dev.example.test/verify"
-    password_reset_url                       = "https://dev.example.test/reset"
-    login_url                                = "https://dev.example.test/login"
-    api_domain_name                          = "dev-api.example.test"
-    confirm_shared_certificate_covers_domain = true
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    cors_allowed_origins          = ["https://dev.example.test"]
+    email_from                    = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url = "https://dev.example.test/verify"
+    password_reset_url            = "https://dev.example.test/reset"
+    login_url                     = "https://dev.example.test/login"
+    api_domain_name               = "dev-api.example.test"
   }
 
   assert {
@@ -120,8 +98,13 @@ run "development_cost_profile_plans" {
   }
 
   assert {
-    condition     = output.cost_profile.log_retention_days == 3 && !output.cost_profile.dedicated_alb && !output.cost_profile.dedicated_alloy
-    error_message = "Dev debe retener logs tres días y compartir ALB sin desplegar Alloy."
+    condition     = output.cost_profile.log_retention_days == 3 && output.cost_profile.load_balancer_count == 0 && !output.cost_profile.dedicated_alloy
+    error_message = "Dev debe retener logs tres días y operar sin ALB ni Alloy dedicado."
+  }
+
+  assert {
+    condition     = output.cloudflare_tunnel_origin_url == "http://localhost:8080"
+    error_message = "El hostname dev de Cloudflare Tunnel debe apuntar al backend local de la misma tarea."
   }
 
   assert {

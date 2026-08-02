@@ -3,13 +3,9 @@ output "api_url" {
   value       = "https://${var.api_domain_name}"
 }
 
-output "alb_dns_name" {
-  value = module.alb.dns_name
-}
-
 output "cloudflare_tunnel_origin_url" {
-  description = "Origen HTTPS privado para la ruta publicada en Cloudflare Tunnel."
-  value       = module.alb.origin_url
+  description = "Origen local que debe configurarse en el hostname prod del túnel remoto."
+  value       = module.backend.cloudflare_tunnel_origin_url
 }
 
 output "ecs_cluster_name" {

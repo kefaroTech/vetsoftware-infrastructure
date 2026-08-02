@@ -30,6 +30,11 @@ output "cloudflare_tunnel_log_group_name" {
   value = aws_cloudwatch_log_group.cloudflare_tunnel.name
 }
 
+output "cloudflare_tunnel_origin_url" {
+  description = "Origen local que debe configurarse en el hostname publico del tunel remoto."
+  value       = "http://localhost:${var.container_port}"
+}
+
 output "assign_public_ip" {
   description = "Indica que Fargate usa IPv4 publica para salida directa sin NAT ni Interface Endpoints."
   value       = var.assign_public_ip

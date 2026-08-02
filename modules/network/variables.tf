@@ -10,7 +10,7 @@ variable "vpc_cidr" {
 }
 
 variable "availability_zone_count" {
-  description = "Cantidad de AZ. ALB y capas de datos requieren al menos dos."
+  description = "Cantidad de AZ. Las capas de datos y la distribución de tareas requieren al menos dos."
   type        = number
   default     = 2
 

@@ -7,20 +7,19 @@ Los valores son una referencia inicial para `us-east-1`; AWS factura por uso, re
 | Backend Fargate | ARM64, 1 vCPU, 4 GiB, una tarea | USD 34 |
 | EC2 Alloy | `t4g.micro` | USD 6.15 |
 | EBS | 8 GiB, `gp3` | USD 0.64 |
-| Application Load Balancer interno | Dos o mas AZ | USD 22-30 |
 | IPv4 publicas | Fargate y una EC2 | USD 7.30 |
 | RDS MySQL | `db.t4g.small`, 20 GiB | USD 26-30 |
 | Valkey Serverless | Carga baja | USD 6-15 |
 | S3 Gateway Endpoint | Tablas publicas y de datos | USD 0 adicional |
 | KMS | Una CMK de produccion | Desde USD 1 mas solicitudes |
-| VPC Flow Logs y logs ALB | Ingesta y retencion segun trafico | USD 5-20 iniciales |
+| VPC Flow Logs y logs ECS/Cloudflare | Ingesta y retención según tráfico | USD 5-20 iniciales |
 | S3, Firehose y transferencia | Segun uso | USD 6-20 |
 | Cloudflare Tunnel | Plan Free | USD 0 |
 | Cloudflare Pages | Plan Free | USD 0 |
 | Grafana Cloud | Plan Free dentro de cuotas | USD 0 |
-| **Total orientativo prod + compartidos** |  | **USD 112-168** |
+| **Total orientativo prod + compartidos** |  | **USD 90-146** |
 
-Los ocho Interface Endpoints en dos AZ fueron eliminados por decision FinOps, reduciendo aproximadamente USD 116.80 mensuales mas procesamiento de datos. Fargate y Alloy conservan IPv4 publica y consumen las APIs AWS por TCP/443. El ALB sigue interno y no existe ingreso publico hacia el backend.
+Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión FinOps. El ahorro base combinado es aproximadamente USD 139,06 mensuales más procesamiento de datos y logs de acceso. Fargate y Alloy conservan IPv4 pública; el backend no acepta conexiones de entrada y `cloudflared` usa `localhost`.
 
 ## Perfil de desarrollo
 
@@ -28,12 +27,12 @@ Los ocho Interface Endpoints en dos AZ fueron eliminados por decision FinOps, re
 
 | Recurso | Configuracion dev |
 |---|---|
-| Red / ALB | Reutiliza VPC, dos AZ, S3 Gateway Endpoint y ALB interno de `prod` |
+| Red | Reutiliza VPC, dos AZ y S3 Gateway Endpoint de `prod`; no usa ALB |
 | Backend | 512 CPU, 2048 MiB, solo Fargate Spot, escalado limitado a 0-1 tarea |
 | RDS | `db.t4g.micro`, 20 GiB fijos, backup 7 dias, proteccion contra borrado y snapshot final |
 | Valkey | Serverless limitado a 1 GB y 1000 ECPU/s |
 | Telemetria | Exportacion OTLP directa a Grafana Cloud; sin EC2 Alloy dedicada |
-| Logs | Retencion de 3 dias; comparte ALB, pero conserva logs de task propios |
+| Logs | Retención de 3 días para backend y `cloudflared` |
 | KMS | Una CMK dev adicional, desde USD 1 al mes mas solicitudes |
 | Horario | RDS 07:30-20:15 y ECS 08:00-20:00, lunes a viernes, `America/Bogota` |
 
@@ -48,5 +47,6 @@ Mantener `db.t4g.micro` es una decision explicita de costo. IAM DB Auth queda ha
 - Container Insights y monitoreo detallado de EC2 estan desactivados por defecto para controlar costo.
 - No se crea NAT Gateway ni Interface Endpoints; S3 usa un endpoint Gateway y las demas APIs AWS usan salida HTTPS publica.
 - Logs y versiones no actuales de S3 tienen retenciones explicitas.
+- No se factura ALB ni LCU; Cloudflare Tunnel conecta directamente con el backend local de cada tarea.
 
 El presupuesto no bloquea recursos ni detiene servicios: genera alertas. CloudWatch, VPC Flow Logs, KMS, IPv4 y transferencia deben incluirse en cualquier estimacion futura.

@@ -26,12 +26,9 @@ variable "ecs_service_name" {
   type = string
 }
 
-variable "alb_arn_suffix" {
-  type = string
-}
-
-variable "target_group_arn_suffix" {
-  type = string
+variable "cloudflare_tunnel_log_group_name" {
+  description = "Log group JSON del sidecar cloudflared usado para detectar errores del conector."
+  type        = string
 }
 
 variable "database_identifier" {

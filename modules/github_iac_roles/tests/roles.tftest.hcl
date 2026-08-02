@@ -127,4 +127,16 @@ run "environment_and_function_roles_are_isolated" {
     ))
     error_message = "Cada política inline debe respetar el máximo de 10.240 caracteres de IAM."
   }
+
+  assert {
+    condition = alltrue([
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "elasticloadbalancing:"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["prod_plan"].json, "elasticloadbalancing:"),
+      !strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "elasticloadbalancing:"),
+      !strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "elasticloadbalancing:"),
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "logs:PutMetricFilter"),
+      strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "logs:PutMetricFilter"),
+    ])
+    error_message = "Los roles IaC no deben conservar permisos ELB y sí deben administrar métricas de errores del túnel."
+  }
 }

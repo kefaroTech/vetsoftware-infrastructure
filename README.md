@@ -4,8 +4,8 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 
 ## Arquitectura
 
-- Backend Spring Boot en Amazon ECS con Fargate ARM64, detrás de un ALB HTTPS interno.
-- Cloudflare Tunnel como sidecar por tarea; no existe entrada pública directa al origen AWS.
+- Backend Spring Boot en Amazon ECS con Fargate ARM64 y sin balanceador de carga.
+- Cloudflare Tunnel como sidecar por tarea, conectado a `http://localhost:8080`; no existe entrada pública directa al origen AWS.
 - Generación PDF embebida en el backend con OpenHTMLToPDF.
 - Grafana Alloy en una EC2 Graviton pequeña como gateway OTLP hacia Grafana Cloud.
 - Amazon RDS for MySQL privado, cifrado y con almacenamiento autoescalable.
@@ -15,17 +15,17 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 - Secrets Manager con argumentos write-only y valores efímeros: los secretos no se guardan en el plan ni en el estado.
 - Estado remoto S3 cifrado, versionado y con locking nativo de S3.
 - Auto Scaling del backend, alarmas de CloudWatch y presupuesto mensual opcional.
-- CMK con rotación por entorno, VPC Flow Logs y logs del ALB en CloudWatch.
+- CMK con rotación por entorno, VPC Flow Logs y logs JSON de backend y `cloudflared` en CloudWatch.
 - Salida HTTPS pública explícita para APIs AWS y dependencias SaaS, sin entrada pública al backend.
 
 La configuración evita NAT Gateway e Interface Endpoints de pago. S3 conserva su endpoint Gateway gratuito; ECR, Logs, Secrets Manager, Firehose y SSM se consumen por HTTPS mediante las IPv4 públicas de Fargate y Alloy. RDS y Valkey permanecen en subredes privadas.
 
 ## Entornos
 
-- `environments/prod`: infraestructura completa y protegida, con VPC, ALB, Alloy, RDS, Valkey y archivo de auditoría propios.
-- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC y el ALB interno de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+- `environments/prod`: infraestructura completa y protegida, con VPC, Alloy, RDS, Valkey y archivo de auditoría propios.
+- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC y sus subredes. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
 
-Compartir red y ALB reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes. El host `dev-api.kefaro.tech` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
+Compartir solo la red reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes; sus hostnames remotos apuntan a `http://localhost:8080` dentro de la tarea correspondiente.
 
 ## Versiones fijadas
 
@@ -43,7 +43,7 @@ Las restricciones admiten parches compatibles, pero evitan actualizaciones mayor
 - PowerShell, Git Bash y Docker con el daemon activo para el gate pre-commit completo.
 - AWS CLI v2 autenticado con permisos administrativos para el bootstrap y el despliegue.
 - Una imagen ARM64 publicada del backend. También puede usarse x86 cambiando `backend_cpu_architecture`.
-- La zona `kefaro.tech` activa en Cloudflare y un certificado ACM emitido para `api.kefaro.tech` y `dev-api.kefaro.tech`.
+- La zona `kefaro.tech` activa en Cloudflare y dos túneles remotos independientes para `api.kefaro.tech` y `dev-api.kefaro.tech`.
 - Credenciales OTLP de Grafana Cloud.
 
 ## Gate pre-commit de Terraform
@@ -92,7 +92,6 @@ $env:TF_VAR_environment = "prod"
 $env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend:1.0.0"
 
 $env:TF_VAR_api_domain_name = "api.kefaro.tech"
-$env:TF_VAR_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REEMPLAZAR"
 
 $env:TF_VAR_cors_allowed_origins = '["https://app.vetsoftware.co","https://admin.vetsoftware.co"]'
 $env:TF_VAR_email_from = "VetSoftware <notificaciones@vetsoftware.co>"
@@ -125,7 +124,7 @@ terraform -chdir=environments/prod apply vetsoftware.tfplan
 
 ## Desplegar desarrollo
 
-Producción debe existir primero porque dev descubre su VPC, subredes, ALB, listener y security group mediante tags. Los states usan el mismo bucket protegido, pero keys independientes: `vetsoftware/prod/terraform.tfstate` y `vetsoftware/dev/terraform.tfstate`.
+Producción debe existir primero porque dev descubre su VPC y subredes mediante tags. Los states usan el mismo bucket protegido, pero keys independientes: `vetsoftware/prod/terraform.tfstate` y `vetsoftware/dev/terraform.tfstate`.
 
 ```powershell
 Copy-Item environments/dev/backend.hcl.example environments/dev/backend.hcl
@@ -138,6 +137,17 @@ Copy-Item environments/dev/terraform.tfvars.example environments/dev/terraform.t
 El bootstrap genera ambos `backend.hcl` automáticamente. Dev se enciende de lunes a viernes: RDS a las 07:30, ECS a las 08:00, ECS se apaga a las 20:00 y RDS a las 20:15, en `America/Bogota`. Los horarios se controlan con `*_schedule`, `schedule_timezone` y `scheduled_shutdown_enabled`.
 
 La autenticación OTLP directa se almacena como `OTEL_EXPORTER_OTLP_HEADERS` dentro del JSON efímero de Grafana. Consulte [el ejemplo de variables](environments/dev/terraform.tfvars.example) para construir el encabezado Basic sin guardarlo en Git.
+
+## Migrar una instalación que todavía tenga ALB
+
+Antes de aplicar esta versión, cambie en Cloudflare los hostnames de dev y prod a `http://localhost:8080` y compruebe ambos health endpoints. Después aplique en este orden:
+
+1. Deshabilitar explícitamente la deletion protection del ALB existente, si ya fue desplegado.
+2. `environments/dev`, para retirar dependencias que pertenecen al state de desarrollo.
+3. `environments/prod`, para destruir el ALB y sus recursos exclusivos.
+4. `bootstrap`, para retirar al final los permisos OIDC temporales de ACM, ELB y log delivery.
+
+No aplique `bootstrap` primero: los roles de los entornos necesitan sus permisos anteriores durante la eliminación controlada. El procedimiento y las comprobaciones están detallados en [Cloudflare Tunnel](docs/CLOUDFLARE_TUNNEL.md).
 
 La creación de los túneles y las rutas públicas se documenta en [Cloudflare Tunnel](docs/CLOUDFLARE_TUNNEL.md).
 
@@ -181,7 +191,7 @@ El presupuesto detallado y sus controles están en `docs/COSTS.md`.
 - El rol de la tarea ECS solo puede publicar en su Firehose y operar sobre el bucket de aplicación.
 - Las credenciales de Grafana solo son legibles por la EC2 de Alloy.
 - Alloy solo acepta tráfico OTLP del security group del backend.
-- El ALB es interno y solo acepta HTTPS desde los conectores Cloudflare de ECS.
+- El security group del backend no tiene reglas de entrada: `cloudflared` alcanza Spring Boot por `localhost` dentro de la misma tarea.
 - RDS conserva siete días de backup, tiene IAM DB Auth, protección contra borrado y snapshot final en ambos entornos.
 - El quality gate no admite mecanismos que oculten hallazgos de seguridad.
 
