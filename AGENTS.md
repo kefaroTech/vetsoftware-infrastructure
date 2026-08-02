@@ -27,6 +27,18 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 6. Integrar siempre con un merge explícito `--no-ff`. Están prohibidos los merges fast-forward para cerrar ramas, el squash merge y el rebase de ramas compartidas.
 7. Eliminar la rama temporal local y remota solo después de confirmar que quedó integrada en todos sus destinos obligatorios.
 
+## Aprobación humana obligatoria antes de todo commit
+
+- Ningún agente de IA, automatización o herramienta puede crear un commit por iniciativa propia. Todo commit requiere aprobación previa, explícita y escrita de un developer humano autorizado.
+- Una solicitud para implementar, modificar, corregir, documentar o preparar cambios no constituye aprobación para crear el commit.
+- Antes de solicitar aprobación se debe presentar: repositorio y rama, archivos preparados, resumen del diff, validaciones ejecutadas, tipo de commit y mensaje exacto propuesto.
+- La aprobación debe identificar inequívocamente el commit autorizado. Una forma válida es: `Apruebo el commit propuesto en <repositorio> con el mensaje <mensaje>`.
+- El silencio, una aprobación implícita, una autorización general anterior o la aprobación emitida por otro agente o automatización no son válidos.
+- Una aprobación puede cubrir varios commits únicamente si enumera explícitamente cada repositorio, rama, alcance y mensaje propuesto.
+- La aprobación solo sirve para el contenido y mensaje presentados. Si cambia el diff, el alcance, la rama o el mensaje, se debe solicitar una nueva aprobación escrita.
+- La regla aplica también a commits creados por `merge --no-ff`, `revert`, `cherry-pick` o `commit --amend`. Antes de un merge se debe presentar su origen, destino y mensaje, y obtener una aprobación específica para el commit de merge.
+- Después de preparar los cambios, el agente debe detenerse antes de ejecutar cualquier comando que cree un commit y esperar la aprobación escrita. El agente nunca puede aprobar su propio commit.
+
 ## Flujo de integración
 
 ### Feature
