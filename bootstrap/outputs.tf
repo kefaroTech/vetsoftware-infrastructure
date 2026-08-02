@@ -41,3 +41,18 @@ output "github_ecr_publisher_role_arns" {
   description = "Configure cada valor como AWS_ECR_PUBLISH_ROLE_ARN en el environment production del repositorio GitHub correspondiente."
   value       = module.ecr.publisher_role_arns
 }
+
+output "github_iac_role_arns" {
+  description = "Configure cada ARN en el GitHub Environment IaC indicado para dev/prod y plan/apply."
+  value       = module.github_iac_roles.role_arns
+}
+
+output "github_iac_environments" {
+  description = "Nombres exactos de los GitHub Environments vinculados por las trust policies."
+  value       = module.github_iac_roles.github_environments
+}
+
+output "github_oidc_provider_arn" {
+  description = "Proveedor OIDC único de GitHub Actions reutilizado por publicación y Terraform."
+  value       = local.github_oidc_provider_arn
+}

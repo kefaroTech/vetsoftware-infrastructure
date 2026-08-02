@@ -43,17 +43,13 @@ variable "github_environment" {
   default     = "production"
 }
 
-variable "existing_github_oidc_provider_arn" {
-  description = "ARN de un proveedor token.actions.githubusercontent.com existente; vacío crea uno."
+variable "github_oidc_provider_arn" {
+  description = "ARN del proveedor token.actions.githubusercontent.com administrado por bootstrap."
   type        = string
-  default     = ""
 
   validation {
-    condition = (
-      var.existing_github_oidc_provider_arn == "" ||
-      can(regex("^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.existing_github_oidc_provider_arn))
-    )
-    error_message = "existing_github_oidc_provider_arn debe ser el ARN del proveedor OIDC de GitHub Actions."
+    condition     = can(regex("^arn:[^:]+:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.github_oidc_provider_arn))
+    error_message = "github_oidc_provider_arn debe ser el ARN del proveedor OIDC de GitHub Actions."
   }
 }
 

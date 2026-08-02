@@ -1,4 +1,5 @@
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   name        = "${var.project_name}-${var.environment}-tfstate"
@@ -95,15 +96,36 @@ resource "aws_s3_bucket_policy" "state" {
   policy = data.aws_iam_policy_document.state.json
 }
 
+resource "aws_iam_openid_connect_provider" "github" {
+  count = var.existing_github_oidc_provider_arn == "" ? 1 : 0
+
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = []
+
+  tags = merge(var.tags, {
+    Component = "github-oidc"
+  })
+}
+
+locals {
+  github_oidc_provider_arn = var.existing_github_oidc_provider_arn != "" ? var.existing_github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
+}
+
+moved {
+  from = module.ecr.aws_iam_openid_connect_provider.github[0]
+  to   = aws_iam_openid_connect_provider.github[0]
+}
+
 module "ecr" {
   source = "../modules/ecr"
 
-  project_name                      = var.project_name
-  github_organization               = var.github_organization
-  github_organization_id            = var.github_organization_id
-  github_environment                = var.github_environment
-  existing_github_oidc_provider_arn = var.existing_github_oidc_provider_arn
-  images_to_keep                    = var.ecr_images_to_keep
+  project_name             = var.project_name
+  github_organization      = var.github_organization
+  github_organization_id   = var.github_organization_id
+  github_environment       = var.github_environment
+  github_oidc_provider_arn = local.github_oidc_provider_arn
+  images_to_keep           = var.ecr_images_to_keep
   repositories = {
     backend = {
       name                 = "${var.project_name}-backend"
@@ -122,4 +144,22 @@ module "ecr" {
     }
   }
   tags = var.tags
+}
+
+module "github_iac_roles" {
+  source = "../modules/github_iac_roles"
+
+  project_name             = var.project_name
+  aws_partition            = data.aws_partition.current.partition
+  aws_account_id           = data.aws_caller_identity.current.account_id
+  aws_region               = var.aws_region
+  github_oidc_provider_arn = local.github_oidc_provider_arn
+  github_organization      = var.github_organization
+  github_organization_id   = var.github_organization_id
+  github_repository        = var.github_repositories.iac
+  github_repository_id     = var.github_repository_ids.iac
+  state_bucket_name        = aws_s3_bucket.state.id
+  state_kms_key_arn        = var.enable_kms ? aws_kms_key.state[0].arn : null
+  environments             = var.github_iac_environments
+  tags                     = var.tags
 }
