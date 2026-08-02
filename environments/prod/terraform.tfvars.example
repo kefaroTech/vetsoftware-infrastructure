@@ -14,9 +14,9 @@ registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
 
-# El certificado ACM se valida con un CNAME en Cloudflare y debe cubrir prod y dev.
+# Cloudflare termina el TLS público; el origen local no requiere certificado ACM.
 api_domain_name = "api.kefaro.tech"
-certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REEMPLAZAR"
+# En Cloudflare Tunnel publique este host con origen http://localhost:8080.
 
 # Variable ephemeral adicional, nunca tfvars:
 # $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-prod"

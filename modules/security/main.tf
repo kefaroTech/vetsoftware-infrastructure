@@ -1,14 +1,3 @@
-resource "aws_security_group" "alb" {
-  name_prefix = "${var.name}-alb-"
-  description = "Internal ALB reachable only from backend tunnel connectors"
-  vpc_id      = var.vpc_id
-  tags        = merge(var.tags, { Name = "${var.name}-alb" })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
 resource "aws_security_group" "backend" {
   name_prefix = "${var.name}-backend-"
   description = "Fargate backend and Cloudflare Tunnel connector"
@@ -18,24 +7,6 @@ resource "aws_security_group" "backend" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "alb_https_from_tunnel" {
-  security_group_id            = aws_security_group.alb.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "HTTPS from colocated Cloudflare Tunnel connectors"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "backend_from_alb" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = var.backend_port
-  to_port                      = var.backend_port
-  ip_protocol                  = "tcp"
-  description                  = "Backend only from internal ALB"
 }
 
 # Excepcion de costo aprobada: las APIs publicas de AWS no ofrecen prefix lists
@@ -59,24 +30,6 @@ resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
   to_port           = 7844
   ip_protocol       = "tcp"
   description       = "Cloudflare Tunnel HTTP2 transport"
-}
-
-resource "aws_vpc_security_group_egress_rule" "backend_to_alb" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Cloudflare Tunnel connector to internal ALB"
-}
-
-resource "aws_vpc_security_group_egress_rule" "alb_to_backend" {
-  security_group_id            = aws_security_group.alb.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = var.backend_port
-  to_port                      = var.backend_port
-  ip_protocol                  = "tcp"
-  description                  = "Internal ALB to backend"
 }
 
 resource "aws_security_group" "alloy" {

@@ -54,7 +54,6 @@ run "production_configuration_plans" {
 
     grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
     api_domain_name               = "api.example.test"
-    certificate_arn               = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
     cors_allowed_origins          = ["https://app.example.test"]
     email_from                    = "VetSoftware <noreply@example.test>"
     registration_verification_url = "https://app.example.test/verify"
@@ -90,5 +89,10 @@ run "production_configuration_plans" {
       output.network_egress_profile.alloy_port == 443
     )
     error_message = "Prod debe usar salida HTTPS publica explicita, Fargate con IP publica, cero Interface Endpoints y S3 Gateway."
+  }
+
+  assert {
+    condition     = output.cloudflare_tunnel_origin_url == "http://localhost:8080"
+    error_message = "El hostname prod de Cloudflare Tunnel debe apuntar al backend local de la misma tarea."
   }
 }

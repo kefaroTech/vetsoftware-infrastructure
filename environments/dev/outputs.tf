@@ -1,19 +1,15 @@
 output "api_url" {
-  description = "URL pública de desarrollo servida por el ALB compartido."
-  value       = "${var.shared_alb_listener_port == 443 ? "https" : "http"}://${var.api_domain_name}"
+  description = "URL pública de desarrollo servida por Cloudflare Tunnel."
+  value       = "https://${var.api_domain_name}"
 }
 
 output "shared_vpc_id" {
   value = data.aws_vpc.shared.id
 }
 
-output "shared_alb_arn" {
-  value = data.aws_lb.shared.arn
-}
-
 output "cloudflare_tunnel_origin_url" {
-  description = "Origen HTTPS privado para la ruta dev publicada en Cloudflare Tunnel."
-  value       = "https://${data.aws_lb.shared.dns_name}:443"
+  description = "Origen local que debe configurarse en el hostname dev del túnel remoto."
+  value       = module.backend.cloudflare_tunnel_origin_url
 }
 
 output "ecs_cluster_name" {
@@ -57,7 +53,7 @@ output "cost_profile" {
     valkey_storage_gb      = var.valkey_maximum_data_storage_gb
     valkey_ecpu_per_second = var.valkey_maximum_ecpu_per_second
     log_retention_days     = var.log_retention_days
-    dedicated_alb          = false
+    load_balancer_count    = 0
     dedicated_alloy        = false
     assign_public_ip       = module.backend.assign_public_ip
     public_https_cidr      = aws_vpc_security_group_egress_rule.backend_public_https.cidr_ipv4

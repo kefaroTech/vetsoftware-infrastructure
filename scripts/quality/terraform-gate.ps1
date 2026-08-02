@@ -290,7 +290,22 @@ function Assert-NoSecuritySuppressions {
         }
     }
 
-    Write-Host "Sin exclusiones globales; AWS-0104 autorizado solo para tres reglas HTTPS publicas identificadas." -ForegroundColor Green
+    $loadBalancerPattern = '(resource|data)[[:space:]]+"aws_lb|module[[:space:]]+"alb"|load_balancer[[:space:]]*\{|elasticloadbalancing:'
+    $loadBalancerArguments = @("grep")
+    if ($Cached) {
+        $loadBalancerArguments += "--cached"
+    }
+    $loadBalancerArguments += @("-n", "-I", "-E", "-e", $loadBalancerPattern, "--", "*.tf")
+    $loadBalancerMatches = @(& git @loadBalancerArguments 2>&1)
+    $loadBalancerExitCode = $LASTEXITCODE
+    if ($loadBalancerExitCode -eq 0) {
+        throw "La arquitectura tunnel-only prohibe ALB, target groups, listeners y permisos ELB en Terraform:`n$($loadBalancerMatches -join "`n")"
+    }
+    if ($loadBalancerExitCode -ne 1) {
+        throw "No fue posible verificar la ausencia de balanceadores en Terraform."
+    }
+
+    Write-Host "Sin exclusiones globales; AWS-0104 autorizado solo para tres reglas HTTPS publicas y arquitectura sin ALB verificada." -ForegroundColor Green
 }
 
 function Get-PreCommitScope {

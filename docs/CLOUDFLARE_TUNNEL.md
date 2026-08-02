@@ -1,74 +1,72 @@
 # Cloudflare Tunnel para el backend
 
-La API no expone el ALB a Internet. Cada tarea ECS ejecuta un sidecar `cloudflared` fijado por digest; el sidecar abre conexiones salientes HTTP/2 hacia Cloudflare y reenvia las solicitudes al ALB HTTPS interno.
+La API no publica un balanceador ni abre puertos de entrada en AWS. Cada tarea ECS ejecuta Spring Boot y un sidecar `cloudflared` dentro del mismo espacio de red `awsvpc`; el conector alcanza el backend mediante `http://localhost:8080` y abre únicamente conexiones salientes hacia Cloudflare.
+
+AWS documenta que los contenedores de una misma tarea `awsvpc` pueden comunicarse por `localhost`: <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking-awsvpc.html>. Cloudflare admite explícitamente hostnames publicados hacia servicios locales como `http://localhost:8080`: <https://developers.cloudflare.com/tunnel/>.
 
 ## Prerrequisitos
 
-1. La zona `kefaro.tech` debe estar activa en Cloudflare.
-2. Solicitar en ACM, en `us-east-1`, un certificado que incluya `api.kefaro.tech` y `dev-api.kefaro.tech`.
-3. Crear en Cloudflare los CNAME de validacion entregados por ACM y esperar el estado `Issued`.
-4. Usar el ARN emitido como `certificate_arn` de produccion.
-5. Mantener una lista de CIDR reales para Resend, reCAPTCHA, Grafana Cloud y cualquier otra dependencia HTTPS. Terraform prohibe la ruta universal.
+1. Mantener la zona `kefaro.tech` activa en Cloudflare.
+2. Crear dos túneles remotos independientes: `vetsoftware-prod` y `vetsoftware-dev`.
+3. Conservar un token diferente por entorno y no guardarlo en Git ni en archivos `tfvars`.
+4. Mantener libres los hostnames `api.kefaro.tech` y `dev-api.kefaro.tech`; Cloudflare administra sus registros al publicar cada ruta.
 
-## Crear los tuneles
+## Crear y autenticar los túneles
 
 En **Cloudflare Dashboard > Networking > Tunnels**:
 
-1. Crear un tunel remoto llamado `vetsoftware-prod`.
-2. Copiar solo el token del comando de instalacion; no guardar el comando ni el token en Git.
-3. Crear otro tunel remoto llamado `vetsoftware-dev` y conservar su token por separado.
-4. Inyectar cada token unicamente en su entorno:
+1. Crear `vetsoftware-prod` y copiar solo su token.
+2. Crear `vetsoftware-dev` y copiar su token independiente.
+3. Inyectar el token correspondiente antes de planificar o aplicar:
 
 ```powershell
 $env:TF_VAR_cloudflare_tunnel_token = "TOKEN_DEL_ENTORNO"
 ```
 
-Para CI/CD, guardar el mismo valor como secret del GitHub Environment correspondiente. La version del secreto se rota aumentando `cloudflare_tunnel_token_version`.
+Para CI/CD, guardar cada valor como secret del GitHub Environment que corresponda. La rotación se materializa aumentando `cloudflare_tunnel_token_version`.
 
-## Configurar produccion
+## Configurar los hostnames publicados
 
-Aplicar primero `environments/prod` y consultar:
+En el túnel `vetsoftware-prod`, crear la ruta:
+
+- Hostname: `api.kefaro.tech`
+- Service type: `HTTP`
+- URL: `localhost:8080`
+- HTTP Host Header: sin override
+- TLS hacia origen: no aplica; el salto ocurre por loopback dentro de la tarea
+
+En `vetsoftware-dev`, crear la misma ruta con hostname `dev-api.kefaro.tech` y URL `localhost:8080`.
+
+Los dos roots Terraform exponen el contrato que debe coincidir con Cloudflare:
 
 ```powershell
 terraform -chdir=environments/prod output cloudflare_tunnel_origin_url
-```
-
-En el tunel `vetsoftware-prod`, crear una ruta de aplicacion publicada:
-
-- Hostname: `api.kefaro.tech`
-- Service: `HTTPS`
-- URL: el DNS interno del output, puerto `443`
-- Origin Server Name: `api.kefaro.tech`
-- HTTP Host Header: `api.kefaro.tech`
-- TLS verification: habilitada
-
-No habilitar `noTLSVerify`. Cloudflare crea el registro DNS del hostname al guardar la ruta; no debe existir otro registro con el mismo nombre.
-
-## Configurar desarrollo
-
-Aplicar despues `environments/dev` y consultar:
-
-```powershell
 terraform -chdir=environments/dev output cloudflare_tunnel_origin_url
 ```
 
-En `vetsoftware-dev`, crear la ruta:
+Ambos outputs deben devolver `http://localhost:8080`. El HTTPS público termina en Cloudflare; el transporte entre Cloudflare Edge y `cloudflared` permanece cifrado por el túnel.
 
-- Hostname: `dev-api.kefaro.tech`
-- Service: `HTTPS`
-- URL: el origen privado del output, puerto `443`
-- Origin Server Name: `dev-api.kefaro.tech`
-- HTTP Host Header: `dev-api.kefaro.tech`
-- TLS verification: habilitada
+## Migración segura desde el ALB
 
-El `HTTP Host Header` es obligatorio porque el ALB compartido selecciona el target group de desarrollo mediante host routing.
+Si el ALB ya existe, no aplicar la eliminación de forma desordenada:
 
-## Verificacion operativa
+1. Cambiar primero ambos hostnames de Cloudflare a `http://localhost:8080` y verificar los health endpoints. Las tareas existentes ya contienen ambos contenedores, por lo que pueden atender por loopback antes de eliminar el ALB.
+2. Si producción tiene deletion protection activa, deshabilitarla explícitamente con el rol anterior o una sesión administrativa antes del plan destructivo.
+3. Aplicar `environments/dev` para retirar su listener rule, target group y reglas cruzadas del security group compartido.
+4. Aplicar `environments/prod` para retirar el ALB, su target group, listener, logs y security group.
+5. Aplicar `bootstrap` al final para retirar de los roles OIDC los permisos ACM, ELB y CloudWatch Log Delivery que solo eran necesarios durante la migración.
 
-1. Confirmar tareas estables y targets saludables en ECS y el ALB.
-2. Revisar el grupo `/ecs/<entorno>-backend/cloudflare-tunnel`; debe registrar cuatro conexiones activas sin errores repetitivos.
-3. Probar `https://api.kefaro.tech/api/v1/actuator/health/readiness` y su equivalente dev.
-4. Confirmar logs de acceso del ALB en `/aws/vendedlogs/elasticloadbalancing/<entorno>/access`.
-5. Verificar que el security group no tiene reglas de entrada por CIDR y que solo permite salida TCP/7844 a los rangos Cloudflare declarados.
+Revisar cada plan: dev no debe destruir la VPC compartida y prod no debe destruir ECS, RDS, Valkey, Alloy, buckets ni secretos.
 
-Si rota un token, aumente su contador de version, aplique Terraform y fuerce un nuevo deployment de ECS. El token anterior debe revocarse solo despues de verificar las nuevas conexiones.
+## Verificación operativa
+
+1. Confirmar tareas ECS estables y health checks de contenedor sanos.
+2. Revisar `/ecs/<entorno>-backend/cloudflare-tunnel`; debe registrar conexiones activas sin errores repetitivos.
+3. Probar `https://api.kefaro.tech/api/v1/actuator/health/readiness` y su equivalente de desarrollo.
+4. Confirmar que el security group del backend no tiene reglas de entrada.
+5. Confirmar que solo mantiene las salidas necesarias: TCP/7844 hacia Cloudflare, TCP/443 público y conexiones privadas a RDS, Valkey y telemetría.
+6. Verificar la alarma `cloudflare-tunnel-errors`; los logs JSON con nivel `error` alimentan su métrica de CloudWatch.
+
+Cada tarea adicional crea otra réplica del conector con el mismo token. Cloudflare mantiene conexiones redundantes por túnel y admite múltiples réplicas: <https://developers.cloudflare.com/tunnel/>.
+
+Si rota un token, aumente su contador de versión, aplique Terraform y fuerce un nuevo deployment de ECS. Revoque el token anterior únicamente después de comprobar las nuevas conexiones.

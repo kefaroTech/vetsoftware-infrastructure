@@ -6,11 +6,6 @@ variable "vpc_id" {
   type = string
 }
 
-variable "backend_port" {
-  type    = number
-  default = 8080
-}
-
 variable "cloudflare_tunnel_ipv4_cidrs" {
   description = "Rangos oficiales usados por los endpoints de Cloudflare Tunnel en el puerto 7844."
   type        = list(string)

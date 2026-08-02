@@ -50,23 +50,13 @@ variable "api_domain_name" {
   }
 }
 
-variable "certificate_arn" {
-  description = "Certificado ACM emitido que cubre api_domain_name y el hostname de dev."
-  type        = string
-}
-
-variable "alb_deletion_protection" {
-  type    = bool
-  default = true
-}
-
 variable "backend_image_uri" {
   description = "Imagen Spring Boot publicada. No use :latest."
   type        = string
 }
 
 variable "backend_health_check_path" {
-  description = "Endpoint único de readiness para ALB y ECS."
+  description = "Endpoint de readiness usado por ECS antes de iniciar cloudflared."
   type        = string
   default     = "/api/v1/actuator/health/readiness"
 }

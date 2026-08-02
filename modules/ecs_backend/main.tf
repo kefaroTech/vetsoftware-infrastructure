@@ -207,6 +207,8 @@ locals {
       "http2",
       "--loglevel",
       "info",
+      "--logformat",
+      "json",
       "--metrics",
       "0.0.0.0:2000",
       "run",
@@ -332,12 +334,6 @@ resource "aws_ecs_service" "backend" {
     subnets          = var.subnet_ids
     security_groups  = var.security_group_ids
     assign_public_ip = var.assign_public_ip
-  }
-
-  load_balancer {
-    target_group_arn = var.target_group_arn
-    container_name   = local.container_definition.name
-    container_port   = var.container_port
   }
 
   tags = var.tags

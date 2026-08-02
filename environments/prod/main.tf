@@ -131,20 +131,6 @@ resource "aws_route53_record" "alloy" {
   records = module.alloy.private_ips
 }
 
-module "alb" {
-  source = "../../modules/alb"
-
-  name                       = local.name
-  vpc_id                     = module.network.vpc_id
-  subnet_ids                 = module.network.public_subnet_ids
-  security_group_ids         = [module.security.alb_security_group_id]
-  certificate_arn            = var.certificate_arn
-  enable_deletion_protection = var.alb_deletion_protection
-  kms_key_arn                = module.kms.key_arn
-  health_check_path          = var.backend_health_check_path
-  tags                       = local.common_tags
-}
-
 module "backend" {
   source = "../../modules/ecs_backend"
 
@@ -152,7 +138,6 @@ module "backend" {
   image_uri             = var.backend_image_uri
   subnet_ids            = module.network.public_subnet_ids
   security_group_ids    = [module.security.backend_security_group_id]
-  target_group_arn      = module.alb.target_group_arn
   assign_public_ip      = true
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
@@ -189,15 +174,14 @@ module "backend" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  name                    = local.name
-  aws_region              = var.aws_region
-  alarm_email             = var.alarm_email
-  monthly_budget_usd      = var.monthly_budget_usd
-  ecs_cluster_name        = module.backend.cluster_name
-  ecs_service_name        = module.backend.service_name
-  alb_arn_suffix          = module.alb.arn_suffix
-  target_group_arn_suffix = module.alb.target_group_arn_suffix
-  database_identifier     = module.database.identifier
-  alloy_instance_ids      = module.alloy.instance_ids
-  tags                    = local.common_tags
+  name                             = local.name
+  aws_region                       = var.aws_region
+  alarm_email                      = var.alarm_email
+  monthly_budget_usd               = var.monthly_budget_usd
+  ecs_cluster_name                 = module.backend.cluster_name
+  ecs_service_name                 = module.backend.service_name
+  cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name
+  database_identifier              = module.database.identifier
+  alloy_instance_ids               = module.alloy.instance_ids
+  tags                             = local.common_tags
 }

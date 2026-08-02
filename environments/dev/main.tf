@@ -30,17 +30,8 @@ resource "aws_security_group" "backend" {
   }
 }
 
-resource "aws_vpc_security_group_ingress_rule" "backend_from_shared_alb" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = data.aws_security_group.shared_alb.id
-  from_port                    = 8080
-  to_port                      = 8080
-  ip_protocol                  = "tcp"
-  description                  = "Development backend only from shared ALB"
-}
-
 # Excepcion de costo aprobada: dev consume las APIs publicas de AWS sobre TLS.
-# El security group no permite ingreso publico y el ALB compartido sigue interno.
+# El security group no contiene reglas de ingreso; cloudflared usa localhost.
 #trivy:ignore:AVD-AWS-0104
 resource "aws_vpc_security_group_egress_rule" "backend_public_https" {
   security_group_id = aws_security_group.backend.id
@@ -60,33 +51,6 @@ resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
   to_port           = 7844
   ip_protocol       = "tcp"
   description       = "Cloudflare Tunnel HTTP2 transport"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "shared_alb_https_from_dev_tunnel" {
-  security_group_id            = data.aws_security_group.shared_alb.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "HTTPS from development Cloudflare Tunnel connector"
-}
-
-resource "aws_vpc_security_group_egress_rule" "backend_to_shared_alb" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = data.aws_security_group.shared_alb.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Development tunnel connector to shared internal ALB"
-}
-
-resource "aws_vpc_security_group_egress_rule" "shared_alb_to_backend" {
-  security_group_id            = data.aws_security_group.shared_alb.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 8080
-  to_port                      = 8080
-  ip_protocol                  = "tcp"
-  description                  = "Shared ALB to development backend"
 }
 
 resource "aws_security_group" "database" {
@@ -273,61 +237,6 @@ module "cache" {
   tags                     = local.common_tags
 }
 
-resource "aws_lb_target_group" "backend" {
-  name        = substr("${local.name}-backend", 0, 32)
-  port        = 8080
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id      = data.aws_vpc.shared.id
-
-  deregistration_delay = 30
-
-  health_check {
-    enabled             = true
-    path                = var.backend_health_check_path
-    protocol            = "HTTP"
-    matcher             = "200"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-
-  tags = local.common_tags
-
-  lifecycle {
-    precondition {
-      condition     = length(data.aws_subnets.shared_public.ids) >= 2 && length(data.aws_subnets.shared_data.ids) >= 2
-      error_message = "La VPC compartida debe conservar al menos dos subredes públicas y dos de datos."
-    }
-  }
-}
-
-resource "aws_lb_listener_rule" "backend" {
-  listener_arn = data.aws_lb_listener.shared.arn
-  priority     = var.shared_listener_rule_priority
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
-  }
-
-  condition {
-    host_header {
-      values = [var.api_domain_name]
-    }
-  }
-
-  tags = local.common_tags
-
-  lifecycle {
-    precondition {
-      condition     = var.shared_alb_listener_port != 443 || var.confirm_shared_certificate_covers_domain
-      error_message = "Confirme que el certificado HTTPS compartido cubre api_domain_name."
-    }
-  }
-}
-
 module "backend" {
   source = "../../modules/ecs_backend"
 
@@ -335,7 +244,6 @@ module "backend" {
   image_uri             = var.backend_image_uri
   subnet_ids            = sort(data.aws_subnets.shared_public.ids)
   security_group_ids    = [aws_security_group.backend.id]
-  target_group_arn      = aws_lb_target_group.backend.arn
   assign_public_ip      = true
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
@@ -365,24 +273,21 @@ module "backend" {
   log_retention_days        = var.log_retention_days
   enable_container_insights = var.backend_container_insights
   tags                      = local.common_tags
-
-  depends_on = [aws_lb_listener_rule.backend]
 }
 
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  name                    = local.name
-  aws_region              = var.aws_region
-  alarm_email             = var.alarm_email
-  monthly_budget_usd      = var.monthly_budget_usd
-  ecs_cluster_name        = module.backend.cluster_name
-  ecs_service_name        = module.backend.service_name
-  alb_arn_suffix          = data.aws_lb.shared.arn_suffix
-  target_group_arn_suffix = aws_lb_target_group.backend.arn_suffix
-  database_identifier     = module.database.identifier
-  alloy_instance_ids      = []
-  tags                    = local.common_tags
+  name                             = local.name
+  aws_region                       = var.aws_region
+  alarm_email                      = var.alarm_email
+  monthly_budget_usd               = var.monthly_budget_usd
+  ecs_cluster_name                 = module.backend.cluster_name
+  ecs_service_name                 = module.backend.service_name
+  cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name
+  database_identifier              = module.database.identifier
+  alloy_instance_ids               = []
+  tags                             = local.common_tags
 }
 
 module "scheduled_shutdown" {

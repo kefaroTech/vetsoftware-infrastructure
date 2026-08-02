@@ -19,7 +19,7 @@ variable "environment" {
 }
 
 variable "shared_environment" {
-  description = "Entorno cuya VPC y ALB se reutilizan."
+  description = "Entorno cuya VPC y subredes se reutilizan."
   type        = string
   default     = "prod"
 }
@@ -37,30 +37,8 @@ variable "tags" {
   }
 }
 
-variable "shared_alb_listener_port" {
-  description = "Puerto del listener existente en el ALB compartido. Normalmente 443."
-  type        = number
-  default     = 443
-}
-
-variable "shared_listener_rule_priority" {
-  type    = number
-  default = 200
-
-  validation {
-    condition     = var.shared_listener_rule_priority >= 1 && var.shared_listener_rule_priority <= 50000
-    error_message = "shared_listener_rule_priority debe estar entre 1 y 50000 y ser único en el listener."
-  }
-}
-
-variable "confirm_shared_certificate_covers_domain" {
-  description = "Confirma que el certificado del listener HTTPS incluye api_domain_name como SAN o wildcard."
-  type        = bool
-  default     = false
-}
-
 variable "api_domain_name" {
-  description = "Host exclusivo de dev usado por la regla del ALB compartido."
+  description = "Host publico exclusivo de dev publicado mediante Cloudflare Tunnel."
   type        = string
 
   validation {
@@ -75,7 +53,7 @@ variable "backend_image_uri" {
 }
 
 variable "backend_health_check_path" {
-  description = "Endpoint único de readiness para ALB y ECS."
+  description = "Endpoint de readiness usado por ECS antes de iniciar cloudflared."
   type        = string
   default     = "/api/v1/actuator/health/readiness"
 }
