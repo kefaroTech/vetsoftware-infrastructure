@@ -11,16 +11,16 @@ Los valores son una referencia inicial para `us-east-1`; AWS factura por uso, re
 | IPv4 publicas | Fargate y una EC2 | USD 7.30 |
 | RDS MySQL | `db.t4g.small`, 20 GiB | USD 26-30 |
 | Valkey Serverless | Carga baja | USD 6-15 |
-| 8 endpoints Interface PrivateLink | 2 AZ, 16 ENI-hora | Aproximadamente USD 117 mas datos |
+| S3 Gateway Endpoint | Tablas publicas y de datos | USD 0 adicional |
 | KMS | Una CMK de produccion | Desde USD 1 mas solicitudes |
 | VPC Flow Logs y logs ALB | Ingesta y retencion segun trafico | USD 5-20 iniciales |
 | S3, Firehose y transferencia | Segun uso | USD 6-20 |
 | Cloudflare Tunnel | Plan Free | USD 0 |
 | Cloudflare Pages | Plan Free | USD 0 |
 | Grafana Cloud | Plan Free dentro de cuotas | USD 0 |
-| **Total orientativo** |  | **USD 230-285** |
+| **Total orientativo prod + compartidos** |  | **USD 112-168** |
 
-PrivateLink es el principal costo nuevo de la politica de cero tolerancia. El calculo usa ocho servicios por dos AZ y la tarifa base habitual por endpoint-hora; no incluye procesamiento de datos. Reducir endpoints o AZ abarata el entorno, pero disminuye aislamiento o disponibilidad y requiere una decision arquitectonica explicita.
+Los ocho Interface Endpoints en dos AZ fueron eliminados por decision FinOps, reduciendo aproximadamente USD 116.80 mensuales mas procesamiento de datos. Fargate y Alloy conservan IPv4 publica y consumen las APIs AWS por TCP/443. El ALB sigue interno y no existe ingreso publico hacia el backend.
 
 ## Perfil de desarrollo
 
@@ -28,7 +28,7 @@ PrivateLink es el principal costo nuevo de la politica de cero tolerancia. El ca
 
 | Recurso | Configuracion dev |
 |---|---|
-| Red / ALB | Reutiliza VPC, dos AZ, endpoints privados y ALB de `prod` |
+| Red / ALB | Reutiliza VPC, dos AZ, S3 Gateway Endpoint y ALB interno de `prod` |
 | Backend | 512 CPU, 2048 MiB, solo Fargate Spot, escalado limitado a 0-1 tarea |
 | RDS | `db.t4g.micro`, 20 GiB fijos, backup 7 dias, proteccion contra borrado y snapshot final |
 | Valkey | Serverless limitado a 1 GB y 1000 ECPU/s |
@@ -46,7 +46,7 @@ Mantener `db.t4g.micro` es una decision explicita de costo. IAM DB Auth queda ha
 - Valkey limitado por `valkey_maximum_data_storage_gb` y `valkey_maximum_ecpu_per_second`.
 - RDS limitado por `database_max_allocated_storage` y protegido contra borrado.
 - Container Insights y monitoreo detallado de EC2 estan desactivados por defecto para controlar costo.
-- No se crea NAT Gateway; S3 usa un endpoint Gateway y las APIs AWS usan endpoints Interface.
+- No se crea NAT Gateway ni Interface Endpoints; S3 usa un endpoint Gateway y las demas APIs AWS usan salida HTTPS publica.
 - Logs y versiones no actuales de S3 tienen retenciones explicitas.
 
-El presupuesto no bloquea recursos ni detiene servicios: genera alertas. CloudWatch, VPC Flow Logs, KMS y PrivateLink deben incluirse en cualquier estimacion futura.
+El presupuesto no bloquea recursos ni detiene servicios: genera alertas. CloudWatch, VPC Flow Logs, KMS, IPv4 y transferencia deben incluirse en cualquier estimacion futura.

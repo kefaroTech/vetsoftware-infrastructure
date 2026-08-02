@@ -171,22 +171,6 @@ variable "database_backup_retention_days" {
   }
 }
 
-variable "approved_external_https_ipv4_cidrs" {
-  description = "CIDR de Resend, reCAPTCHA, Grafana u otros SaaS autorizados para salida HTTPS."
-  type        = list(string)
-
-  validation {
-    condition = (
-      length(var.approved_external_https_ipv4_cidrs) > 0 &&
-      alltrue([
-        for cidr in var.approved_external_https_ipv4_cidrs :
-        can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
-      ])
-    )
-    error_message = "approved_external_https_ipv4_cidrs exige CIDR especificos y prohibe 0.0.0.0/0."
-  }
-}
-
 variable "valkey_major_engine_version" {
   type    = string
   default = "8"

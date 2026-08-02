@@ -88,7 +88,6 @@ run "development_cost_profile_plans" {
     login_url                                = "https://dev.example.test/login"
     api_domain_name                          = "dev-api.example.test"
     confirm_shared_certificate_covers_domain = true
-    approved_external_https_ipv4_cidrs       = ["203.0.113.10/32"]
   }
 
   assert {
@@ -123,6 +122,16 @@ run "development_cost_profile_plans" {
   assert {
     condition     = output.cost_profile.log_retention_days == 3 && !output.cost_profile.dedicated_alb && !output.cost_profile.dedicated_alloy
     error_message = "Dev debe retener logs tres días y compartir ALB sin desplegar Alloy."
+  }
+
+  assert {
+    condition = (
+      output.cost_profile.assign_public_ip &&
+      output.cost_profile.interface_endpoints == 0 &&
+      output.cost_profile.public_https_cidr == "0.0.0.0/0" &&
+      output.cost_profile.public_https_port == 443
+    )
+    error_message = "Dev debe usar Fargate con IP publica, cero Interface Endpoints y salida HTTPS publica explicita."
   }
 
   assert {

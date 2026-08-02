@@ -59,5 +59,9 @@ output "cost_profile" {
     log_retention_days     = var.log_retention_days
     dedicated_alb          = false
     dedicated_alloy        = false
+    assign_public_ip       = module.backend.assign_public_ip
+    public_https_cidr      = aws_vpc_security_group_egress_rule.backend_public_https.cidr_ipv4
+    public_https_port      = aws_vpc_security_group_egress_rule.backend_public_https.to_port
+    interface_endpoints    = 0
   }
 }

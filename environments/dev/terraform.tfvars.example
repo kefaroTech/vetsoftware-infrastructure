@@ -11,11 +11,6 @@ shared_listener_rule_priority = 200
 api_domain_name                          = "dev-api.kefaro.tech"
 confirm_shared_certificate_covers_domain = true
 
-# Resuelva y mantenga los CIDR oficiales de los SaaS usados por el backend.
-approved_external_https_ipv4_cidrs = [
-  "203.0.113.10/32", # REEMPLAZAR: ejemplo documental, no desplegar.
-]
-
 # Use digest inmutable y una imagen ARM64 compatible con Fargate Spot.
 backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware@sha256:REEMPLAZAR"
 

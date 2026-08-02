@@ -30,6 +30,11 @@ output "cloudflare_tunnel_log_group_name" {
   value = aws_cloudwatch_log_group.cloudflare_tunnel.name
 }
 
+output "assign_public_ip" {
+  description = "Indica que Fargate usa IPv4 publica para salida directa sin NAT ni Interface Endpoints."
+  value       = var.assign_public_ip
+}
+
 output "capacity_provider_strategy" {
   value = {
     fargate_base        = var.fargate_base

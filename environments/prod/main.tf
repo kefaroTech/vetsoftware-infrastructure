@@ -19,32 +19,9 @@ module "network" {
 module "security" {
   source = "../../modules/security"
 
-  name                               = local.name
-  vpc_id                             = module.network.vpc_id
-  approved_external_https_ipv4_cidrs = var.approved_external_https_ipv4_cidrs
-  tags                               = local.common_tags
-}
-
-resource "aws_vpc_endpoint" "private_aws_api" {
-  for_each = toset([
-    "ec2messages",
-    "ecr.api",
-    "ecr.dkr",
-    "firehose",
-    "logs",
-    "secretsmanager",
-    "ssm",
-    "ssmmessages",
-  ])
-
-  vpc_id              = module.network.vpc_id
-  service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = module.network.data_subnet_ids
-  security_group_ids  = [module.security.vpc_endpoints_security_group_id]
-  private_dns_enabled = true
-
-  tags = merge(local.common_tags, { Name = "${local.name}-${replace(each.value, ".", "-")}" })
+  name   = local.name
+  vpc_id = module.network.vpc_id
+  tags   = local.common_tags
 }
 
 module "secrets" {
@@ -176,6 +153,7 @@ module "backend" {
   subnet_ids            = module.network.public_subnet_ids
   security_group_ids    = [module.security.backend_security_group_id]
   target_group_arn      = module.alb.target_group_arn
+  assign_public_ip      = true
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
   cpu_architecture      = var.backend_cpu_architecture

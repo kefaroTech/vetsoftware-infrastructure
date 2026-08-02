@@ -178,14 +178,13 @@ function Assert-NoSecuritySuppressions {
         [Parameter()][string[]]$Paths = @()
     )
 
-    Write-Step "Politica cero tolerancia: sin exclusiones de seguridad"
+    Write-Step "Politica de seguridad: excepciones arquitectonicas controladas"
     if ($ChangedOnly -and $Paths.Count -eq 0) {
         Write-Host "Sin archivos preparados: no hay exclusiones nuevas que analizar." -ForegroundColor Green
         return
     }
 
     $forbiddenTokens = @(
-        ("trivy" + ":ignore"),
         ("tfsec" + ":ignore"),
         ("checkov" + ":skip"),
         (".trivy" + "ignore"),
@@ -218,10 +217,80 @@ function Assert-NoSecuritySuppressions {
     }
 
     if ($matches.Count -gt 0) {
-        throw "La politica cero tolerancia prohibe suprimir hallazgos:`n$($matches -join "`n")"
+        throw "La politica de seguridad prohibe exclusiones globales o no controladas:`n$($matches -join "`n")"
     }
 
-    Write-Host "No existen marcadores ni archivos de exclusion de seguridad." -ForegroundColor Green
+    $trivyIgnoreToken = ("trivy" + ":ignore")
+    $approvedExceptions = @(
+        "modules/security/main.tf|AVD-AWS-0104|backend_public_https",
+        "modules/security/main.tf|AVD-AWS-0104|alloy_public_https",
+        "environments/dev/main.tf|AVD-AWS-0104|backend_public_https"
+    )
+
+    $arguments = @("grep")
+    if ($Cached) {
+        $arguments += "--cached"
+    }
+    $arguments += @("-n", "-I", "-e", $trivyIgnoreToken, "--")
+    if ($ChangedOnly) {
+        $arguments += $Paths
+    }
+    else {
+        $arguments += "."
+    }
+
+    $ignoreLines = @(& git @arguments 2>&1)
+    $grepExitCode = $LASTEXITCODE
+    if ($grepExitCode -notin @(0, 1)) {
+        throw "No fue posible verificar las excepciones inline de Trivy."
+    }
+
+    $ignorePaths = @(
+        $ignoreLines |
+            ForEach-Object {
+                if ($_ -match '^([^:]+):\d+:') { $Matches[1] }
+                else { throw "Marcador Trivy no interpretable: $_" }
+            } |
+            Sort-Object -Unique
+    )
+    $actualExceptions = @()
+    $escapedToken = [regex]::Escape($trivyIgnoreToken)
+    $structuredIgnore = "(?m)^#$escapedToken`:(?<rule>[A-Za-z0-9-]+)\r?\nresource\s+`"aws_vpc_security_group_egress_rule`"\s+`"(?<resource>[A-Za-z0-9_]+)`"\s+\{"
+
+    foreach ($path in $ignorePaths) {
+        if ($Cached) {
+            $content = ((& git show ":$path" 2>&1) -join "`n")
+            if ($LASTEXITCODE -ne 0) {
+                throw "No fue posible leer '$path' desde el snapshot preparado."
+            }
+        }
+        else {
+            $content = [System.IO.File]::ReadAllText((Join-Path $repositoryRoot $path))
+        }
+
+        $tokenCount = [regex]::Matches($content, $escapedToken).Count
+        $structuredMatches = [regex]::Matches($content, $structuredIgnore)
+        if ($tokenCount -ne $structuredMatches.Count) {
+            throw "'$path' contiene una excepcion Trivy que no esta inmediatamente asociada a un recurso permitido."
+        }
+
+        foreach ($match in $structuredMatches) {
+            $key = "$path|$($match.Groups['rule'].Value)|$($match.Groups['resource'].Value)"
+            if ($key -notin $approvedExceptions) {
+                throw "Excepcion Trivy no autorizada: $key"
+            }
+            $actualExceptions += $key
+        }
+    }
+
+    if (-not $ChangedOnly) {
+        $missingExceptions = @($approvedExceptions | Where-Object { $_ -notin $actualExceptions })
+        if ($missingExceptions.Count -gt 0) {
+            throw "Falta declarar una excepcion arquitectonica requerida:`n$($missingExceptions -join "`n")"
+        }
+    }
+
+    Write-Host "Sin exclusiones globales; AWS-0104 autorizado solo para tres reglas HTTPS publicas identificadas." -ForegroundColor Green
 }
 
 function Get-PreCommitScope {

@@ -39,15 +39,16 @@ resource "aws_vpc_security_group_ingress_rule" "backend_from_shared_alb" {
   description                  = "Development backend only from shared ALB"
 }
 
-resource "aws_vpc_security_group_egress_rule" "backend_external_https" {
-  for_each = toset(var.approved_external_https_ipv4_cidrs)
-
+# Excepcion de costo aprobada: dev consume las APIs publicas de AWS sobre TLS.
+# El security group no permite ingreso publico y el ALB compartido sigue interno.
+#trivy:ignore:AVD-AWS-0104
+resource "aws_vpc_security_group_egress_rule" "backend_public_https" {
   security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  description       = "HTTPS to explicitly approved external services"
+  description       = "HTTPS to public AWS APIs and external services"
 }
 
 resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
@@ -77,24 +78,6 @@ resource "aws_vpc_security_group_egress_rule" "backend_to_shared_alb" {
   to_port                      = 443
   ip_protocol                  = "tcp"
   description                  = "Development tunnel connector to shared internal ALB"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "shared_endpoints_from_backend" {
-  security_group_id            = data.aws_security_group.shared_vpc_endpoints.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Private AWS APIs from development backend"
-}
-
-resource "aws_vpc_security_group_egress_rule" "backend_to_shared_endpoints" {
-  security_group_id            = aws_security_group.backend.id
-  referenced_security_group_id = data.aws_security_group.shared_vpc_endpoints.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
-  description                  = "Development backend to private AWS API endpoints"
 }
 
 resource "aws_vpc_security_group_egress_rule" "shared_alb_to_backend" {
@@ -353,6 +336,7 @@ module "backend" {
   subnet_ids            = sort(data.aws_subnets.shared_public.ids)
   security_group_ids    = [aws_security_group.backend.id]
   target_group_arn      = aws_lb_target_group.backend.arn
+  assign_public_ip      = true
   cpu                   = var.backend_cpu
   memory                = var.backend_memory
   cpu_architecture      = var.backend_cpu_architecture

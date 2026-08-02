@@ -76,15 +76,3 @@ data "aws_security_group" "shared_alb" {
     values = ["${var.project_name}-${var.shared_environment}-alb"]
   }
 }
-
-data "aws_security_group" "shared_vpc_endpoints" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.shared.id]
-  }
-
-  filter {
-    name   = "tag:Name"
-    values = ["${var.project_name}-${var.shared_environment}-vpc-endpoints"]
-  }
-}
