@@ -23,10 +23,10 @@ terraform.rc
 *.jks
 *.keystore
 *.kdbx
-credentials
-credentials.*
-secrets/
-secrets.*
+/credentials
+/credentials.*
+/secrets/
+/secrets.*
 .idea/
 .vscode/
 .tools/

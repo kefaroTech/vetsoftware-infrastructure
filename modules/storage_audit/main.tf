@@ -24,8 +24,11 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "application" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = var.kms_key_arn
+      sse_algorithm     = "aws:kms"
     }
+
+    bucket_key_enabled = true
   }
 }
 
@@ -106,8 +109,11 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = var.kms_key_arn
+      sse_algorithm     = "aws:kms"
     }
+
+    bucket_key_enabled = true
   }
 }
 
@@ -189,6 +195,7 @@ resource "aws_s3_bucket_policy" "application" {
 resource "aws_cloudwatch_log_group" "firehose" {
   name              = "/aws/firehose/${local.stream_name}"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
   tags              = var.tags
 }
 
@@ -226,6 +233,16 @@ data "aws_iam_policy_document" "firehose" {
   }
 
   statement {
+    sid = "UseAuditEncryptionKey"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+    ]
+    resources = [var.kms_key_arn]
+  }
+
+  statement {
     sid = "DeliverObjects"
     actions = [
       "s3:AbortMultipartUpload",
@@ -260,6 +277,7 @@ resource "aws_kinesis_firehose_delivery_stream" "audit" {
     buffering_interval  = var.firehose_buffer_interval
     buffering_size      = var.firehose_buffer_size
     compression_format  = "GZIP"
+    kms_key_arn         = var.kms_key_arn
 
     cloudwatch_logging_options {
       enabled         = true

@@ -17,3 +17,7 @@ output "data_subnet_ids" {
 output "availability_zones" {
   value = local.availability_zones
 }
+
+output "flow_log_group_name" {
+  value = aws_cloudwatch_log_group.vpc_flow.name
+}

@@ -144,6 +144,28 @@ resource "aws_cloudwatch_metric_alarm" "database_storage" {
   tags = var.tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "database_memory" {
+  alarm_name          = "${var.name}-database-low-memory"
+  alarm_description   = "RDS free memory is below the safe threshold"
+  namespace           = "AWS/RDS"
+  metric_name         = "FreeableMemory"
+  statistic           = "Average"
+  period              = 300
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = var.database_freeable_memory_threshold_bytes
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+
+  dimensions = {
+    DBInstanceIdentifier = var.database_identifier
+  }
+
+  tags = var.tags
+}
+
 resource "aws_cloudwatch_metric_alarm" "alloy_status" {
   for_each = { for index, instance_id in var.alloy_instance_ids : tostring(index) => instance_id }
 

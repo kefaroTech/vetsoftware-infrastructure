@@ -25,24 +25,13 @@ variable "health_check_path" {
 }
 
 variable "certificate_arn" {
-  description = "Certificado ACM existente. Vacío permite crear uno o usar HTTP."
+  description = "Certificado ACM emitido que cubre los hostnames del tunel."
   type        = string
-  default     = ""
-}
 
-variable "create_certificate" {
-  type    = bool
-  default = false
-}
-
-variable "domain_name" {
-  type    = string
-  default = ""
-}
-
-variable "route53_zone_id" {
-  type    = string
-  default = ""
+  validation {
+    condition     = can(regex("^arn:[^:]+:acm:[^:]+:[0-9]{12}:certificate/.+$", var.certificate_arn))
+    error_message = "certificate_arn debe ser el ARN de un certificado ACM emitido."
+  }
 }
 
 variable "ssl_policy" {
@@ -55,22 +44,14 @@ variable "enable_deletion_protection" {
   default = true
 }
 
-variable "enable_access_logs" {
-  type    = bool
-  default = true
-}
-
 variable "access_log_retention_days" {
   type    = number
   default = 90
 }
 
-variable "account_id" {
-  type = string
-}
-
-variable "aws_region" {
-  type = string
+variable "kms_key_arn" {
+  description = "CMK usada para cifrar el grupo de logs de acceso del ALB."
+  type        = string
 }
 
 variable "tags" {

@@ -1,13 +1,22 @@
+module "kms" {
+  source = "../../modules/kms"
+
+  name = local.name
+  tags = local.common_tags
+}
+
 module "secrets" {
   source = "../../modules/secrets"
 
-  name                       = local.name
-  application_secrets_json   = var.application_secrets_json
-  grafana_secrets_json       = var.grafana_secrets_json
-  application_secret_version = var.application_secret_version
-  grafana_secret_version     = var.grafana_secret_version
-  recovery_window_in_days    = 0
-  tags                       = local.common_tags
+  name                            = local.name
+  application_secrets_json        = var.application_secrets_json
+  grafana_secrets_json            = var.grafana_secrets_json
+  application_secret_version      = var.application_secret_version
+  grafana_secret_version          = var.grafana_secret_version
+  cloudflare_tunnel_token         = var.cloudflare_tunnel_token
+  cloudflare_tunnel_token_version = var.cloudflare_tunnel_token_version
+  recovery_window_in_days         = 0
+  tags                            = local.common_tags
 }
 
 resource "aws_security_group" "backend" {
@@ -30,11 +39,62 @@ resource "aws_vpc_security_group_ingress_rule" "backend_from_shared_alb" {
   description                  = "Development backend only from shared ALB"
 }
 
-resource "aws_vpc_security_group_egress_rule" "backend_all" {
+resource "aws_vpc_security_group_egress_rule" "backend_external_https" {
+  for_each = toset(var.approved_external_https_ipv4_cidrs)
+
   security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-  description       = "Backend outbound dependencies and direct Grafana Cloud export"
+  cidr_ipv4         = each.value
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "HTTPS to explicitly approved external services"
+}
+
+resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
+  for_each = toset(var.cloudflare_tunnel_ipv4_cidrs)
+
+  security_group_id = aws_security_group.backend.id
+  cidr_ipv4         = each.value
+  from_port         = 7844
+  to_port           = 7844
+  ip_protocol       = "tcp"
+  description       = "Cloudflare Tunnel HTTP2 transport"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "shared_alb_https_from_dev_tunnel" {
+  security_group_id            = data.aws_security_group.shared_alb.id
+  referenced_security_group_id = aws_security_group.backend.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "HTTPS from development Cloudflare Tunnel connector"
+}
+
+resource "aws_vpc_security_group_egress_rule" "backend_to_shared_alb" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = data.aws_security_group.shared_alb.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Development tunnel connector to shared internal ALB"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "shared_endpoints_from_backend" {
+  security_group_id            = data.aws_security_group.shared_vpc_endpoints.id
+  referenced_security_group_id = aws_security_group.backend.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Private AWS APIs from development backend"
+}
+
+resource "aws_vpc_security_group_egress_rule" "backend_to_shared_endpoints" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = data.aws_security_group.shared_vpc_endpoints.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Development backend to private AWS API endpoints"
 }
 
 resource "aws_vpc_security_group_egress_rule" "shared_alb_to_backend" {
@@ -66,6 +126,15 @@ resource "aws_vpc_security_group_ingress_rule" "database_from_backend" {
   description                  = "Development MySQL only from development backend"
 }
 
+resource "aws_vpc_security_group_egress_rule" "backend_to_database" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+  description                  = "Development backend to MySQL"
+}
+
 resource "aws_security_group" "cache" {
   name_prefix = "${local.name}-cache-"
   description = "Development Valkey"
@@ -84,6 +153,15 @@ resource "aws_vpc_security_group_ingress_rule" "cache_from_backend" {
   to_port                      = 6379
   ip_protocol                  = "tcp"
   description                  = "Development Valkey only from development backend"
+}
+
+resource "aws_vpc_security_group_egress_rule" "backend_to_cache" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = aws_security_group.cache.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+  description                  = "Development backend to Valkey"
 }
 
 resource "aws_s3_bucket" "application" {
@@ -105,8 +183,11 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "application" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = module.kms.key_arn
+      sse_algorithm     = "aws:kms"
     }
+
+    bucket_key_enabled = true
   }
 }
 
@@ -190,8 +271,6 @@ module "database" {
   max_allocated_storage        = var.database_max_allocated_storage
   multi_az                     = false
   backup_retention_period      = var.database_backup_retention_days
-  deletion_protection          = false
-  skip_final_snapshot          = true
   performance_insights_enabled = false
   apply_immediately            = true
   tags                         = local.common_tags
@@ -266,18 +345,6 @@ resource "aws_lb_listener_rule" "backend" {
   }
 }
 
-resource "aws_route53_record" "api" {
-  zone_id = var.route53_zone_id
-  name    = var.api_domain_name
-  type    = "A"
-
-  alias {
-    name                   = data.aws_lb.shared.dns_name
-    zone_id                = data.aws_lb.shared.zone_id
-    evaluate_target_health = true
-  }
-}
-
 module "backend" {
   source = "../../modules/ecs_backend"
 
@@ -303,8 +370,14 @@ module "backend" {
     module.cache.connection_secret_arn,
     module.secrets.application_secret_arn,
     module.secrets.grafana_secret_arn,
+    module.secrets.cloudflare_tunnel_secret_arn,
   ]
-  application_bucket_arn    = aws_s3_bucket.application.arn
+  cloudflare_tunnel_secret_arn = module.secrets.cloudflare_tunnel_secret_arn
+  application_bucket_arn       = aws_s3_bucket.application.arn
+  database_connect_resource_arns = [
+    "arn:aws:rds-db:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.database.resource_id}/${module.database.master_username}"
+  ]
+  kms_key_arn               = module.kms.key_arn
   log_retention_days        = var.log_retention_days
   enable_container_insights = var.backend_container_insights
   tags                      = local.common_tags

@@ -1,30 +1,63 @@
+module "kms" {
+  source = "../../modules/kms"
+
+  name = local.name
+  tags = local.common_tags
+}
+
 module "network" {
   source = "../../modules/network"
 
   name                    = local.name
   vpc_cidr                = var.vpc_cidr
   availability_zone_count = var.availability_zone_count
+  kms_key_arn             = module.kms.key_arn
+  flow_log_retention_days = var.log_retention_days
   tags                    = local.common_tags
 }
 
 module "security" {
   source = "../../modules/security"
 
-  name              = local.name
-  vpc_id            = module.network.vpc_id
-  alb_ingress_cidrs = var.alb_ingress_cidrs
-  tags              = local.common_tags
+  name                               = local.name
+  vpc_id                             = module.network.vpc_id
+  approved_external_https_ipv4_cidrs = var.approved_external_https_ipv4_cidrs
+  tags                               = local.common_tags
+}
+
+resource "aws_vpc_endpoint" "private_aws_api" {
+  for_each = toset([
+    "ec2messages",
+    "ecr.api",
+    "ecr.dkr",
+    "firehose",
+    "logs",
+    "secretsmanager",
+    "ssm",
+    "ssmmessages",
+  ])
+
+  vpc_id              = module.network.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.network.data_subnet_ids
+  security_group_ids  = [module.security.vpc_endpoints_security_group_id]
+  private_dns_enabled = true
+
+  tags = merge(local.common_tags, { Name = "${local.name}-${replace(each.value, ".", "-")}" })
 }
 
 module "secrets" {
   source = "../../modules/secrets"
 
-  name                       = local.name
-  application_secrets_json   = var.application_secrets_json
-  grafana_secrets_json       = var.grafana_secrets_json
-  application_secret_version = var.application_secret_version
-  grafana_secret_version     = var.grafana_secret_version
-  tags                       = local.common_tags
+  name                            = local.name
+  application_secrets_json        = var.application_secrets_json
+  grafana_secrets_json            = var.grafana_secrets_json
+  application_secret_version      = var.application_secret_version
+  grafana_secret_version          = var.grafana_secret_version
+  cloudflare_tunnel_token         = var.cloudflare_tunnel_token
+  cloudflare_tunnel_token_version = var.cloudflare_tunnel_token_version
+  tags                            = local.common_tags
 }
 
 module "storage_audit" {
@@ -38,6 +71,7 @@ module "storage_audit" {
   audit_retention_days                   = var.audit_retention_days
   application_noncurrent_expiration_days = 90
   log_retention_days                     = var.log_retention_days
+  kms_key_arn                            = module.kms.key_arn
   tags                                   = local.common_tags
 }
 
@@ -56,8 +90,6 @@ module "database" {
   max_allocated_storage   = var.database_max_allocated_storage
   multi_az                = var.database_multi_az
   backup_retention_period = var.database_backup_retention_days
-  deletion_protection     = var.database_deletion_protection
-  skip_final_snapshot     = var.database_skip_final_snapshot
   tags                    = local.common_tags
 }
 
@@ -130,13 +162,8 @@ module "alb" {
   subnet_ids                 = module.network.public_subnet_ids
   security_group_ids         = [module.security.alb_security_group_id]
   certificate_arn            = var.certificate_arn
-  create_certificate         = var.create_certificate
-  domain_name                = var.api_domain_name
-  route53_zone_id            = var.route53_zone_id
   enable_deletion_protection = var.alb_deletion_protection
-  enable_access_logs         = var.alb_access_logs_enabled
-  account_id                 = data.aws_caller_identity.current.account_id
-  aws_region                 = var.aws_region
+  kms_key_arn                = module.kms.key_arn
   health_check_path          = var.backend_health_check_path
   tags                       = local.common_tags
 }
@@ -163,9 +190,15 @@ module "backend" {
     module.database.master_secret_arn,
     module.cache.connection_secret_arn,
     module.secrets.application_secret_arn,
+    module.secrets.cloudflare_tunnel_secret_arn,
   ]
-  application_bucket_arn    = module.storage_audit.application_bucket_arn
-  firehose_stream_arn       = module.storage_audit.delivery_stream_arn
+  cloudflare_tunnel_secret_arn = module.secrets.cloudflare_tunnel_secret_arn
+  application_bucket_arn       = module.storage_audit.application_bucket_arn
+  firehose_stream_arn          = module.storage_audit.delivery_stream_arn
+  database_connect_resource_arns = [
+    "arn:aws:rds-db:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.database.resource_id}/${module.database.master_username}"
+  ]
+  kms_key_arn               = module.kms.key_arn
   log_retention_days        = var.log_retention_days
   enable_container_insights = var.backend_container_insights
   tags                      = local.common_tags

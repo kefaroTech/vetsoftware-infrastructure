@@ -17,3 +17,7 @@ output "database_security_group_id" {
 output "cache_security_group_id" {
   value = aws_security_group.cache.id
 }
+
+output "vpc_endpoints_security_group_id" {
+  value = aws_security_group.vpc_endpoints.id
+}

@@ -8,9 +8,13 @@ shared_alb_listener_port  = 443
 shared_listener_rule_priority = 200
 
 # El certificado del listener debe cubrir este host mediante SAN o wildcard.
-api_domain_name                          = "dev-api.example.com"
-route53_zone_id                          = "Z0000000000000000000"
+api_domain_name                          = "dev-api.kefaro.tech"
 confirm_shared_certificate_covers_domain = true
+
+# Resuelva y mantenga los CIDR oficiales de los SaaS usados por el backend.
+approved_external_https_ipv4_cidrs = [
+  "203.0.113.10/32", # REEMPLAZAR: ejemplo documental, no desplegar.
+]
 
 # Use digest inmutable y una imagen ARM64 compatible con Fargate Spot.
 backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware@sha256:REEMPLAZAR"
@@ -26,10 +30,11 @@ login_url                      = "https://dev.example.com/login"
 # $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"...mínimo-32...","RESEND_API_KEY":"re_xxx","RECAPTCHA_SECRET":"xxx"}'
 # $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("OTLP_USERNAME:OTLP_API_KEY"))
 # $env:TF_VAR_grafana_secrets_json = "{`"OTLP_USERNAME`":`"...`",`"OTLP_API_KEY`":`"...`",`"OTEL_EXPORTER_OTLP_HEADERS`":`"Authorization=Basic $basic`"}"
+# $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-dev"
 
 # Perfil económico predeterminado:
 # backend 512 CPU / 2048 MiB, solo Fargate Spot, escalado acotado a 0–1 tarea
-# RDS db.t4g.micro / 20 GiB / backup 1 día / sin protección ni snapshot final
+# RDS db.t4g.micro / 20 GiB / backup 7 dias / proteccion contra borrado / snapshot final
 # Valkey Serverless 1 GB / 1000 ECPU, logs 3 días, sin ALB ni Alloy dedicados
 monthly_budget_usd = 50
 

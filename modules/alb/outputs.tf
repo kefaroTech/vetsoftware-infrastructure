@@ -22,10 +22,15 @@ output "target_group_arn_suffix" {
   value = aws_lb_target_group.backend.arn_suffix
 }
 
-output "certificate_arn" {
-  value = local.certificate_arn
+output "listener_arn" {
+  value = aws_lb_listener.https.arn
 }
 
-output "url" {
-  value = var.domain_name != "" ? "${local.enable_https ? "https" : "http"}://${var.domain_name}" : "http://${aws_lb.this.dns_name}"
+output "access_log_group_name" {
+  value = aws_cloudwatch_log_group.access.name
+}
+
+output "origin_url" {
+  description = "Origen privado que debe configurarse en Cloudflare Tunnel."
+  value       = "https://${aws_lb.this.dns_name}:443"
 }

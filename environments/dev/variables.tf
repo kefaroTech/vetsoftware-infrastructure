@@ -69,10 +69,6 @@ variable "api_domain_name" {
   }
 }
 
-variable "route53_zone_id" {
-  type = string
-}
-
 variable "backend_image_uri" {
   description = "Imagen ARM64 inmutable del backend. No use :latest."
   type        = string
@@ -167,7 +163,28 @@ variable "database_max_allocated_storage" {
 
 variable "database_backup_retention_days" {
   type    = number
-  default = 1
+  default = 7
+
+  validation {
+    condition     = var.database_backup_retention_days >= 7 && var.database_backup_retention_days <= 35
+    error_message = "database_backup_retention_days debe estar entre 7 y 35 dias."
+  }
+}
+
+variable "approved_external_https_ipv4_cidrs" {
+  description = "CIDR de Resend, reCAPTCHA, Grafana u otros SaaS autorizados para salida HTTPS."
+  type        = list(string)
+
+  validation {
+    condition = (
+      length(var.approved_external_https_ipv4_cidrs) > 0 &&
+      alltrue([
+        for cidr in var.approved_external_https_ipv4_cidrs :
+        can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
+      ])
+    )
+    error_message = "approved_external_https_ipv4_cidrs exige CIDR especificos y prohibe 0.0.0.0/0."
+  }
 }
 
 variable "valkey_major_engine_version" {
@@ -200,6 +217,11 @@ variable "grafana_secret_version" {
   default = 1
 }
 
+variable "cloudflare_tunnel_token_version" {
+  type    = number
+  default = 1
+}
+
 variable "application_secrets_json" {
   description = "JSON con JWT_SECRET, RESEND_API_KEY y RECAPTCHA_SECRET."
   type        = string
@@ -220,6 +242,40 @@ variable "grafana_secrets_json" {
     )
     error_message = "grafana_secrets_json debe incluir OTEL_EXPORTER_OTLP_HEADERS para exportación directa."
   }
+}
+
+variable "cloudflare_tunnel_token" {
+  description = "Token del tunel remoto de desarrollo; inyectar mediante TF_VAR."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "cloudflare_tunnel_ipv4_cidrs" {
+  description = "Rangos oficiales usados por los endpoints de Cloudflare Tunnel en el puerto 7844."
+  type        = list(string)
+  default = [
+    "198.41.192.7/32",
+    "198.41.192.27/32",
+    "198.41.192.37/32",
+    "198.41.192.47/32",
+    "198.41.192.57/32",
+    "198.41.192.67/32",
+    "198.41.192.77/32",
+    "198.41.192.107/32",
+    "198.41.192.167/32",
+    "198.41.192.227/32",
+    "198.41.200.13/32",
+    "198.41.200.23/32",
+    "198.41.200.33/32",
+    "198.41.200.43/32",
+    "198.41.200.53/32",
+    "198.41.200.63/32",
+    "198.41.200.73/32",
+    "198.41.200.113/32",
+    "198.41.200.193/32",
+    "198.41.200.233/32",
+  ]
 }
 
 variable "grafana_otlp_endpoint" {

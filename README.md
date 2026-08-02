@@ -4,7 +4,8 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 
 ## Arquitectura
 
-- Backend Spring Boot en Amazon ECS con Fargate ARM64, detrás de un Application Load Balancer.
+- Backend Spring Boot en Amazon ECS con Fargate ARM64, detrás de un ALB HTTPS interno.
+- Cloudflare Tunnel como sidecar por tarea; no existe entrada pública directa al origen AWS.
 - Generación PDF embebida en el backend con OpenHTMLToPDF.
 - Grafana Alloy en una EC2 Graviton pequeña como gateway OTLP hacia Grafana Cloud.
 - Amazon RDS for MySQL privado, cifrado y con almacenamiento autoescalable.
@@ -14,15 +15,17 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 - Secrets Manager con argumentos write-only y valores efímeros: los secretos no se guardan en el plan ni en el estado.
 - Estado remoto S3 cifrado, versionado y con locking nativo de S3.
 - Auto Scaling del backend, alarmas de CloudWatch y presupuesto mensual opcional.
+- CMK con rotación por entorno, VPC Flow Logs y logs del ALB en CloudWatch.
+- Endpoints privados para APIs AWS y CIDR explícitos para dependencias SaaS.
 
-La configuración económica evita NAT Gateway por defecto. Fargate y la EC2 de Alloy reciben salida a Internet, pero sus security groups solo permiten entradas explícitas. RDS y Valkey permanecen en subredes privadas.
+La configuración evita NAT Gateway. S3 usa un endpoint Gateway y ECR, Logs, Secrets Manager, Firehose y SSM usan endpoints Interface compartidos. RDS y Valkey permanecen en subredes privadas.
 
 ## Entornos
 
 - `environments/prod`: infraestructura completa y protegida, con VPC, ALB, Alloy, RDS, Valkey y archivo de auditoría propios.
-- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC de dos AZ y el ALB de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC, los endpoints privados y el ALB interno de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
 
-Compartir red y ALB reduce costo sin compartir base de datos, cache, secretos, bucket ni roles. El security group de dev solo acepta tráfico del ALB compartido y crea una regla de salida específica en dicho ALB. El host `dev-api...` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
+Compartir red, endpoints y ALB reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes. El host `dev-api.kefaro.tech` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
 
 ## Versiones fijadas
 
@@ -36,11 +39,26 @@ Las restricciones admiten parches compatibles, pero evitan actualizaciones mayor
 ## Requisitos
 
 - Terraform 1.15.x.
-- TFLint 0.64.x para ejecutar la revisión local completa.
+- TFLint 0.64.0 para ejecutar la revisión local completa.
+- PowerShell, Git Bash y Docker con el daemon activo para el gate pre-commit completo.
 - AWS CLI v2 autenticado con permisos administrativos para el bootstrap y el despliegue.
 - Una imagen ARM64 publicada del backend. También puede usarse x86 cambiando `backend_cpu_architecture`.
-- Un dominio en Route 53 o un certificado ACM existente si se habilita HTTPS.
+- La zona `kefaro.tech` activa en Cloudflare y un certificado ACM emitido para `api.kefaro.tech` y `dev-api.kefaro.tech`.
 - Credenciales OTLP de Grafana Cloud.
+
+## Gate pre-commit de Terraform
+
+`core.hooksPath` apunta a `.githooks` y el pre-commit ejecuta un gate fail-closed: higiene del snapshot, Gitleaks, versiones exactas, formato, TFLint desde severidad `notice`, `validate` sin advertencias, contratos `terraform test` y Trivy IaC desde severidad `MEDIUM`.
+
+```powershell
+# Calidad Terraform sin exigir que el arbol este preparado
+./scripts/validate.ps1
+
+# Gate identico al pre-commit
+./scripts/quality/terraform-gate.ps1 -Mode full
+```
+
+El progreso se imprime en vivo y los logs persistentes quedan en `.tools/logs/terraform-gate/`. IntelliJ importa tres configuraciones compartidas desde `.run/`; las instrucciones para agregarlas a Services y la política de cero tolerancia están en [Gate de calidad Terraform](docs/TERRAFORM_QUALITY_GATE.md).
 
 ## 1. Crear el backend remoto
 
@@ -73,9 +91,9 @@ $env:TF_VAR_project_name = "vetsoftware"
 $env:TF_VAR_environment = "prod"
 $env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend:1.0.0"
 
-$env:TF_VAR_api_domain_name = "api.vetsoftware.co"
-$env:TF_VAR_route53_zone_id = "Z0123456789ABCDEFG"
-$env:TF_VAR_create_certificate = "true"
+$env:TF_VAR_api_domain_name = "api.kefaro.tech"
+$env:TF_VAR_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REEMPLAZAR"
+$env:TF_VAR_approved_external_https_ipv4_cidrs = '["CIDR_REAL_DE_PROVEEDOR/32"]'
 
 $env:TF_VAR_cors_allowed_origins = '["https://app.vetsoftware.co","https://admin.vetsoftware.co"]'
 $env:TF_VAR_email_from = "VetSoftware <notificaciones@vetsoftware.co>"
@@ -85,10 +103,11 @@ $env:TF_VAR_login_url = "https://app.vetsoftware.co/login"
 
 $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"BASE64_256_BITS","RESEND_API_KEY":"re_xxx","RECAPTCHA_SECRET":"xxx"}'
 $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"123456","OTLP_API_KEY":"glc_xxx"}'
+$env:TF_VAR_cloudflare_tunnel_token = "TOKEN_TUNEL_PROD"
 $env:TF_VAR_grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
 ```
 
-Los dos JSON son variables `ephemeral` y llegan a Secrets Manager mediante `secret_string_wo`; no quedan almacenados por Terraform. Para rotarlos, cambie el valor y aumente `application_secret_version` o `grafana_secret_version`.
+Los dos JSON y el token Cloudflare son variables `ephemeral` y llegan a Secrets Manager mediante `secret_string_wo`; no quedan almacenados por Terraform. Para rotarlos, cambie el valor y aumente el contador de versión correspondiente.
 
 ## 3. Planificar y aplicar
 
@@ -120,6 +139,8 @@ Copy-Item environments/dev/terraform.tfvars.example environments/dev/terraform.t
 El bootstrap genera ambos `backend.hcl` automáticamente. Dev se enciende de lunes a viernes: RDS a las 07:30, ECS a las 08:00, ECS se apaga a las 20:00 y RDS a las 20:15, en `America/Bogota`. Los horarios se controlan con `*_schedule`, `schedule_timezone` y `scheduled_shutdown_enabled`.
 
 La autenticación OTLP directa se almacena como `OTEL_EXPORTER_OTLP_HEADERS` dentro del JSON efímero de Grafana. Consulte [el ejemplo de variables](environments/dev/terraform.tfvars.example) para construir el encabezado Basic sin guardarlo en Git.
+
+La creación de los túneles y las rutas públicas se documenta en [Cloudflare Tunnel](docs/CLOUDFLARE_TUNNEL.md).
 
 ## Parametrización de capacidad
 
@@ -161,7 +182,9 @@ El presupuesto detallado y sus controles están en `docs/COSTS.md`.
 - El rol de la tarea ECS solo puede publicar en su Firehose y operar sobre el bucket de aplicación.
 - Las credenciales de Grafana solo son legibles por la EC2 de Alloy.
 - Alloy solo acepta tráfico OTLP del security group del backend.
-- La eliminación accidental de ALB, RDS y buckets se controla mediante variables o protecciones explícitas.
+- El ALB es interno y solo acepta HTTPS desde los conectores Cloudflare de ECS.
+- RDS conserva siete días de backup, tiene IAM DB Auth, protección contra borrado y snapshot final en ambos entornos.
+- El quality gate no admite mecanismos que oculten hallazgos de seguridad.
 
 ## Destrucción
 
@@ -173,7 +196,7 @@ terraform -chdir=environments/prod destroy
 
 El bucket de auditoría debe conservarse o gestionarse mediante un procedimiento de retiro separado y auditado.
 
-Dev no crea bucket WORM ni protección contra borrado y puede retirarse independientemente:
+Dev no crea bucket WORM, pero su RDS sí tiene protección contra borrado. Para retirarlo debe aprobarse primero un cambio Terraform explícito que quite esa protección; después puede destruirse independientemente:
 
 ```powershell
 terraform -chdir=environments/dev destroy

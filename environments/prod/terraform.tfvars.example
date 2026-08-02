@@ -14,10 +14,18 @@ registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
 
-# HTTPS administrado por ACM y DNS Route53 (opcional).
-api_domain_name   = "api.example.com"
-route53_zone_id   = "Z0000000000000000000"
-create_certificate = true
+# El certificado ACM se valida con un CNAME en Cloudflare y debe cubrir prod y dev.
+api_domain_name = "api.kefaro.tech"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REEMPLAZAR"
+
+# Resuelva y mantenga los CIDR oficiales de los SaaS usados por el backend y Alloy.
+# La ruta universal 0.0.0.0/0 esta prohibida por validacion y por el quality gate.
+approved_external_https_ipv4_cidrs = [
+  "203.0.113.10/32", # REEMPLAZAR: ejemplo documental, no desplegar.
+]
+
+# Variable ephemeral adicional, nunca tfvars:
+# $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-prod"
 
 # Para comenzar más pequeño:
 # backend_cpu                 = 512

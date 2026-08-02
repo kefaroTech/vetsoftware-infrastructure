@@ -26,6 +26,16 @@ variable "enable_s3_gateway_endpoint" {
   default     = true
 }
 
+variable "kms_key_arn" {
+  description = "CMK usada para cifrar los VPC Flow Logs."
+  type        = string
+}
+
+variable "flow_log_retention_days" {
+  type    = number
+  default = 30
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

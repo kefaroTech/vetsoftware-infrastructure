@@ -1,0 +1,5 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="IaC - Full pre-commit gate" type="PowerShellRunType" factoryName="PowerShell" scriptUrl="file://$PROJECT_DIR$/scripts/quality/terraform-gate.ps1" workingDirectory="$PROJECT_DIR$" scriptParameters="-Mode full" commandOptions="-NoLogo -NoProfile -ExecutionPolicy Bypass">
+    <method v="2" />
+  </configuration>
+</component>
