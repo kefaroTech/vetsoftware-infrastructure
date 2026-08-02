@@ -129,6 +129,14 @@ locals {
       appProtocol   = "http"
     }]
 
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:${var.container_port}${var.health_check_path} >/dev/null || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
+
     environment = [for key in sort(keys(var.environment_variables)) : {
       name  = key
       value = var.environment_variables[key]

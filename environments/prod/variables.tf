@@ -82,6 +82,12 @@ variable "backend_image_uri" {
   type        = string
 }
 
+variable "backend_health_check_path" {
+  description = "Endpoint único de readiness para ALB y ECS."
+  type        = string
+  default     = "/api/v1/actuator/health/readiness"
+}
+
 variable "backend_cpu_architecture" {
   type    = string
   default = "ARM64"

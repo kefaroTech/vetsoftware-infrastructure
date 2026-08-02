@@ -31,3 +31,13 @@ output "dev_backend_hcl" {
     kms_key_id   = var.enable_kms ? aws_kms_key.state[0].arn : null
   }
 }
+
+output "ecr_repository_urls" {
+  description = "URI de cada repositorio de imágenes."
+  value       = module.ecr.repository_urls
+}
+
+output "github_ecr_publisher_role_arns" {
+  description = "Configure cada valor como AWS_ECR_PUBLISH_ROLE_ARN en el environment production del repositorio GitHub correspondiente."
+  value       = module.ecr.publisher_role_arns
+}
