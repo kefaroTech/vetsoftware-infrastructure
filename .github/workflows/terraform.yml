@@ -2,6 +2,9 @@ name: Terraform quality
 
 on:
   pull_request:
+    branches:
+      - develop
+      - main
     paths:
       - "**/*.tf"
       - "**/*.hcl"
@@ -11,7 +14,9 @@ on:
       - ".terraform-version"
       - ".github/workflows/terraform.yml"
   push:
-    branches: [main]
+    branches:
+      - develop
+      - main
     paths:
       - "**/*.tf"
       - "**/*.hcl"
@@ -20,25 +25,38 @@ on:
       - "scripts/*.ps1"
       - ".terraform-version"
       - ".github/workflows/terraform.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ github.ref }}
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
+    name: Format, lint and validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
 
-      - uses: hashicorp/setup-terraform@v4
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.15.8
+          terraform_wrapper: false
 
-      - uses: terraform-linters/setup-tflint@v6.3.0
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
         with:
           tflint_version: v0.64.0
 
