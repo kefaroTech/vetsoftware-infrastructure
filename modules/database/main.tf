@@ -41,7 +41,8 @@ resource "aws_db_instance" "this" {
   db_name  = var.database_name
   username = var.master_username
 
-  manage_master_user_password = true
+  manage_master_user_password         = true
+  iam_database_authentication_enabled = true
 
   allocated_storage     = var.allocated_storage
   max_allocated_storage = var.max_allocated_storage
@@ -65,11 +66,18 @@ resource "aws_db_instance" "this" {
 
   auto_minor_version_upgrade = true
   apply_immediately          = var.apply_immediately
-  deletion_protection        = var.deletion_protection
-  skip_final_snapshot        = var.skip_final_snapshot
-  final_snapshot_identifier  = var.skip_final_snapshot ? null : "${var.name}-final"
+  deletion_protection        = true
+  skip_final_snapshot        = false
+  final_snapshot_identifier  = "${var.name}-final"
 
   enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
 
   tags = merge(var.tags, { Name = var.name })
+
+  lifecycle {
+    precondition {
+      condition     = var.backup_retention_period >= 7
+      error_message = "RDS debe conservar al menos siete dias de backups."
+    }
+  }
 }

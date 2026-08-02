@@ -60,16 +60,11 @@ variable "multi_az" {
 variable "backup_retention_period" {
   type    = number
   default = 7
-}
 
-variable "deletion_protection" {
-  type    = bool
-  default = true
-}
-
-variable "skip_final_snapshot" {
-  type    = bool
-  default = false
+  validation {
+    condition     = var.backup_retention_period >= 7 && var.backup_retention_period <= 35
+    error_message = "backup_retention_period debe estar entre 7 y 35 dias."
+  }
 }
 
 variable "performance_insights_enabled" {

@@ -41,38 +41,37 @@ variable "availability_zone_count" {
   default = 2
 }
 
-variable "alb_ingress_cidrs" {
-  description = "Use rangos Cloudflare para impedir bypass directo del CDN."
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
-}
-
 variable "api_domain_name" {
-  type    = string
-  default = ""
+  type = string
+
+  validation {
+    condition     = length(trimspace(var.api_domain_name)) > 0
+    error_message = "api_domain_name es obligatorio para Cloudflare Tunnel."
+  }
 }
 
-variable "route53_zone_id" {
-  type    = string
-  default = ""
+variable "approved_external_https_ipv4_cidrs" {
+  description = "CIDR de Resend, reCAPTCHA, Grafana u otros SaaS autorizados para salida HTTPS."
+  type        = list(string)
+
+  validation {
+    condition = (
+      length(var.approved_external_https_ipv4_cidrs) > 0 &&
+      alltrue([
+        for cidr in var.approved_external_https_ipv4_cidrs :
+        can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
+      ])
+    )
+    error_message = "approved_external_https_ipv4_cidrs exige CIDR especificos y prohibe 0.0.0.0/0."
+  }
 }
 
 variable "certificate_arn" {
-  type    = string
-  default = ""
-}
-
-variable "create_certificate" {
-  type    = bool
-  default = false
+  description = "Certificado ACM emitido que cubre api_domain_name y el hostname de dev."
+  type        = string
 }
 
 variable "alb_deletion_protection" {
-  type    = bool
-  default = true
-}
-
-variable "alb_access_logs_enabled" {
   type    = bool
   default = true
 }
@@ -248,16 +247,6 @@ variable "database_backup_retention_days" {
   default = 7
 }
 
-variable "database_deletion_protection" {
-  type    = bool
-  default = true
-}
-
-variable "database_skip_final_snapshot" {
-  type    = bool
-  default = false
-}
-
 variable "valkey_major_engine_version" {
   type    = string
   default = "8"
@@ -288,6 +277,11 @@ variable "grafana_secret_version" {
   default = 1
 }
 
+variable "cloudflare_tunnel_token_version" {
+  type    = number
+  default = 1
+}
+
 variable "application_secrets_json" {
   description = "JSON: JWT_SECRET, RESEND_API_KEY, RECAPTCHA_SECRET."
   type        = string
@@ -297,6 +291,13 @@ variable "application_secrets_json" {
 
 variable "grafana_secrets_json" {
   description = "JSON: OTLP_USERNAME, OTLP_API_KEY."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "cloudflare_tunnel_token" {
+  description = "Token del tunel remoto de produccion; inyectar mediante TF_VAR."
   type        = string
   sensitive   = true
   ephemeral   = true

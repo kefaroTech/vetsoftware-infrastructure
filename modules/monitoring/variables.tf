@@ -38,6 +38,12 @@ variable "database_identifier" {
   type = string
 }
 
+variable "database_freeable_memory_threshold_bytes" {
+  description = "Umbral de memoria libre de RDS; protege especialmente db.t4g.micro en dev."
+  type        = number
+  default     = 268435456
+}
+
 variable "alloy_instance_ids" {
   type = list(string)
 }

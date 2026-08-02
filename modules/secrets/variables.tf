@@ -35,6 +35,18 @@ variable "grafana_secrets_json" {
   }
 }
 
+variable "cloudflare_tunnel_token" {
+  description = "Token del tunel remoto de Cloudflare. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(trimspace(var.cloudflare_tunnel_token)) >= 32
+    error_message = "cloudflare_tunnel_token debe contener el token completo entregado por Cloudflare."
+  }
+}
+
 variable "application_secret_version" {
   description = "Incremente para rotar los secretos de aplicación."
   type        = number
@@ -43,6 +55,12 @@ variable "application_secret_version" {
 
 variable "grafana_secret_version" {
   description = "Incremente para rotar las credenciales de Grafana."
+  type        = number
+  default     = 1
+}
+
+variable "cloudflare_tunnel_token_version" {
+  description = "Incremente para rotar el token del tunel Cloudflare."
   type        = number
   default     = 1
 }

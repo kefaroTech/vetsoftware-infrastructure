@@ -78,6 +78,8 @@ run "development_cost_profile_plans" {
       OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
     })
 
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+
     grafana_otlp_endpoint                    = "https://otlp.example.test/otlp"
     cors_allowed_origins                     = ["https://dev.example.test"]
     email_from                               = "VetSoftware Dev <noreply@example.test>"
@@ -85,8 +87,8 @@ run "development_cost_profile_plans" {
     password_reset_url                       = "https://dev.example.test/reset"
     login_url                                = "https://dev.example.test/login"
     api_domain_name                          = "dev-api.example.test"
-    route53_zone_id                          = "Z0000000000000000000"
     confirm_shared_certificate_covers_domain = true
+    approved_external_https_ipv4_cidrs       = ["203.0.113.10/32"]
   }
 
   assert {
@@ -100,8 +102,17 @@ run "development_cost_profile_plans" {
   }
 
   assert {
-    condition     = output.cost_profile.database_class == "db.t4g.micro" && output.cost_profile.database_backup_days == 1
-    error_message = "RDS dev debe usar db.t4g.micro y un día de backup."
+    condition     = output.cost_profile.database_class == "db.t4g.micro" && output.cost_profile.database_backup_days == 7
+    error_message = "RDS dev debe conservar db.t4g.micro y siete dias de backup."
+  }
+
+  assert {
+    condition = (
+      output.cost_profile.database_hardening.deletion_protection &&
+      output.cost_profile.database_hardening.iam_database_authentication_enabled &&
+      !output.cost_profile.database_hardening.skip_final_snapshot
+    )
+    error_message = "RDS dev debe conservar IAM DB Auth, deletion protection y snapshot final."
   }
 
   assert {

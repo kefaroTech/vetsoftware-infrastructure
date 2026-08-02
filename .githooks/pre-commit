@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 set -eu
 
-sh scripts/security/scan-secrets.sh staged
+exec sh scripts/quality/run-gate.sh full

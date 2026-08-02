@@ -1,10 +1,15 @@
 output "api_url" {
   description = "URL pública del backend."
-  value       = module.alb.url
+  value       = "https://${var.api_domain_name}"
 }
 
 output "alb_dns_name" {
   value = module.alb.dns_name
+}
+
+output "cloudflare_tunnel_origin_url" {
+  description = "Origen HTTPS privado para la ruta publicada en Cloudflare Tunnel."
+  value       = module.alb.origin_url
 }
 
 output "ecs_cluster_name" {
@@ -18,6 +23,10 @@ output "ecs_service_name" {
 output "database_endpoint" {
   description = "Endpoint privado; la contraseña permanece en Secrets Manager."
   value       = module.database.endpoint
+}
+
+output "database_hardening" {
+  value = module.database.hardening
 }
 
 output "valkey_endpoint" {

@@ -14,6 +14,14 @@ resource "aws_ecs_cluster" "this" {
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${var.name}/backend"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+  tags              = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "cloudflare_tunnel" {
+  name              = "/ecs/${var.name}/cloudflare-tunnel"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
   tags              = var.tags
 }
 
@@ -91,6 +99,18 @@ data "aws_iam_policy_document" "task" {
     }
   }
 
+  statement {
+    sid = "UseApplicationEncryptionKey"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:ReEncrypt*",
+    ]
+    resources = [var.kms_key_arn]
+  }
+
   dynamic "statement" {
     for_each = var.enable_execute_command ? [1] : []
 
@@ -103,6 +123,16 @@ data "aws_iam_policy_document" "task" {
         "ssmmessages:OpenDataChannel"
       ]
       resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.database_connect_resource_arns) > 0 ? [1] : []
+
+    content {
+      sid       = "ConnectToDatabaseWithIam"
+      actions   = ["rds-db:connect"]
+      resources = var.database_connect_resource_arns
     }
   }
 }
@@ -118,8 +148,8 @@ locals {
     name      = "backend"
     image     = var.image_uri
     essential = true
-    cpu       = var.cpu
-    memory    = var.memory
+    cpu       = var.cpu - var.cloudflare_tunnel_cpu
+    memory    = var.memory - var.cloudflare_tunnel_memory
 
     portMappings = [{
       name          = "http"
@@ -164,6 +194,59 @@ locals {
     stopTimeout            = 30
   }
 
+  cloudflare_tunnel_definition = {
+    name      = "cloudflare-tunnel"
+    image     = var.cloudflare_tunnel_image
+    essential = true
+    cpu       = var.cloudflare_tunnel_cpu
+    memory    = var.cloudflare_tunnel_memory
+
+    command = [
+      "tunnel",
+      "--protocol",
+      "http2",
+      "--loglevel",
+      "info",
+      "--metrics",
+      "0.0.0.0:2000",
+      "run",
+    ]
+
+    secrets = [{
+      name      = "TUNNEL_TOKEN"
+      valueFrom = var.cloudflare_tunnel_secret_arn
+    }]
+
+    dependsOn = [{
+      containerName = local.container_definition.name
+      condition     = "HEALTHY"
+    }]
+
+    healthCheck = {
+      command     = ["CMD", "cloudflared", "tunnel", "ready", "--metrics", "localhost:2000"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.cloudflare_tunnel.name
+        awslogs-region        = data.aws_region.current.region
+        awslogs-stream-prefix = "cloudflared"
+      }
+    }
+
+    linuxParameters = {
+      initProcessEnabled = true
+    }
+
+    readonlyRootFilesystem = true
+    stopTimeout            = 30
+  }
+
   task_definition = merge({
     family                  = "${var.name}-backend"
     networkMode             = "awsvpc"
@@ -176,7 +259,7 @@ locals {
       cpuArchitecture       = var.cpu_architecture
       operatingSystemFamily = "LINUX"
     }
-    containerDefinitions = [local.container_definition]
+    containerDefinitions = [local.container_definition, local.cloudflare_tunnel_definition]
     }, var.ephemeral_storage_gib > 20 ? {
     ephemeralStorage = {
       sizeInGiB = var.ephemeral_storage_gib
@@ -263,6 +346,11 @@ resource "aws_ecs_service" "backend" {
     precondition {
       condition     = var.fargate_weight > 0 || var.fargate_spot_weight > 0
       error_message = "Al menos un capacity provider debe tener peso mayor que cero."
+    }
+
+    precondition {
+      condition     = var.cpu > var.cloudflare_tunnel_cpu && var.memory > var.cloudflare_tunnel_memory
+      error_message = "La tarea debe reservar CPU y memoria adicionales al sidecar Cloudflare Tunnel."
     }
   }
 }

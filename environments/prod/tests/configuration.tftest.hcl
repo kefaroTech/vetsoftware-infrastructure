@@ -50,22 +50,33 @@ run "production_configuration_plans" {
       OTLP_API_KEY  = "test-only-api-key"
     })
 
-    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
-    cors_allowed_origins          = ["https://app.example.test"]
-    email_from                    = "VetSoftware <noreply@example.test>"
-    registration_verification_url = "https://app.example.test/verify"
-    password_reset_url            = "https://app.example.test/reset"
-    login_url                     = "https://app.example.test/login"
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 
-    alb_deletion_protection      = false
-    database_deletion_protection = false
-    database_skip_final_snapshot = true
-    alb_access_logs_enabled      = false
-    monthly_budget_usd           = 0
+    grafana_otlp_endpoint              = "https://otlp.example.test/otlp"
+    api_domain_name                    = "api.example.test"
+    certificate_arn                    = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+    approved_external_https_ipv4_cidrs = ["203.0.113.10/32"]
+    cors_allowed_origins               = ["https://app.example.test"]
+    email_from                         = "VetSoftware <noreply@example.test>"
+    registration_verification_url      = "https://app.example.test/verify"
+    password_reset_url                 = "https://app.example.test/reset"
+    login_url                          = "https://app.example.test/login"
+
+    monthly_budget_usd = 0
   }
 
   assert {
     condition     = output.monthly_budget_usd == 0
     error_message = "El presupuesto debe poder deshabilitarse para pruebas."
+  }
+
+  assert {
+    condition = (
+      output.database_hardening.backup_retention_period >= 7 &&
+      output.database_hardening.deletion_protection &&
+      output.database_hardening.iam_database_authentication_enabled &&
+      !output.database_hardening.skip_final_snapshot
+    )
+    error_message = "RDS prod debe conservar backup, IAM DB Auth, deletion protection y snapshot final."
   }
 }

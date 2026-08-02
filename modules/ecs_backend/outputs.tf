@@ -26,6 +26,10 @@ output "log_group_name" {
   value = aws_cloudwatch_log_group.backend.name
 }
 
+output "cloudflare_tunnel_log_group_name" {
+  value = aws_cloudwatch_log_group.cloudflare_tunnel.name
+}
+
 output "capacity_provider_strategy" {
   value = {
     fargate_base        = var.fargate_base

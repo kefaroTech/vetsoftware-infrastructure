@@ -11,6 +11,11 @@ output "shared_alb_arn" {
   value = data.aws_lb.shared.arn
 }
 
+output "cloudflare_tunnel_origin_url" {
+  description = "Origen HTTPS privado para la ruta dev publicada en Cloudflare Tunnel."
+  value       = "https://${data.aws_lb.shared.dns_name}:443"
+}
+
 output "ecs_cluster_name" {
   value = module.backend.cluster_name
 }
@@ -48,6 +53,7 @@ output "cost_profile" {
     backend_max_tasks      = module.backend.autoscaling_range.max
     database_class         = var.database_instance_class
     database_backup_days   = var.database_backup_retention_days
+    database_hardening     = module.database.hardening
     valkey_storage_gb      = var.valkey_maximum_data_storage_gb
     valkey_ecpu_per_second = var.valkey_maximum_ecpu_per_second
     log_retention_days     = var.log_retention_days
