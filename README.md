@@ -189,7 +189,7 @@ El bootstrap también crea tres repositorios ECR inmutables:
 
 Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios.
 
-El mismo módulo crea el proveedor OIDC de GitHub y un rol IAM de mínimo privilegio por repositorio. La confianza queda limitada por los nombres e IDs inmutables de la organización y el repositorio, además del environment `production`; no se almacenan access keys en GitHub.
+El bootstrap crea un único proveedor OIDC de GitHub. El módulo ECR crea un rol IAM de mínimo privilegio por repositorio de aplicación, mientras que el módulo `github_iac_roles` crea roles independientes para plan y apply de Terraform. La confianza queda limitada por los nombres e IDs inmutables de la organización y el repositorio, además del GitHub Environment exacto; no se almacenan access keys en GitHub.
 
 Para repositorios nuevos, obtenga los IDs inmutables antes de aplicar el bootstrap:
 
@@ -198,6 +198,7 @@ gh api orgs/kefaroTech --jq .id
 gh api repos/kefaroTech/VetSoftware --jq .id
 gh api repos/kefaroTech/VetSoftwareFront --jq .id
 gh api repos/kefaroTech/VetSoftwarePublicFront --jq .id
+gh api repos/kefaroTech/VetSoftwareIaC --jq .id
 ```
 
 Copie los resultados en `github_organization_id` y `github_repository_ids`. GitHub incorporó estos IDs al subject OIDC de repositorios creados después del 15 de julio de 2026, por lo que los valores deben coincidir exactamente.
@@ -209,6 +210,8 @@ Después de aplicar el bootstrap, obtenga los valores:
 ```powershell
 terraform -chdir=bootstrap output ecr_repository_urls
 terraform -chdir=bootstrap output github_ecr_publisher_role_arns
+terraform -chdir=bootstrap output github_iac_role_arns
+terraform -chdir=bootstrap output github_iac_environments
 ```
 
 En cada repositorio GitHub abra **Settings > Environments > production > Environment variables** y configure:
@@ -222,6 +225,27 @@ En cada repositorio GitHub abra **Settings > Environments > production > Environ
 `AWS_REGION` es opcional y usa `us-east-1` por omisión. Restrinja el environment `production` a la rama `main` y mantenga sus aprobadores obligatorios.
 
 En la política de Actions de la organización deben estar permitidas y fijadas por SHA estas familias: `aws-actions/configure-aws-credentials`, `aws-actions/amazon-ecr-login`, `docker/setup-qemu-action`, `docker/setup-buildx-action` y `docker/build-push-action`.
+
+### Roles OIDC de Terraform
+
+La primera ejecución del bootstrap es deliberadamente administrativa: crea el proveedor OIDC, los repositorios ECR y los roles. Los cuatro roles resultantes administran exclusivamente los roots `environments/dev` y `environments/prod`; no pueden modificar el propio bootstrap. Los cambios futuros de identidad, state o ECR deben seguir ejecutándose mediante el procedimiento controlado de bootstrap.
+
+En **VetSoftwareIaC > Settings > Environments** cree estos nombres exactos y agregue en cada uno la variable de environment `AWS_IAC_ROLE_ARN` con el ARN correspondiente del output `github_iac_role_arns`:
+
+| GitHub Environment | Output | Capacidad |
+|---|---|---|
+| `iac-plan-dev` | `dev.plan` | Leer infraestructura y state de dev; administrar solo su lockfile. |
+| `iac-apply-dev` | `dev.apply` | Aplicar dev y escribir exclusivamente el state de dev. |
+| `iac-plan-prod` | `prod.plan` | Leer infraestructura y state de prod; administrar solo su lockfile. |
+| `iac-apply-prod` | `prod.apply` | Aplicar prod y escribir exclusivamente el state de prod. |
+
+Los roles `plan` no pueden mutar infraestructura ni escribir el state; solo crean y eliminan su lockfile para mantener el bloqueo nativo de S3. Los roles `apply` limitan IAM, Secrets Manager y S3 por cuenta, entorno y prefijo; las mutaciones de servicios regionales se restringen a `aws_region`. Ningún rol permite `secretsmanager:GetSecretValue`, y cada trust policy exige audiencia `sts.amazonaws.com` y el subject inmutable del repositorio IaC.
+
+Los buckets administrados deben conservar el patrón `vetsoftware-<entorno>-*`. Si una variable `application_bucket_name` o `audit_bucket_name` usa otro nombre, declare su ARN exacto en `additional_s3_bucket_arns` dentro de `github_iac_environments`; no amplíe la política a `arn:aws:s3:::*`.
+
+Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoaprobación, limite el despliegue a `main` y mantenga `Wait timer` desactivado salvo que exista una exigencia operativa. Restrinja `iac-apply-dev` a `develop`. Los environments de plan no deben almacenar secretos y deben quedar limitados a los eventos y ramas que usará el workflow de plan.
+
+El workflow actual solo valida calidad y los contratos de estos roles. Los workflows de plan, apply y drift que consumirán `AWS_IAC_ROLE_ARN` corresponden al siguiente punto del plan de auditoría y no se habilitan implícitamente con este cambio.
 
 Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release.
 

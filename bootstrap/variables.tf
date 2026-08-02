@@ -62,16 +62,18 @@ variable "existing_github_oidc_provider_arn" {
 }
 
 variable "github_repositories" {
-  description = "Repositorios GitHub de cada componente publicable."
+  description = "Repositorios GitHub de aplicaciones e infraestructura."
   type = object({
     backend       = string
     private_front = string
     public_front  = string
+    iac           = string
   })
   default = {
     backend       = "VetSoftware"
     private_front = "VetSoftwareFront"
     public_front  = "VetSoftwarePublicFront"
+    iac           = "VetSoftwareIaC"
   }
 }
 
@@ -81,7 +83,35 @@ variable "github_repository_ids" {
     backend       = string
     private_front = string
     public_front  = string
+    iac           = string
   })
+}
+
+variable "github_iac_environments" {
+  description = "GitHub Environments y state key exclusivos para plan/apply de cada entorno IaC."
+  type = map(object({
+    state_key                 = string
+    github_plan_environment   = string
+    github_apply_environment  = string
+    additional_s3_bucket_arns = optional(set(string), [])
+  }))
+  default = {
+    dev = {
+      state_key                = "vetsoftware/dev/terraform.tfstate"
+      github_plan_environment  = "iac-plan-dev"
+      github_apply_environment = "iac-apply-dev"
+    }
+    prod = {
+      state_key                = "vetsoftware/prod/terraform.tfstate"
+      github_plan_environment  = "iac-plan-prod"
+      github_apply_environment = "iac-apply-prod"
+    }
+  }
+
+  validation {
+    condition     = toset(keys(var.github_iac_environments)) == toset(["dev", "prod"])
+    error_message = "github_iac_environments debe definir exactamente dev y prod."
+  }
 }
 
 variable "ecr_images_to_keep" {

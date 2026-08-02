@@ -58,22 +58,6 @@ resource "aws_ecr_lifecycle_policy" "this" {
   })
 }
 
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.existing_github_oidc_provider_arn == "" ? 1 : 0
-
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = []
-
-  tags = merge(var.tags, {
-    Component = "github-oidc"
-  })
-}
-
-locals {
-  github_oidc_provider_arn = var.existing_github_oidc_provider_arn != "" ? var.existing_github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
-}
-
 data "aws_iam_policy_document" "github_assume" {
   for_each = var.repositories
 
@@ -84,7 +68,7 @@ data "aws_iam_policy_document" "github_assume" {
 
     principals {
       type        = "Federated"
-      identifiers = [local.github_oidc_provider_arn]
+      identifiers = [var.github_oidc_provider_arn]
     }
 
     condition {

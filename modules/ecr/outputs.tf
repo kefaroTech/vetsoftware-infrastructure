@@ -12,7 +12,3 @@ output "publisher_role_arns" {
   description = "Role ARN que debe guardarse como variable AWS_ECR_PUBLISH_ROLE_ARN en cada repositorio GitHub."
   value       = { for key, role in aws_iam_role.github_ecr : key => role.arn }
 }
-
-output "github_oidc_provider_arn" {
-  value = local.github_oidc_provider_arn
-}
