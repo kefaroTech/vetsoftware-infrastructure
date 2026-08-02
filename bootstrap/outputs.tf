@@ -19,3 +19,15 @@ output "backend_hcl" {
     kms_key_id   = var.enable_kms ? aws_kms_key.state[0].arn : null
   }
 }
+
+output "dev_backend_hcl" {
+  description = "Configuración del state de dev en una key separada del mismo bucket protegido."
+  value = {
+    bucket       = aws_s3_bucket.state.id
+    key          = "${var.project_name}/dev/terraform.tfstate"
+    region       = var.aws_region
+    encrypt      = true
+    use_lockfile = true
+    kms_key_id   = var.enable_kms ? aws_kms_key.state[0].arn : null
+  }
+}

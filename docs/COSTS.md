@@ -16,6 +16,22 @@ Los valores son una referencia inicial para `us-east-1`; AWS factura por uso, re
 | Grafana Cloud | Plan Free dentro de cuotas | USD 0 |
 | **Total orientativo** |  | **USD 112–145** |
 
+## Perfil de desarrollo
+
+`environments/dev` elimina costos fijos duplicados y reduce los recursos variables:
+
+| Recurso | Configuración dev |
+|---|---|
+| Red / ALB | Reutiliza VPC, dos AZ y ALB de `prod` mediante host routing |
+| Backend | 512 CPU, 2048 MiB, solo Fargate Spot, escalado limitado a 0–1 tarea |
+| RDS | `db.t4g.micro`, 20 GiB fijos, backup 1 día, sin deletion protection ni snapshot final |
+| Valkey | Serverless limitado a 1 GB y 1000 ECPU/s |
+| Telemetría | Exportación OTLP directa a Grafana Cloud; sin EC2 Alloy dedicada |
+| Logs | Retención de 3 días; sin access logs de un ALB adicional |
+| Horario | RDS 07:30–20:15 y ECS 08:00–20:00, lunes a viernes, `America/Bogota` |
+
+ECS y RDS se controlan con EventBridge Scheduler mediante un rol de mínimo privilegio. RDS arranca antes que ECS y se detiene después para evitar tareas iniciando contra una base todavía apagada. El state de dev usa una key S3 independiente y no puede sobrescribir producción.
+
 ## Protecciones incluidas
 
 - AWS Budget mensual configurable, con avisos al 80 % y 100 % cuando se define `alarm_email`.

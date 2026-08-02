@@ -4,14 +4,20 @@ on:
   pull_request:
     paths:
       - "**/*.tf"
+      - "**/*.hcl"
+      - "**/*.tfvars.example"
       - "**/*.tftpl"
+      - "scripts/*.ps1"
       - ".terraform-version"
       - ".github/workflows/terraform.yml"
   push:
     branches: [main]
     paths:
       - "**/*.tf"
+      - "**/*.hcl"
+      - "**/*.tfvars.example"
       - "**/*.tftpl"
+      - "scripts/*.ps1"
       - ".terraform-version"
       - ".github/workflows/terraform.yml"
 
@@ -44,6 +50,7 @@ jobs:
           tflint --init
           tflint --chdir=bootstrap --format=compact
           tflint --chdir=environments/prod --format=compact
+          tflint --chdir=environments/dev --format=compact
 
       - name: Validate bootstrap
         working-directory: bootstrap
@@ -53,6 +60,13 @@ jobs:
 
       - name: Validate production
         working-directory: environments/prod
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform test
+
+      - name: Validate development
+        working-directory: environments/dev
         run: |
           terraform init -backend=false -input=false
           terraform validate

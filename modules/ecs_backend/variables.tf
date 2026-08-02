@@ -83,9 +83,36 @@ variable "assign_public_ip" {
 }
 
 variable "fargate_spot_weight" {
-  description = "Peso de Spot para capacidad adicional. La primera tarea siempre es On-Demand."
+  description = "Peso de Fargate Spot. Use fargate_base=0 y fargate_weight=0 para ejecutar solo en Spot."
   type        = number
   default     = 0
+
+  validation {
+    condition     = var.fargate_spot_weight >= 0
+    error_message = "fargate_spot_weight no puede ser negativo."
+  }
+}
+
+variable "fargate_base" {
+  description = "Cantidad base reservada en Fargate On-Demand antes de distribuir por pesos."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.fargate_base >= 0
+    error_message = "fargate_base no puede ser negativo."
+  }
+}
+
+variable "fargate_weight" {
+  description = "Peso de Fargate On-Demand en la estrategia de capacidad."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.fargate_weight >= 0
+    error_message = "fargate_weight no puede ser negativo."
+  }
 }
 
 variable "environment_variables" {
@@ -109,7 +136,9 @@ variable "application_bucket_arn" {
 }
 
 variable "firehose_stream_arn" {
-  type = string
+  description = "Firehose opcional. Vacío omite el permiso de auditoría, útil en dev."
+  type        = string
+  default     = ""
 }
 
 variable "log_retention_days" {

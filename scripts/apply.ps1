@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $planPath)) {
 }
 
 if ($PSCmdlet.ShouldProcess("AWS/$Environment", "Aplicar el plan Terraform $Plan")) {
-    & terraform -chdir=$environmentDirectory apply -input=false $Plan
+    & terraform "-chdir=$environmentDirectory" apply -input=false $Plan
     if ($LASTEXITCODE -ne 0) {
         throw "terraform apply falló con código $LASTEXITCODE."
     }

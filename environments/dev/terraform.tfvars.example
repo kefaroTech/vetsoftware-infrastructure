@@ -1,0 +1,42 @@
+# Copie este archivo a terraform.tfvars. Nunca guarde secretos aquí.
+aws_region  = "us-east-1"
+environment = "dev"
+
+# Dev descubre por tags la VPC, las subredes y el ALB creados por prod.
+shared_environment        = "prod"
+shared_alb_listener_port  = 443
+shared_listener_rule_priority = 200
+
+# El certificado del listener debe cubrir este host mediante SAN o wildcard.
+api_domain_name                          = "dev-api.example.com"
+route53_zone_id                          = "Z0000000000000000000"
+confirm_shared_certificate_covers_domain = true
+
+# Use digest inmutable y una imagen ARM64 compatible con Fargate Spot.
+backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware@sha256:REEMPLAZAR"
+
+grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
+cors_allowed_origins   = ["https://dev.example.com"]
+email_from             = "VetSoftware Dev <noreply@example.com>"
+registration_verification_url = "https://dev.example.com/verificar"
+password_reset_url             = "https://dev.example.com/restablecer"
+login_url                      = "https://dev.example.com/login"
+
+# Variables ephemeral recomendadas, no tfvars:
+# $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"...mínimo-32...","RESEND_API_KEY":"re_xxx","RECAPTCHA_SECRET":"xxx"}'
+# $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("OTLP_USERNAME:OTLP_API_KEY"))
+# $env:TF_VAR_grafana_secrets_json = "{`"OTLP_USERNAME`":`"...`",`"OTLP_API_KEY`":`"...`",`"OTEL_EXPORTER_OTLP_HEADERS`":`"Authorization=Basic $basic`"}"
+
+# Perfil económico predeterminado:
+# backend 512 CPU / 2048 MiB, solo Fargate Spot, escalado acotado a 0–1 tarea
+# RDS db.t4g.micro / 20 GiB / backup 1 día / sin protección ni snapshot final
+# Valkey Serverless 1 GB / 1000 ECPU, logs 3 días, sin ALB ni Alloy dedicados
+monthly_budget_usd = 50
+
+# Horario laboral de Colombia. RDS arranca 30 minutos antes que ECS.
+scheduled_shutdown_enabled = true
+schedule_timezone          = "America/Bogota"
+database_start_schedule    = "cron(30 7 ? * MON-FRI *)"
+backend_start_schedule     = "cron(0 8 ? * MON-FRI *)"
+backend_stop_schedule      = "cron(0 20 ? * MON-FRI *)"
+database_stop_schedule     = "cron(15 20 ? * MON-FRI *)"

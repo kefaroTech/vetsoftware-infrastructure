@@ -81,10 +81,14 @@ data "aws_iam_policy_document" "task" {
     resources = ["${var.application_bucket_arn}/*"]
   }
 
-  statement {
-    sid       = "PublishAuditEvents"
-    actions   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
-    resources = [var.firehose_stream_arn]
+  dynamic "statement" {
+    for_each = var.firehose_stream_arn != "" ? [1] : []
+
+    content {
+      sid       = "PublishAuditEvents"
+      actions   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
+      resources = [var.firehose_stream_arn]
+    }
   }
 
   dynamic "statement" {
@@ -219,8 +223,8 @@ resource "aws_ecs_service" "backend" {
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
-    base              = 1
-    weight            = 1
+    base              = var.fargate_base
+    weight            = var.fargate_weight
   }
 
   dynamic "capacity_provider_strategy" {
@@ -246,6 +250,13 @@ resource "aws_ecs_service" "backend" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.fargate_weight > 0 || var.fargate_spot_weight > 0
+      error_message = "Al menos un capacity provider debe tener peso mayor que cero."
+    }
+  }
 }
 
 resource "aws_appautoscaling_target" "backend" {

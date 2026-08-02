@@ -17,6 +17,13 @@ Infraestructura como código para desplegar VetSoftware en AWS con Terraform.
 
 La configuración económica evita NAT Gateway por defecto. Fargate y la EC2 de Alloy reciben salida a Internet, pero sus security groups solo permiten entradas explícitas. RDS y Valkey permanecen en subredes privadas.
 
+## Entornos
+
+- `environments/prod`: infraestructura completa y protegida, con VPC, ALB, Alloy, RDS, Valkey y archivo de auditoría propios.
+- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC de dos AZ y el ALB de producción. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+
+Compartir red y ALB reduce costo sin compartir base de datos, cache, secretos, bucket ni roles. El security group de dev solo acepta tráfico del ALB compartido y crea una regla de salida específica en dicho ALB. El host `dev-api...` necesita una prioridad de listener exclusiva y un certificado que lo incluya como SAN o wildcard.
+
 ## Versiones fijadas
 
 - Terraform `1.15.8`.
@@ -98,6 +105,22 @@ terraform -chdir=environments/prod plan -out=vetsoftware.tfplan
 terraform -chdir=environments/prod apply vetsoftware.tfplan
 ```
 
+## Desplegar desarrollo
+
+Producción debe existir primero porque dev descubre su VPC, subredes, ALB, listener y security group mediante tags. Los states usan el mismo bucket protegido, pero keys independientes: `vetsoftware/prod/terraform.tfstate` y `vetsoftware/dev/terraform.tfstate`.
+
+```powershell
+Copy-Item environments/dev/backend.hcl.example environments/dev/backend.hcl
+Copy-Item environments/dev/terraform.tfvars.example environments/dev/terraform.tfvars
+./scripts/init.ps1 -Environment dev
+./scripts/plan.ps1 -Environment dev -Output vetsoftware-dev.tfplan
+./scripts/apply.ps1 -Environment dev -Plan vetsoftware-dev.tfplan
+```
+
+El bootstrap genera ambos `backend.hcl` automáticamente. Dev se enciende de lunes a viernes: RDS a las 07:30, ECS a las 08:00, ECS se apaga a las 20:00 y RDS a las 20:15, en `America/Bogota`. Los horarios se controlan con `*_schedule`, `schedule_timezone` y `scheduled_shutdown_enabled`.
+
+La autenticación OTLP directa se almacena como `OTEL_EXPORTER_OTLP_HEADERS` dentro del JSON efímero de Grafana. Consulte [el ejemplo de variables](environments/dev/terraform.tfvars.example) para construir el encabezado Basic sin guardarlo en Git.
+
 ## Parametrización de capacidad
 
 Ejemplos:
@@ -149,3 +172,9 @@ terraform -chdir=environments/prod destroy
 ```
 
 El bucket de auditoría debe conservarse o gestionarse mediante un procedimiento de retiro separado y auditado.
+
+Dev no crea bucket WORM ni protección contra borrado y puede retirarse independientemente:
+
+```powershell
+terraform -chdir=environments/dev destroy
+```

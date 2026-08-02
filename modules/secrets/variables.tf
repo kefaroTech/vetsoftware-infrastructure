@@ -20,7 +20,7 @@ variable "application_secrets_json" {
 }
 
 variable "grafana_secrets_json" {
-  description = "JSON con OTLP_USERNAME y OTLP_API_KEY. No se persiste en state."
+  description = "JSON con OTLP_USERNAME y OTLP_API_KEY; puede incluir OTEL_EXPORTER_OTLP_HEADERS para exportación directa. No se persiste en state."
   type        = string
   sensitive   = true
   ephemeral   = true

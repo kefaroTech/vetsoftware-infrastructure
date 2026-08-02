@@ -47,8 +47,8 @@ variable "max_allocated_storage" {
   default = 100
 
   validation {
-    condition     = var.max_allocated_storage >= var.allocated_storage
-    error_message = "max_allocated_storage debe ser mayor o igual a allocated_storage."
+    condition     = var.max_allocated_storage == 0 || var.max_allocated_storage >= var.allocated_storage
+    error_message = "max_allocated_storage debe ser 0 para deshabilitar autoescalado o mayor o igual a allocated_storage."
   }
 }
 
