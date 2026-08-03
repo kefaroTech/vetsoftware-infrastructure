@@ -53,17 +53,27 @@ function Get-ExternalJson {
     return (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
 }
 
+$script:awsAccountId = $null
+
+function Get-AwsAccountId {
+    if ([string]::IsNullOrWhiteSpace($script:awsAccountId)) {
+        $accountId = (& aws sts get-caller-identity --query Account --output text)
+        if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
+            throw "No fue posible resolver la cuenta AWS activa."
+        }
+
+        $script:awsAccountId = $accountId
+    }
+
+    return $script:awsAccountId
+}
+
 function Resolve-StateBackend {
     # El bucket y la KMS key del state siguen la convencion que fija
     # bootstrap/state-backend.yml, asi que no hace falta configurarlos como
     # variables del Environment. Un valor explicito siempre tiene prioridad.
     if ([string]::IsNullOrWhiteSpace($env:TF_STATE_BUCKET)) {
-        $accountId = (& aws sts get-caller-identity --query Account --output text)
-        if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
-            throw "No fue posible resolver la cuenta AWS activa para derivar TF_STATE_BUCKET."
-        }
-
-        $env:TF_STATE_BUCKET = "$projectName-$Environment-tfstate-$accountId"
+        $env:TF_STATE_BUCKET = "$projectName-$Environment-tfstate-$(Get-AwsAccountId)"
         Write-Host "[Terraform] Bucket de state derivado: $env:TF_STATE_BUCKET" -ForegroundColor Cyan
     }
 
@@ -155,7 +165,19 @@ function Set-CurrentBackendImage {
             Write-Host "[Terraform] No existe baseline ECS; se usara BACKEND_IMAGE_URI para el primer despliegue." -ForegroundColor Yellow
             return
         }
-        throw "No existe una imagen backend reutilizable. Configure BACKEND_IMAGE_URI para el primer despliegue. Detalle: $($_.Exception.Message)"
+
+        if ($Mode -eq "Apply") {
+            throw "No existe una imagen backend reutilizable. Configure BACKEND_IMAGE_URI para el primer despliegue. Detalle: $($_.Exception.Message)"
+        }
+
+        # El primer plan de un ambiente corre contra un state vacio: todavia no
+        # existe servicio ECS del que heredar la imagen y el ECR puede estar sin
+        # publicar. El marcador solo satisface la validacion de digest del root
+        # module para que el plan pueda revisarse; apply nunca llega hasta aca.
+        $placeholderDigest = "0" * 64
+        $placeholderImage = "$(Get-AwsAccountId).dkr.ecr.$env:AWS_REGION.amazonaws.com/$repositoryName@sha256:$placeholderDigest"
+        $env:TF_VAR_backend_image_uri = $placeholderImage
+        Write-Warning "Sin baseline ECS ni BACKEND_IMAGE_URI valido: el $($Mode.ToLowerInvariant()) usara el marcador $placeholderImage. El apply exigira un digest real. Detalle: $($_.Exception.Message)"
     }
 }
 
