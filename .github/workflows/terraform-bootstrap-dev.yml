@@ -1,4 +1,5 @@
 name: Terraform bootstrap dev
+run-name: Terraform bootstrap dev · ${{ github.ref_name }} · ${{ github.actor }}
 
 on:
   workflow_dispatch:
