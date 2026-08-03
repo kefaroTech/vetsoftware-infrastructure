@@ -40,6 +40,96 @@ data "aws_iam_policy_document" "this" {
       values   = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:*"]
     }
   }
+
+  dynamic "statement" {
+    for_each = var.cost_alerts_sns_enabled ? [1] : []
+
+    content {
+      sid    = "AllowCloudWatchAlarmEncryption"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["cloudwatch.amazonaws.com"]
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+      ]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:SourceArn"
+        values   = ["arn:${data.aws_partition.current.partition}:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cost_alerts_sns_enabled ? [1] : []
+
+    content {
+      sid    = "AllowAWSBudgetsAlertEncryption"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["budgets.amazonaws.com"]
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+      ]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:SourceArn"
+        values   = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cost_alerts_sns_enabled ? [1] : []
+
+    content {
+      sid    = "AllowCostAnomalyAlertEncryption"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["costalerts.amazonaws.com"]
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+      ]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
 }
 
 resource "aws_kms_key" "this" {

@@ -30,7 +30,13 @@ login_url                      = "https://dev-public.kefaro.tech/login"
 # backend 512 CPU / 2048 MiB, solo Fargate Spot, escalado acotado a 0–1 tarea
 # RDS db.t4g.micro / 20 GiB / backup 7 dias / proteccion contra borrado / snapshot final
 # Valkey Serverless 1 GB / 1000 ECPU, logs 3 días, sin ALB y sin Alloy dedicado
-monthly_budget_usd = 50
+# Confirme la suscripción SNS enviada a alarm_email. Antes de configurar IDs de Slack,
+# autorice el workspace en Amazon Q Developer in chat applications.
+alarm_email               = "finops@example.com"
+monthly_budget_usd        = 35
+cost_anomaly_threshold_usd = 3
+slack_workspace_id        = "T0123456789"
+slack_channel_id          = "C0123456789"
 
 # Horario laboral de Colombia. RDS arranca 30 minutos antes que ECS.
 scheduled_shutdown_enabled = true

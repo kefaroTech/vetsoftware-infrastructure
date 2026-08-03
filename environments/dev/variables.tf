@@ -312,13 +312,43 @@ variable "log_retention_days" {
 }
 
 variable "alarm_email" {
-  type    = string
-  default = ""
+  description = "Correo que recibe las notificaciones del topic SNS dev; requiere confirmar la suscripción."
+  type        = string
+  default     = ""
 }
 
 variable "monthly_budget_usd" {
-  type    = number
-  default = 50
+  description = "Presupuesto mensual dev usado por AWS Budgets."
+  type        = number
+  default     = 35
+
+  validation {
+    condition     = var.monthly_budget_usd > 0
+    error_message = "monthly_budget_usd debe ser mayor que cero en dev."
+  }
+}
+
+variable "cost_anomaly_threshold_usd" {
+  description = "Impacto absoluto mínimo para avisar una anomalía de costo dev."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.cost_anomaly_threshold_usd > 0
+    error_message = "cost_anomaly_threshold_usd debe ser mayor que cero."
+  }
+}
+
+variable "slack_workspace_id" {
+  description = "ID T... del workspace autorizado en Amazon Q Developer; configurar junto con slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+variable "slack_channel_id" {
+  description = "ID C... o G... del canal Slack de alertas; configurar junto con slack_workspace_id."
+  type        = string
+  default     = ""
 }
 
 variable "scheduled_shutdown_enabled" {

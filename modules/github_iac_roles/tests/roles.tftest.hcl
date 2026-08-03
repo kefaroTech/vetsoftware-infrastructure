@@ -150,4 +150,15 @@ run "environment_and_function_roles_are_isolated" {
     ])
     error_message = "Los roles IaC no deben conservar permisos ELB y sí deben administrar métricas de errores del túnel."
   }
+
+  assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ce:GetAnomalyMonitors"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "chatbot:DescribeSlackChannelConfigurations"),
+      strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "ce:CreateAnomalyMonitor"),
+      strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "chatbot:CreateSlackChannelConfiguration"),
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "chatbot.amazonaws.com"),
+    ])
+    error_message = "Plan y apply deben poder leer y administrar Cost Anomaly Detection y el canal Slack sin ampliar prod desde dev."
+  }
 }

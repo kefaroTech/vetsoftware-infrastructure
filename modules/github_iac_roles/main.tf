@@ -35,6 +35,11 @@ locals {
     "application-autoscaling:DescribeScheduledActions",
     "budgets:DescribeBudgetActionsForBudget",
     "budgets:ViewBudget",
+    "ce:GetAnomalyMonitors",
+    "ce:GetAnomalySubscriptions",
+    "ce:ListTagsForResource",
+    "chatbot:DescribeSlackChannelConfigurations",
+    "chatbot:ListTagsForResource",
     "cloudwatch:DescribeAlarms",
     "cloudwatch:GetMetricData",
     "cloudwatch:ListTagsForResource",
@@ -530,6 +535,7 @@ data "aws_iam_policy_document" "apply_identity" {
         "ec2.amazonaws.com",
         "ecs-tasks.amazonaws.com",
         "firehose.amazonaws.com",
+        "chatbot.amazonaws.com",
         "scheduler.amazonaws.com",
         "vpc-flow-logs.amazonaws.com",
       ]
@@ -616,10 +622,23 @@ data "aws_iam_policy_document" "apply_global" {
   for_each = local.apply_role_definitions
 
   statement {
-    sid    = "ManageGlobalDnsAndBudgets"
+    sid    = "ManageGlobalDnsCostAlertsAndChat"
     effect = "Allow"
     actions = [
       "budgets:ModifyBudget",
+      "ce:CreateAnomalyMonitor",
+      "ce:CreateAnomalySubscription",
+      "ce:DeleteAnomalyMonitor",
+      "ce:DeleteAnomalySubscription",
+      "ce:TagResource",
+      "ce:UntagResource",
+      "ce:UpdateAnomalyMonitor",
+      "ce:UpdateAnomalySubscription",
+      "chatbot:CreateSlackChannelConfiguration",
+      "chatbot:DeleteSlackChannelConfiguration",
+      "chatbot:TagResource",
+      "chatbot:UntagResource",
+      "chatbot:UpdateSlackChannelConfiguration",
       "route53:AssociateVPCWithHostedZone",
       "route53:ChangeResourceRecordSets",
       "route53:ChangeTagsForResource",

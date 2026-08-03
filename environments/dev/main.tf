@@ -1,8 +1,9 @@
 module "kms" {
   source = "../../modules/kms"
 
-  name = local.name
-  tags = local.common_tags
+  name                    = local.name
+  cost_alerts_sns_enabled = true
+  tags                    = local.common_tags
 }
 
 module "network" {
@@ -291,8 +292,14 @@ module "monitoring" {
 
   name                             = local.name
   aws_region                       = var.aws_region
+  sns_kms_key_arn                  = module.kms.key_arn
   alarm_email                      = var.alarm_email
   monthly_budget_usd               = var.monthly_budget_usd
+  budget_sns_notifications_enabled = true
+  cost_anomaly_detection_enabled   = true
+  cost_anomaly_threshold_usd       = var.cost_anomaly_threshold_usd
+  slack_workspace_id               = var.slack_workspace_id
+  slack_channel_id                 = var.slack_channel_id
   ecs_cluster_name                 = module.backend.cluster_name
   ecs_service_name                 = module.backend.service_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name

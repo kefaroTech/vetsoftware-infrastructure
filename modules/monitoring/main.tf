@@ -1,21 +1,150 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
 locals {
-  notifications_enabled = var.alarm_email != ""
-  alarm_actions         = local.notifications_enabled ? [aws_sns_topic.alarms[0].arn] : []
+  email_notifications_enabled = trimspace(var.alarm_email) != ""
+  slack_notifications_enabled = trimspace(var.slack_workspace_id) != "" && trimspace(var.slack_channel_id) != ""
+  notification_topic_enabled = (
+    local.email_notifications_enabled ||
+    local.slack_notifications_enabled ||
+    var.budget_sns_notifications_enabled ||
+    var.cost_anomaly_detection_enabled
+  )
+  budget_notifications_enabled = (
+    var.monthly_budget_usd > 0 &&
+    (local.email_notifications_enabled || var.budget_sns_notifications_enabled)
+  )
+  alarm_actions = local.notification_topic_enabled ? [aws_sns_topic.alarms[0].arn] : []
 }
 
 resource "aws_sns_topic" "alarms" {
-  count = local.notifications_enabled ? 1 : 0
+  count = local.notification_topic_enabled ? 1 : 0
 
-  name = "${var.name}-alarms"
-  tags = var.tags
+  name              = "${var.name}-alarms"
+  kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
+  tags              = var.tags
 }
 
 resource "aws_sns_topic_subscription" "email" {
-  count = local.notifications_enabled ? 1 : 0
+  count = local.email_notifications_enabled ? 1 : 0
 
   topic_arn = aws_sns_topic.alarms[0].arn
   protocol  = "email"
   endpoint  = var.alarm_email
+}
+
+data "aws_iam_policy_document" "alarms" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  statement {
+    sid     = "TopicOwnerFullAccess"
+    effect  = "Allow"
+    actions = ["SNS:*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    resources = [aws_sns_topic.alarms[0].arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.budget_sns_notifications_enabled ? [1] : []
+
+    content {
+      sid     = "AWSBudgetsSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["budgets.amazonaws.com"]
+      }
+
+      resources = [aws_sns_topic.alarms[0].arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:SourceArn"
+        values   = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cost_anomaly_detection_enabled ? [1] : []
+
+    content {
+      sid     = "AWSCostAnomalyDetectionSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["costalerts.amazonaws.com"]
+      }
+
+      resources = [aws_sns_topic.alarms[0].arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "alarms" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  arn    = aws_sns_topic.alarms[0].arn
+  policy = data.aws_iam_policy_document.alarms[0].json
+}
+
+data "aws_iam_policy_document" "slack_notifications_assume_role" {
+  count = local.slack_notifications_enabled ? 1 : 0
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["chatbot.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "slack_notifications" {
+  count = local.slack_notifications_enabled ? 1 : 0
+
+  name               = "${var.name}-slack-notifications"
+  description        = "Notification-only role for Amazon Q Developer in Slack"
+  assume_role_policy = data.aws_iam_policy_document.slack_notifications_assume_role[0].json
+  tags               = var.tags
+}
+
+resource "aws_chatbot_slack_channel_configuration" "alarms" {
+  count = local.slack_notifications_enabled ? 1 : 0
+
+  configuration_name          = "${var.name}-cost-alerts"
+  iam_role_arn                = aws_iam_role.slack_notifications[0].arn
+  slack_channel_id            = var.slack_channel_id
+  slack_team_id               = var.slack_workspace_id
+  sns_topic_arns              = [aws_sns_topic.alarms[0].arn]
+  guardrail_policy_arns       = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"]
+  logging_level               = "NONE"
+  user_authorization_required = true
+  tags                        = var.tags
 }
 
 resource "aws_cloudwatch_metric_alarm" "backend_cpu" {
@@ -205,14 +334,53 @@ resource "aws_budgets_budget" "monthly" {
   time_unit    = "MONTHLY"
 
   dynamic "notification" {
-    for_each = local.notifications_enabled ? [80, 100] : []
+    for_each = local.budget_notifications_enabled ? [80, 100] : []
 
     content {
       comparison_operator        = "GREATER_THAN"
       threshold                  = notification.value
       threshold_type             = "PERCENTAGE"
       notification_type          = notification.value == 80 ? "FORECASTED" : "ACTUAL"
-      subscriber_email_addresses = [var.alarm_email]
+      subscriber_email_addresses = var.budget_sns_notifications_enabled ? [] : [var.alarm_email]
+      subscriber_sns_topic_arns = var.budget_sns_notifications_enabled ? [
+        aws_sns_topic.alarms[0].arn,
+      ] : []
     }
   }
+
+  depends_on = [aws_sns_topic_policy.alarms]
+}
+
+resource "aws_ce_anomaly_monitor" "services" {
+  count = var.cost_anomaly_detection_enabled ? 1 : 0
+
+  name              = "${var.name}-aws-services"
+  monitor_type      = "DIMENSIONAL"
+  monitor_dimension = "SERVICE"
+  tags              = var.tags
+}
+
+resource "aws_ce_anomaly_subscription" "immediate" {
+  count = var.cost_anomaly_detection_enabled ? 1 : 0
+
+  name             = "${var.name}-cost-anomalies"
+  frequency        = "IMMEDIATE"
+  monitor_arn_list = [aws_ce_anomaly_monitor.services[0].arn]
+
+  subscriber {
+    type    = "SNS"
+    address = aws_sns_topic.alarms[0].arn
+  }
+
+  threshold_expression {
+    dimension {
+      key           = "ANOMALY_TOTAL_IMPACT_ABSOLUTE"
+      match_options = ["GREATER_THAN_OR_EQUAL"]
+      values        = [tostring(var.cost_anomaly_threshold_usd)]
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [aws_sns_topic_policy.alarms]
 }

@@ -12,6 +12,12 @@ variable "deletion_window_in_days" {
   }
 }
 
+variable "cost_alerts_sns_enabled" {
+  description = "Autoriza a CloudWatch, AWS Budgets y Cost Anomaly Detection a cifrar alertas SNS con esta CMK."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}
