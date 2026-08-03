@@ -24,8 +24,9 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 3. Crear la rama temporal correcta antes de modificar archivos o generar commits.
 4. Hacer commits atómicos, verificables y con el formato de mensajes exigido por el repositorio. No omitir hooks con `--no-verify`.
 5. Ejecutar las validaciones proporcionales al cambio antes de integrar. No integrar con conflictos, pruebas fallidas o un árbol de trabajo sucio.
-6. Integrar siempre con un merge explícito `--no-ff`. Están prohibidos los merges fast-forward para cerrar ramas, el squash merge y el rebase de ramas compartidas.
-7. Eliminar la rama temporal local y remota solo después de confirmar que quedó integrada en todos sus destinos obligatorios.
+6. Cuando exista un remoto configurado, integrar exclusivamente mediante Pull Request en el proveedor Git. Está prohibido ejecutar `git merge` localmente o publicar un commit de merge creado por comandos locales hacia `main` o `develop`.
+7. Configurar cada Pull Request para crear un merge commit. Están prohibidos el fast-forward, el squash merge y el rebase de ramas compartidas. Sin remoto, un merge local `--no-ff` solo puede realizarse con la aprobación humana específica exigida por esta política.
+8. Eliminar la rama temporal local y remota solo después de confirmar en el proveedor Git que el Pull Request quedó integrado en todos sus destinos obligatorios.
 
 ## Aprobación humana obligatoria antes de todo commit
 
@@ -36,7 +37,7 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 - El silencio, una aprobación implícita, una autorización general anterior o la aprobación emitida por otro agente o automatización no son válidos.
 - Una aprobación puede cubrir varios commits únicamente si enumera explícitamente cada repositorio, rama, alcance y mensaje propuesto.
 - La aprobación solo sirve para el contenido y mensaje presentados. Si cambia el diff, el alcance, la rama o el mensaje, se debe solicitar una nueva aprobación escrita.
-- La regla aplica también a commits creados por `merge --no-ff`, `revert`, `cherry-pick` o `commit --amend`. Antes de un merge se debe presentar su origen, destino y mensaje, y obtener una aprobación específica para el commit de merge.
+- La regla aplica también a commits creados por `revert`, `cherry-pick` o `commit --amend`. Cuando no exista remoto y corresponda un merge local `--no-ff`, antes del merge se debe presentar su origen, destino y mensaje, y obtener una aprobación específica para el commit de merge.
 - Después de preparar los cambios, el agente debe detenerse antes de ejecutar cualquier comando que cree un commit y esperar la aprobación escrita. El agente nunca puede aprobar su propio commit.
 
 ## Flujo de integración
@@ -45,29 +46,30 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 
 1. Crear `feature/*` desde `develop`.
 2. Realizar y validar los commits en `feature/*`.
-3. Integrar `feature/*` en `develop` con `--no-ff`.
-4. Eliminar `feature/*` después de verificar el merge.
+3. Publicar `feature/*`, abrir un Pull Request hacia `develop` e integrarlo mediante merge commit en el proveedor Git.
+4. Eliminar `feature/*` después de verificar el merge del Pull Request.
 
 ### Release
 
 1. Crear `release/<version>` desde `develop`.
 2. Estabilizar y validar la versión sin añadir funcionalidades nuevas.
-3. Integrar `release/<version>` en `main` con `--no-ff`.
+3. Abrir un Pull Request de `release/<version>` hacia `main` e integrarlo mediante merge commit en el proveedor Git.
 4. Crear en `main` una etiqueta anotada de versión, siguiendo SemVer cuando aplique.
-5. Integrar `release/<version>` en `develop` con `--no-ff` para devolver cualquier ajuste de release.
-6. Eliminar `release/<version>` después de verificar ambos merges y la etiqueta.
+5. Abrir un Pull Request de `release/<version>` hacia `develop` para devolver cualquier ajuste de release e integrarlo mediante merge commit.
+6. Eliminar `release/<version>` después de verificar ambos Pull Requests y la etiqueta.
 
 ### Hotfix
 
 1. Crear `hotfix/*` desde `main`.
 2. Aplicar y validar únicamente la corrección urgente.
-3. Integrar `hotfix/*` en `main` con `--no-ff` y crear la etiqueta de versión correspondiente.
-4. Integrar `hotfix/*` en `develop` con `--no-ff`.
-5. Eliminar `hotfix/*` después de verificar ambos merges.
+3. Abrir un Pull Request de `hotfix/*` hacia `main`, integrarlo mediante merge commit y crear la etiqueta de versión correspondiente.
+4. Abrir un Pull Request de `hotfix/*` hacia `develop` e integrarlo mediante merge commit.
+5. Eliminar `hotfix/*` después de verificar ambos Pull Requests.
 
 ## Prohibiciones
 
 - No hacer commits directos, cherry-picks rutinarios ni pushes directos a `main` o `develop`.
+- Cuando exista remoto, no ejecutar comandos locales de merge para integrar ramas ni publicar commits de merge locales; toda integración debe quedar representada por un Pull Request auditable.
 - No actualizar `main` directamente desde `develop`; toda promoción normal debe pasar por `release/*`.
 - No usar `push --force`, reescribir historial publicado ni eliminar ramas no integradas.
 - No mezclar una feature directamente en `main`.
