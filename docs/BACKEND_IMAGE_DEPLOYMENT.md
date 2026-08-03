@@ -73,7 +73,7 @@ No agregue JWT, tokens Cloudflare ni credenciales Grafana a estos environments p
 
 ## Ningún repositorio de aplicación dispara este despliegue
 
-El repositorio del backend publica el artefacto y ahí termina su responsabilidad. No existe GitHub App, token cruzado ni `workflow_dispatch` remoto: `VetSoftware` deja los cuatro datos en el Summary de su run de publicación y quien opera la infraestructura los copia al lanzar el workflow correspondiente desde `vetsoftware-infrastructure`.
+El repositorio `vetsoftware-backend` publica el artefacto y ahí termina su responsabilidad. No existe GitHub App, token cruzado ni `workflow_dispatch` remoto: su workflow deja los cuatro datos en el Summary del run de publicación y quien opera la infraestructura los copia al lanzar el workflow correspondiente desde `vetsoftware-infrastructure`.
 
 Esto mantiene una sola dirección de confianza. El repositorio IaC concede a los repositorios de aplicación permiso para publicar en ECR mediante roles OIDC de mínimo privilegio; ninguno de ellos obtiene la capacidad inversa de iniciar un cambio en la infraestructura.
 
