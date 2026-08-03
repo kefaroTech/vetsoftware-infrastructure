@@ -1,0 +1,155 @@
+name: Deploy backend image dev
+
+# Circuito de imagen de desarrollo. La identidad del artefacto es el commit de
+# develop, no una release: el digest debe llevar el tag dev-<12>.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Development tag (dev-<12 characters of the commit>)"
+        required: true
+        type: string
+      image_digest:
+        description: "Immutable ECR digest (sha256:...)"
+        required: true
+        type: string
+      source_commit:
+        description: "Full backend commit SHA published from develop"
+        required: true
+        type: string
+      source_run_url:
+        description: "Auditable backend publication run URL"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  plan:
+    name: Certify and plan dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: iac-plan-dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
+      TF_VAR_api_domain_name: ${{ vars.API_DOMAIN_NAME }}
+      TF_VAR_cors_allowed_origins: ${{ vars.CORS_ALLOWED_ORIGINS }}
+      TF_VAR_email_from: ${{ vars.EMAIL_FROM }}
+      TF_VAR_grafana_otlp_endpoint: ${{ vars.GRAFANA_OTLP_ENDPOINT }}
+      TF_VAR_login_url: ${{ vars.LOGIN_URL }}
+      TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
+      TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+
+    steps:
+      - name: Check out immutable IaC revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Validate AWS plan configuration
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
+            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-dev."
+          }
+
+      - name: Configure read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Certify image and guard Terraform plan
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          IMAGE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+        shell: pwsh
+        run: |
+          ./scripts/deployment/backend-image.ps1 `
+            -Mode Plan `
+            -Environment dev `
+            -Version $env:IMAGE_VERSION `
+            -ImageDigest $env:IMAGE_DIGEST `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -SourceRunUrl $env:SOURCE_RUN_URL
+
+  apply:
+    name: Approve, deploy and verify dev
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: iac-apply-dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
+      TF_VAR_api_domain_name: ${{ vars.API_DOMAIN_NAME }}
+      TF_VAR_cors_allowed_origins: ${{ vars.CORS_ALLOWED_ORIGINS }}
+      TF_VAR_email_from: ${{ vars.EMAIL_FROM }}
+      TF_VAR_grafana_otlp_endpoint: ${{ vars.GRAFANA_OTLP_ENDPOINT }}
+      TF_VAR_login_url: ${{ vars.LOGIN_URL }}
+      TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
+      TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+
+    steps:
+      - name: Check out immutable IaC revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Validate AWS apply configuration
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
+            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-dev."
+          }
+
+      - name: Configure apply AWS credentials
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy immutable image, verify and roll back on failure
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          IMAGE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+        shell: pwsh
+        run: |
+          ./scripts/deployment/backend-image.ps1 `
+            -Mode Apply `
+            -Environment dev `
+            -Version $env:IMAGE_VERSION `
+            -ImageDigest $env:IMAGE_DIGEST `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -SourceRunUrl $env:SOURCE_RUN_URL

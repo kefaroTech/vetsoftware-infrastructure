@@ -1,26 +1,24 @@
-name: Terraform quality
+name: Terraform quality dev
 
 on:
   pull_request:
     branches:
       - develop
-      - main
   push:
     branches:
       - develop
-      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  group: terraform-quality-dev-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    name: Format, lint and validate
+    name: Format, lint and validate dev
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -44,6 +42,6 @@ jobs:
         with:
           tflint_version: v0.64.0
 
-      - name: Run the repository Terraform quality gate
+      - name: Run the quality gate scoped to the development root
         shell: pwsh
-        run: ./scripts/quality/terraform-gate.ps1 -Mode ci
+        run: ./scripts/quality/terraform-gate.ps1 -Mode ci -Roots environments/dev

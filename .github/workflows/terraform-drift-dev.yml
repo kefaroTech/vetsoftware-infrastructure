@@ -1,4 +1,4 @@
-name: Terraform drift
+name: Terraform drift dev
 
 on:
   schedule:
@@ -11,21 +11,15 @@ permissions:
 
 jobs:
   drift:
-    name: Detect drift in ${{ matrix.environment }}
-    strategy:
-      fail-fast: false
-      matrix:
-        environment:
-          - dev
-          - prod
+    name: Detect drift in dev
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: iac-plan-${{ matrix.environment }}
+    environment: iac-plan-dev
     concurrency:
-      group: terraform-${{ matrix.environment }}
+      group: terraform-dev
       cancel-in-progress: false
     env:
-      DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
+      DEPLOY_ENVIRONMENT: dev
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -58,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-$env:DEPLOY_ENVIRONMENT."
+            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-dev."
           }
 
       - name: Configure read-only AWS credentials
@@ -69,4 +63,4 @@ jobs:
 
       - name: Detect drift without applying
         shell: pwsh
-        run: ./.github/scripts/terraform-cycle.ps1 -Mode Drift -Environment $env:DEPLOY_ENVIRONMENT
+        run: ./.github/scripts/terraform-cycle.ps1 -Mode Drift -Environment dev

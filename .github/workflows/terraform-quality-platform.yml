@@ -1,0 +1,68 @@
+name: Terraform quality platform
+
+# El bootstrap y los modulos de identidad no pertenecen a dev ni a prod: crean
+# el state, los repositorios ECR y los roles OIDC que ambos consumen antes de
+# existir. Por eso conservan su propio job, con su propio historial de runs.
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - "bootstrap/**"
+      - "modules/ecr/**"
+      - "modules/github_iac_roles/**"
+      - "scripts/quality/**"
+      - "scripts/security/**"
+      - ".github/workflows/terraform-quality-platform.yml"
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - "bootstrap/**"
+      - "modules/ecr/**"
+      - "modules/github_iac_roles/**"
+      - "scripts/quality/**"
+      - "scripts/security/**"
+      - ".github/workflows/terraform-quality-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-quality-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Format, lint and validate the shared platform
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
+        with:
+          tflint_version: v0.64.0
+
+      - name: Run the quality gate scoped to the shared platform
+        shell: pwsh
+        run: >-
+          ./scripts/quality/terraform-gate.ps1 -Mode ci
+          -Roots bootstrap,modules/ecr,modules/github_iac_roles

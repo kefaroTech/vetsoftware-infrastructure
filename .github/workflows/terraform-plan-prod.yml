@@ -1,24 +1,15 @@
-name: Terraform plan
+name: Terraform plan prod
 
 on:
   pull_request:
     branches:
-      - develop
       - main
     paths:
-      - "**/*.tf"
-      - "**/.terraform.lock.hcl"
+      - "environments/prod/**"
+      - "modules/**"
       - ".github/scripts/terraform-*.ps1"
-      - ".github/workflows/terraform*.yml"
+      - ".github/workflows/terraform-plan-prod.yml"
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - prod
 
 permissions:
   contents: read
@@ -27,16 +18,16 @@ permissions:
 
 jobs:
   plan:
-    name: Plan ${{ github.event_name == 'pull_request' && (github.base_ref == 'main' && 'prod' || 'dev') || inputs.environment }}
+    name: Plan prod
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: iac-plan-${{ github.event_name == 'pull_request' && (github.base_ref == 'main' && 'prod' || 'dev') || inputs.environment }}
+    environment: iac-plan-prod
     concurrency:
-      group: terraform-${{ github.event_name == 'pull_request' && (github.base_ref == 'main' && 'prod' || 'dev') || inputs.environment }}
+      group: terraform-prod
       cancel-in-progress: false
     env:
-      DEPLOY_ENVIRONMENT: ${{ github.event_name == 'pull_request' && (github.base_ref == 'main' && 'prod' || 'dev') || inputs.environment }}
+      DEPLOY_ENVIRONMENT: prod
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -69,7 +60,7 @@ jobs:
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-$env:DEPLOY_ENVIRONMENT."
+            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-prod."
           }
 
       - name: Configure read-only AWS credentials
@@ -81,7 +72,7 @@ jobs:
       - name: Generate fresh Terraform plan
         id: terraform-plan
         shell: pwsh
-        run: ./.github/scripts/terraform-cycle.ps1 -Mode Plan -Environment $env:DEPLOY_ENVIRONMENT
+        run: ./.github/scripts/terraform-cycle.ps1 -Mode Plan -Environment prod
 
       - name: Publish plan in pull request
         if: github.event_name == 'pull_request' && steps.terraform-plan.outcome == 'success'
@@ -92,7 +83,7 @@ jobs:
         shell: pwsh
         run: |
           ./.github/scripts/publish-terraform-plan.ps1 `
-            -Environment $env:DEPLOY_ENVIRONMENT `
+            -Environment prod `
             -ReportPath $env:PLAN_REPORT_PATH `
             -Repository $env:GITHUB_REPOSITORY `
             -PullRequestNumber $env:PR_NUMBER `

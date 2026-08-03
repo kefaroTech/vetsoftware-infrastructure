@@ -97,7 +97,15 @@ function Assert-ReleaseImage {
         throw "El digest solicitado no existe de forma única en ECR."
     }
 
-    $requiredTags = @($Version, "sha-$($SourceCommit.Substring(0, 12))")
+    # Produccion se identifica por su release: el digest debe llevar el tag
+    # SemVer y el tag del commit. Desarrollo no tiene release, asi que su
+    # identidad es el propio commit publicado desde develop.
+    $requiredTags = if ($Environment -eq "prod") {
+        @($Version, "sha-$($SourceCommit.Substring(0, 12))")
+    }
+    else {
+        @("dev-$($SourceCommit.Substring(0, 12))")
+    }
     $actualTags = @($details[0].imageTags)
     foreach ($tag in $requiredTags) {
         if ($tag -notin $actualTags) {
@@ -311,14 +319,21 @@ function Assert-ServiceDeployment {
     Write-Host "[ECS] Despliegue estable y smoke test correcto." -ForegroundColor Green
 }
 
-if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-    throw "Version debe cumplir SemVer estricto X.Y.Z."
-}
 if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
     throw "ImageDigest debe usar sha256:<64 hex>."
 }
 if ($SourceCommit -notmatch '^[0-9a-f]{40}$') {
     throw "SourceCommit debe ser un SHA Git completo de 40 caracteres."
+}
+if ($Environment -eq "prod") {
+    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw "Version debe cumplir SemVer estricto X.Y.Z en produccion."
+    }
+}
+else {
+    if ($Version -ne "dev-$($SourceCommit.Substring(0, 12))") {
+        throw "En desarrollo Version debe ser dev-<12 primeros caracteres de SourceCommit>."
+    }
 }
 $parsedSourceRun = $null
 if (-not [Uri]::TryCreate($SourceRunUrl, [UriKind]::Absolute, [ref]$parsedSourceRun) -or

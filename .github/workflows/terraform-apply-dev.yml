@@ -1,15 +1,7 @@
-name: Terraform apply
+name: Terraform apply dev
 
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - prod
 
 permissions:
   contents: read
@@ -20,30 +12,27 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Enforce environment branch
-        env:
-          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      - name: Enforce the development branch
         shell: pwsh
         run: |
-          $expectedRef = if ($env:DEPLOY_ENVIRONMENT -eq 'prod') { 'refs/heads/main' } else { 'refs/heads/develop' }
-          if ($env:GITHUB_REF -ne $expectedRef) {
-            throw "$env:DEPLOY_ENVIRONMENT solo puede aplicarse desde $expectedRef; revision recibida: $env:GITHUB_REF."
+          if ($env:GITHUB_REF -ne 'refs/heads/develop') {
+            throw "dev solo puede aplicarse desde refs/heads/develop; revision recibida: $env:GITHUB_REF."
           }
 
   apply:
-    name: Approve, plan fresh and apply ${{ inputs.environment }}
+    name: Approve, plan fresh and apply dev
     needs: authorize-ref
     permissions:
       contents: read
       id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    environment: iac-apply-${{ inputs.environment }}
+    environment: iac-apply-dev
     concurrency:
-      group: terraform-${{ inputs.environment }}
+      group: terraform-dev
       cancel-in-progress: false
     env:
-      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      DEPLOY_ENVIRONMENT: dev
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -79,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-$env:DEPLOY_ENVIRONMENT."
+            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-dev."
           }
 
       - name: Configure apply AWS credentials
@@ -90,4 +79,4 @@ jobs:
 
       - name: Generate and apply a fresh Terraform plan
         shell: pwsh
-        run: ./.github/scripts/terraform-cycle.ps1 -Mode Apply -Environment $env:DEPLOY_ENVIRONMENT
+        run: ./.github/scripts/terraform-cycle.ps1 -Mode Apply -Environment dev

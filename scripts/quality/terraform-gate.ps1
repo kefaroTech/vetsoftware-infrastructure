@@ -2,7 +2,13 @@
 param(
     [Parameter()]
     [ValidateSet("full", "terraform", "security", "ci")]
-    [string]$Mode = "full"
+    [string]$Mode = "full",
+
+    # Alcance explicito para el modo ci. Cada entorno ejecuta su propio job y
+    # valida solo las raices que le pertenecen, de modo que un fallo de un
+    # entorno no bloquee el ciclo del otro. Vacio significa validar todo.
+    [Parameter()]
+    [string[]]$Roots = @()
 )
 
 Set-StrictMode -Version Latest
@@ -104,7 +110,7 @@ function Test-RelevantGatePath {
         $normalized -eq ".githooks/pre-commit" -or
         $normalized.StartsWith("scripts/quality/") -or
         $normalized.StartsWith("scripts/security/") -or
-        $normalized -eq ".github/workflows/terraform.yml"
+        $normalized -match '^\.github/workflows/terraform-quality-[a-z]+\.yml$'
     )
 }
 
@@ -337,7 +343,7 @@ function Get-PreCommitScope {
             $normalized -eq ".terraform-version" -or
             $normalized -eq ".tflint.hcl" -or
             $normalized -eq ".githooks/pre-commit" -or
-            $normalized -eq ".github/workflows/terraform.yml" -or
+            $normalized -match '^\.github/workflows/terraform-quality-[a-z]+\.yml$' -or
             $normalized.StartsWith("scripts/quality/") -or
             $normalized.StartsWith("scripts/security/")
         ) {
@@ -566,9 +572,16 @@ try {
             Invoke-IacSecurityScan
         }
         "ci" {
+            $ciRoots = if ($Roots.Count -gt 0) { $Roots } else { $terraformRoots }
+            $unknownRoots = @($ciRoots | Where-Object { $_ -notin $terraformRoots })
+            if ($unknownRoots.Count -gt 0) {
+                throw "Raiz Terraform desconocida en -Roots: $($unknownRoots -join ', '). Valores admitidos: $($terraformRoots -join ', ')."
+            }
+
+            Write-Host "Alcance del gate: $($ciRoots -join ', ')" -ForegroundColor White
             Assert-NoSecuritySuppressions
-            Invoke-TerraformQuality
-            Invoke-IacSecurityScan
+            Invoke-TerraformQuality -Roots $ciRoots
+            Invoke-IacSecurityScan -Targets $ciRoots
         }
     }
 
