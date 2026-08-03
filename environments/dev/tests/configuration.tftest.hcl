@@ -60,6 +60,9 @@ run "development_cost_profile_plans" {
     password_reset_url            = "https://dev.example.test/reset"
     login_url                     = "https://dev.example.test/login"
     api_domain_name               = "dev-api.example.test"
+    alarm_email                   = "finops@example.test"
+    slack_workspace_id            = "T0123456789"
+    slack_channel_id              = "C0123456789"
   }
 
   assert {
@@ -119,5 +122,17 @@ run "development_cost_profile_plans" {
   assert {
     condition     = length(output.scheduled_shutdown_names) == 4
     error_message = "El apagado programado debe crear cuatro acciones ordenadas para ECS y RDS."
+  }
+
+  assert {
+    condition = (
+      output.finops_alerts.monthly_budget_usd == 35 &&
+      output.finops_alerts.forecast_threshold_usd == 28 &&
+      output.finops_alerts.actual_threshold_usd == 35 &&
+      output.finops_alerts.anomaly_threshold_usd == 3 &&
+      output.finops_alerts.email_enabled &&
+      output.finops_alerts.slack_enabled
+    )
+    error_message = "Dev debe alertar por correo y Slack al forecast USD 28, real USD 35 y anomalías desde USD 3."
   }
 }

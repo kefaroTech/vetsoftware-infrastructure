@@ -6,6 +6,12 @@ variable "aws_region" {
   type = string
 }
 
+variable "sns_kms_key_arn" {
+  description = "CMK usada para cifrar el topic SNS de alertas; se recomienda reutilizar la clave de datos del entorno."
+  type        = string
+  default     = ""
+}
+
 variable "alarm_email" {
   description = "Correo opcional. La suscripción SNS requiere confirmación."
   type        = string
@@ -16,6 +22,52 @@ variable "monthly_budget_usd" {
   description = "Cero deshabilita AWS Budgets."
   type        = number
   default     = 180
+}
+
+variable "budget_sns_notifications_enabled" {
+  description = "Publica las alertas de AWS Budgets en el topic SNS compartido."
+  type        = bool
+  default     = false
+}
+
+variable "cost_anomaly_detection_enabled" {
+  description = "Crea un monitor por servicio y una suscripción inmediata de Cost Anomaly Detection."
+  type        = bool
+  default     = false
+}
+
+variable "cost_anomaly_threshold_usd" {
+  description = "Impacto absoluto mínimo en USD para notificar una anomalía."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.cost_anomaly_threshold_usd > 0
+    error_message = "cost_anomaly_threshold_usd debe ser mayor que cero."
+  }
+}
+
+variable "slack_workspace_id" {
+  description = "ID del workspace Slack autorizado en Amazon Q Developer; vacío junto con slack_channel_id deshabilita Slack."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      (trimspace(var.slack_workspace_id) == "" && trimspace(var.slack_channel_id) == "") ||
+      (
+        can(regex("^T[A-Z0-9]+$", var.slack_workspace_id)) &&
+        can(regex("^[CG][A-Z0-9]+$", var.slack_channel_id))
+      )
+    )
+    error_message = "slack_workspace_id y slack_channel_id deben configurarse juntos con IDs válidos de Slack."
+  }
+}
+
+variable "slack_channel_id" {
+  description = "ID del canal Slack que recibe alertas; vacío junto con slack_workspace_id deshabilita Slack."
+  type        = string
+  default     = ""
 }
 
 variable "ecs_cluster_name" {
