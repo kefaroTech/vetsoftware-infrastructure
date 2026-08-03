@@ -48,15 +48,15 @@ function Get-StackOutput {
 
 $awsRegion = Assert-EnvironmentValue -Name "AWS_REGION"
 $expectedAccountId = Assert-EnvironmentValue -Name "AWS_ACCOUNT_ID"
-$githubOrganization = Assert-EnvironmentValue -Name "GITHUB_ORGANIZATION"
-$githubOrganizationId = Assert-EnvironmentValue -Name "GITHUB_ORGANIZATION_ID"
-$repositoryIdsJson = Assert-EnvironmentValue -Name "GITHUB_REPOSITORY_IDS_JSON"
+$githubOrganization = Assert-EnvironmentValue -Name "GH_ORGANIZATION"
+$githubOrganizationId = Assert-EnvironmentValue -Name "GH_ORGANIZATION_ID"
+$repositoryIdsJson = Assert-EnvironmentValue -Name "GH_REPOSITORY_IDS_JSON"
 
 try {
     $repositoryIds = $repositoryIdsJson | ConvertFrom-Json -AsHashtable
 }
 catch {
-    throw "GITHUB_REPOSITORY_IDS_JSON debe ser un objeto JSON valido."
+    throw "GH_REPOSITORY_IDS_JSON debe ser un objeto JSON valido."
 }
 
 $requiredRepositoryKeys = @("backend", "iac")
@@ -66,7 +66,7 @@ if ($Environment -eq "prod") {
 
 foreach ($repositoryKey in $requiredRepositoryKeys) {
     if (-not $repositoryIds.ContainsKey($repositoryKey) -or "$($repositoryIds[$repositoryKey])" -notmatch '^[0-9]+$') {
-        throw "GITHUB_REPOSITORY_IDS_JSON requiere el ID numerico $repositoryKey."
+        throw "GH_REPOSITORY_IDS_JSON requiere el ID numerico $repositoryKey."
     }
 }
 

@@ -18,7 +18,7 @@ Parameters:
     AllowedPattern: "^[0-9]+$"
   GitHubRepository:
     Type: String
-    Default: VetSoftwareIaC
+    Default: vetsoftware-infrastructure
   GitHubRepositoryId:
     Type: String
     AllowedPattern: "^[0-9]+$"
