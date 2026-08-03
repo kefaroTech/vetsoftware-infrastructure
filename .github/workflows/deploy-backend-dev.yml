@@ -42,7 +42,8 @@ jobs:
     environment: iac-plan-dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-plan-dev
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
       TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
       TF_VAR_api_domain_name: ${{ vars.API_DOMAIN_NAME }}
@@ -68,8 +69,8 @@ jobs:
       - name: Validate AWS plan configuration
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-dev."
+          if ($env:AWS_ACCOUNT_ID -notmatch '^\d{12}$') {
+            throw "Configure AWS_ACCOUNT_ID con los 12 digitos de la cuenta AWS en iac-plan-dev."
           }
 
       - name: Configure read-only AWS credentials
@@ -102,7 +103,8 @@ jobs:
     environment: iac-apply-dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-apply-dev
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
       TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
       TF_VAR_api_domain_name: ${{ vars.API_DOMAIN_NAME }}
@@ -128,8 +130,8 @@ jobs:
       - name: Validate AWS apply configuration
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-dev."
+          if ($env:AWS_ACCOUNT_ID -notmatch '^\d{12}$') {
+            throw "Configure AWS_ACCOUNT_ID con los 12 digitos de la cuenta AWS en iac-apply-dev."
           }
 
       - name: Configure apply AWS credentials

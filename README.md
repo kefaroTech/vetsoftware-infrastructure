@@ -196,7 +196,7 @@ En la política de Actions de la organización deben estar permitidas y fijadas 
 
 La primera ejecución de cada bootstrap es deliberadamente administrativa: crea su backend remoto, su ECR y su par de roles plan/apply. Dev no crea roles de prod y prod no crea roles de dev. Los cambios futuros de identidad, state o ECR se ejecutan nuevamente desde el workflow protegido del mismo ambiente.
 
-En **vetsoftware-infrastructure > Settings > Environments** cree estos nombres exactos y agregue en cada uno la variable de environment `AWS_IAC_ROLE_ARN` con el ARN correspondiente del output `github_iac_role_arns`:
+En **vetsoftware-infrastructure > Settings > Environments** cree estos nombres exactos y agregue en cada uno la variable `AWS_ACCOUNT_ID`. El ARN del rol no se configura: cada workflow lo arma como `arn:aws:iam::<AWS_ACCOUNT_ID>:role/vetsoftware-<nombre del environment>`, que es exactamente lo que emite el output `github_iac_role_arns`:
 
 | GitHub Environment | Output | Capacidad |
 |---|---|---|
