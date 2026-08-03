@@ -50,9 +50,14 @@ variable "github_organization_id" {
 }
 
 variable "github_environment" {
-  description = "Environment protegido de GitHub usado por los workflows de release."
+  description = "Environment protegido de GitHub usado exclusivamente para publicar releases productivas."
   type        = string
   default     = "production"
+
+  validation {
+    condition     = var.github_environment == "production"
+    error_message = "ECR es production-only: github_environment debe ser production."
+  }
 }
 
 variable "existing_github_oidc_provider_arn" {
@@ -115,7 +120,7 @@ variable "github_iac_environments" {
 }
 
 variable "ecr_images_to_keep" {
-  description = "Cantidad de imágenes que conserva cada repositorio ECR."
+  description = "Cantidad de imágenes de release productiva que conserva cada repositorio ECR."
   type        = number
   default     = 30
 }

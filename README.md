@@ -219,7 +219,7 @@ El bootstrap también crea tres repositorios ECR inmutables:
 - `vetsoftware-front`
 - `vetsoftware-public-front`
 
-Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios.
+Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes de release productiva más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios. No existen repositorios ni historiales ECR por entorno: los tres registros tienen alcance `production-only`.
 
 El bootstrap crea un único proveedor OIDC de GitHub. El módulo ECR crea un rol IAM de mínimo privilegio por repositorio de aplicación, mientras que el módulo `github_iac_roles` crea roles independientes para plan y apply de Terraform. La confianza queda limitada por los nombres e IDs inmutables de la organización y el repositorio, además del GitHub Environment exacto; no se almacenan access keys en GitHub.
 
@@ -254,7 +254,9 @@ En cada repositorio GitHub abra **Settings > Environments > production > Environ
 | `VetSoftwareFront` | output `private_front` | — |
 | `VetSoftwarePublicFront` | output `public_front` | `VITE_RECAPTCHA_SITE_KEY` |
 
-`AWS_REGION` es opcional y usa `us-east-1` por omisión. Restrinja el environment `production` a la rama `main` y mantenga sus aprobadores obligatorios.
+En ese mismo environment seleccione **Deployment branches and tags > Selected branches and tags**, agregue únicamente la rama protegida `main`, configure al menos un required reviewer e impida la autoaprobación. Esta regla externa es obligatoria: el subject OIDC demuestra el environment `production`, mientras que la política de deployment de GitHub impide que un workflow modificado en una rama dev llegue a ese environment.
+
+`AWS_REGION` es opcional y usa `us-east-1` por omisión.
 
 En la política de Actions de la organización deben estar permitidas y fijadas por SHA estas familias: `aws-actions/configure-aws-credentials`, `aws-actions/amazon-ecr-login`, `docker/setup-qemu-action`, `docker/setup-buildx-action` y `docker/build-push-action`.
 
@@ -279,8 +281,8 @@ Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoapr
 
 `deploy-backend.yml` consume estos roles para el circuito especializado de imágenes: certifica ECR, ejecuta un plan limitado a ECS, exige aprobación antes del apply, espera estabilidad, ejecuta smoke test y revierte al digest anterior cuando es posible. El plan general de PR y la detección periódica de drift siguen siendo tareas independientes.
 
-Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release. El backend solicita después un despliegue auditable por digest mediante una GitHub App de alcance exclusivo al repositorio IaC.
+Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release. Un despacho manual desde cualquier rama distinta de `main` también falla antes de obtener credenciales AWS. El backend solicita después un despliegue auditable por digest mediante una GitHub App de alcance exclusivo al repositorio IaC.
 
 La configuración completa, el requisito de baseline y las variables externas pendientes están en [Despliegue inmutable del backend](docs/BACKEND_IMAGE_DEPLOYMENT.md).
 
-Los fronts continúan desplegándose en Cloudflare Pages según la arquitectura actual. Sus imágenes ECR proporcionan un artefacto reproducible para ejecución local, recuperación o una migración futura; Terraform consume directamente la imagen ARM64 del backend mediante `backend_image_uri`.
+Los fronts continúan desplegándose en Cloudflare Pages. Sus builds de CI/dev son efímeros y no se publican en ECR; solo las releases productivas conservan una imagen de recuperación. El backend dev tampoco mantiene una copia histórica propia: reutiliza por digest una release productiva retenida, que permanece disponible para reinicios y escalado de ECS. Terraform consume directamente esa imagen ARM64 mediante `backend_image_uri`.

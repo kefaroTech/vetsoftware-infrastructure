@@ -15,6 +15,7 @@ resource "aws_ecr_repository" "this" {
   tags = merge(var.tags, {
     Component        = "container-registry"
     GitHubRepository = each.value.github_repository
+    RetentionScope   = "production-only"
   })
 
   lifecycle {
@@ -43,7 +44,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
       },
       {
         rulePriority = 2
-        description  = "Keep the ${var.images_to_keep} newest release images"
+        description  = "Keep the ${var.images_to_keep} newest production release images"
         selection = {
           tagStatus     = "tagged"
           tagPrefixList = ["sha-"]
@@ -95,6 +96,7 @@ resource "aws_iam_role" "github_ecr" {
   tags = merge(var.tags, {
     Component        = "github-ecr-publisher"
     GitHubRepository = each.value.github_repository
+    RetentionScope   = "production-only"
   })
 }
 

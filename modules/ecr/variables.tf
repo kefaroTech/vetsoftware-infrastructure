@@ -38,9 +38,14 @@ variable "github_organization_id" {
 }
 
 variable "github_environment" {
-  description = "Environment GitHub cuyo subject OIDC puede asumir los roles de publicación."
+  description = "Environment GitHub de producción cuyo subject OIDC puede publicar artefactos retenidos."
   type        = string
   default     = "production"
+
+  validation {
+    condition     = var.github_environment == "production"
+    error_message = "Los roles publicadores ECR solo pueden confiar en el environment production."
+  }
 }
 
 variable "github_oidc_provider_arn" {
@@ -54,7 +59,7 @@ variable "github_oidc_provider_arn" {
 }
 
 variable "images_to_keep" {
-  description = "Cantidad máxima de imágenes por repositorio antes de expirar las más antiguas."
+  description = "Cantidad máxima de imágenes de release productiva por repositorio antes de expirar las más antiguas."
   type        = number
   default     = 30
 
