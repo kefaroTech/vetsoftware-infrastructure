@@ -15,7 +15,8 @@ Set-StrictMode -Version Latest
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $environmentDirectory = Join-Path $repositoryRoot "environments/$Environment"
-$stateKey = "vetsoftware/$Environment/terraform.tfstate"
+$projectName = "vetsoftware"
+$stateKey = "$projectName/$Environment/terraform.tfstate"
 
 function Assert-RequiredEnvironmentVariable {
     param([Parameter(Mandatory)][string]$Name)
@@ -50,6 +51,32 @@ function Get-ExternalJson {
     }
 
     return (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+function Resolve-StateBackend {
+    # El bucket y la KMS key del state siguen la convencion que fija
+    # bootstrap/state-backend.yml, asi que no hace falta configurarlos como
+    # variables del Environment. Un valor explicito siempre tiene prioridad.
+    if ([string]::IsNullOrWhiteSpace($env:TF_STATE_BUCKET)) {
+        $accountId = (& aws sts get-caller-identity --query Account --output text)
+        if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
+            throw "No fue posible resolver la cuenta AWS activa para derivar TF_STATE_BUCKET."
+        }
+
+        $env:TF_STATE_BUCKET = "$projectName-$Environment-tfstate-$accountId"
+        Write-Host "[Terraform] Bucket de state derivado: $env:TF_STATE_BUCKET" -ForegroundColor Cyan
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TF_STATE_KMS_KEY_ARN)) {
+        $keyAlias = "alias/$projectName-$Environment-tfstate"
+        $keyArn = (& aws kms describe-key --key-id $keyAlias --query KeyMetadata.Arn --output text)
+        if ($LASTEXITCODE -ne 0 -or $keyArn -notmatch '^arn:[^:]+:kms:[a-z0-9-]+:[0-9]{12}:key/') {
+            throw "No fue posible resolver la KMS key $keyAlias que cifra el state de $Environment."
+        }
+
+        $env:TF_STATE_KMS_KEY_ARN = $keyArn
+        Write-Host "[Terraform] KMS key de state derivada: $env:TF_STATE_KMS_KEY_ARN" -ForegroundColor Cyan
+    }
 }
 
 function Initialize-Terraform {
@@ -238,7 +265,6 @@ function Write-PlanReport {
 
 @(
     "AWS_REGION",
-    "TF_STATE_BUCKET",
     "TF_VAR_api_domain_name",
     "TF_VAR_cors_allowed_origins",
     "TF_VAR_email_from",
@@ -263,6 +289,7 @@ else {
     $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used"}'
 }
 
+Resolve-StateBackend
 Initialize-Terraform
 Set-CurrentBackendImage
 $variableFile = New-OptionalVariableFile

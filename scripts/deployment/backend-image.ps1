@@ -26,7 +26,8 @@ $ProgressPreference = "SilentlyContinue"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $environmentDirectory = Join-Path $repositoryRoot "environments/$Environment"
 $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
-$stateKey = "vetsoftware/$Environment/terraform.tfstate"
+$projectName = "vetsoftware"
+$stateKey = "$projectName/$Environment/terraform.tfstate"
 $allowedAddresses = @(
     "module.backend.aws_ecs_service.backend",
     "module.backend.aws_ecs_task_definition.backend"
@@ -139,6 +140,27 @@ function Assert-ReleaseImage {
     }
 
     Write-Host "[ECR] Imagen certificada: $ExpectedImageUri" -ForegroundColor Green
+}
+
+function Resolve-StateBackend {
+    param([Parameter(Mandatory)][string]$AccountId)
+
+    # Misma convencion que bootstrap/state-backend.yml; un valor explicito manda.
+    if ([string]::IsNullOrWhiteSpace($env:TF_STATE_BUCKET)) {
+        $env:TF_STATE_BUCKET = "$projectName-$Environment-tfstate-$AccountId"
+        Write-Host "[Terraform] Bucket de state derivado: $env:TF_STATE_BUCKET" -ForegroundColor Cyan
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:TF_STATE_KMS_KEY_ARN)) {
+        $keyAlias = "alias/$projectName-$Environment-tfstate"
+        $keyArn = (& aws kms describe-key --key-id $keyAlias --query KeyMetadata.Arn --output text)
+        if ($LASTEXITCODE -ne 0 -or $keyArn -notmatch '^arn:[^:]+:kms:[a-z0-9-]+:[0-9]{12}:key/') {
+            throw "No fue posible resolver la KMS key $keyAlias que cifra el state de $Environment."
+        }
+
+        $env:TF_STATE_KMS_KEY_ARN = $keyArn
+        Write-Host "[Terraform] KMS key de state derivada: $env:TF_STATE_KMS_KEY_ARN" -ForegroundColor Cyan
+    }
 }
 
 function Initialize-Terraform {
@@ -345,7 +367,6 @@ if (-not [Uri]::TryCreate($SourceRunUrl, [UriKind]::Absolute, [ref]$parsedSource
 
 @(
     "AWS_REGION",
-    "TF_STATE_BUCKET",
     "TF_VAR_api_domain_name",
     "TF_VAR_cors_allowed_origins",
     "TF_VAR_email_from",
@@ -369,6 +390,7 @@ if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
 $imageUri = "$accountId.dkr.ecr.$env:AWS_REGION.amazonaws.com/$repositoryName@$ImageDigest"
 
 Assert-ReleaseImage -ExpectedImageUri $imageUri
+Resolve-StateBackend -AccountId $accountId
 Initialize-Terraform
 $planPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-$Mode.tfplan"
 $changeCount = New-GuardedPlan -ImageUri $imageUri -PlanPath $planPath

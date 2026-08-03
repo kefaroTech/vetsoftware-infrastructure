@@ -66,9 +66,7 @@ Cada bootstrap emite solamente los roles de su ambiente:
 
 Configure en plan y apply del ambiente correspondiente:
 
-- `AWS_IAC_ROLE_ARN`
-- `TF_STATE_BUCKET`
-- `TF_STATE_KMS_KEY_ARN`
+- `AWS_ACCOUNT_ID`
 - `TF_VARS_JSON` opcional
 - `AWS_REGION`
 - `API_DOMAIN_NAME`
@@ -79,6 +77,15 @@ Configure en plan y apply del ambiente correspondiente:
 - `PASSWORD_RESET_URL`
 - `REGISTRATION_VERIFICATION_URL`
 - `BACKEND_IMAGE_URI` para el primer despliegue
+
+El rol OIDC, el bucket y la KMS key del state no se configuran: se derivan de la
+convencion que fija `bootstrap/state-backend.yml`. Cada workflow arma el ARN como
+`arn:aws:iam::<AWS_ACCOUNT_ID>:role/vetsoftware-iac-<funcion>-<ambiente>`, y
+`terraform-cycle.ps1` resuelve el bucket como
+`vetsoftware-<ambiente>-tfstate-<cuenta>` via `sts:GetCallerIdentity` y la key
+desde el alias `alias/vetsoftware-<ambiente>-tfstate`. Definir `TF_STATE_BUCKET` o
+`TF_STATE_KMS_KEY_ARN` sigue funcionando y tiene prioridad sobre lo derivado; solo
+hace falta cuando el backend no sigue la convencion.
 
 Configure unicamente en los Environments de apply:
 

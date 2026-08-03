@@ -55,10 +55,10 @@ En cada uno configure las variables:
 
 | Variable | Contenido |
 |---|---|
-| `AWS_IAC_ROLE_ARN` | ARN de plan o apply correspondiente generado por bootstrap. |
+| `AWS_ACCOUNT_ID` | Cuenta AWS de 12 dígitos; el workflow arma con ella el ARN del rol plan o apply. |
 | `AWS_REGION` | Región AWS; `us-east-1` si se omite. |
-| `TF_STATE_BUCKET` | Output `state_bucket_name` de bootstrap. |
-| `TF_STATE_KMS_KEY_ARN` | Output `state_kms_key_arn`; puede quedar vacío con SSE-S3. |
+| `TF_STATE_BUCKET` | Opcional. Se deriva como `vetsoftware-<ambiente>-tfstate-<cuenta>`; defínala solo para un backend fuera de la convención. |
+| `TF_STATE_KMS_KEY_ARN` | Opcional. Se resuelve desde `alias/vetsoftware-<ambiente>-tfstate`; puede quedar vacía con SSE-S3. |
 | `API_DOMAIN_NAME` | `dev-api.kefaro.tech` o `api.kefaro.tech`. |
 | `CORS_ALLOWED_ORIGINS` | Lista JSON válida de orígenes del entorno. |
 | `EMAIL_FROM` | Remitente del backend. |
