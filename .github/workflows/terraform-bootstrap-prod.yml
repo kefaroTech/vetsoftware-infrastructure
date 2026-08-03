@@ -36,9 +36,9 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_BOOTSTRAP_ROLE_ARN }}
-      GITHUB_ORGANIZATION: ${{ github.repository_owner }}
-      GITHUB_ORGANIZATION_ID: ${{ vars.GITHUB_ORGANIZATION_ID }}
-      GITHUB_REPOSITORY_IDS_JSON: ${{ vars.GITHUB_REPOSITORY_IDS_JSON }}
+      GH_ORGANIZATION: ${{ github.repository_owner }}
+      GH_ORGANIZATION_ID: ${{ vars.GH_ORGANIZATION_ID }}
+      GH_REPOSITORY_IDS_JSON: ${{ vars.GH_REPOSITORY_IDS_JSON }}
 
     steps:
       - name: Check out authorized bootstrap revision
@@ -55,7 +55,7 @@ jobs:
       - name: Validate bootstrap identity configuration
         shell: pwsh
         run: |
-          foreach ($name in @('AWS_ACCOUNT_ID', 'AWS_ROLE_TO_ASSUME', 'GITHUB_ORGANIZATION_ID', 'GITHUB_REPOSITORY_IDS_JSON')) {
+          foreach ($name in @('AWS_ACCOUNT_ID', 'AWS_ROLE_TO_ASSUME', 'GH_ORGANIZATION_ID', 'GH_REPOSITORY_IDS_JSON')) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
               throw "Configure $name en iac-bootstrap-prod."
             }
