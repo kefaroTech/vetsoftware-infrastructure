@@ -414,7 +414,9 @@ catch {
     $deploymentError = $_
     Write-Warning "El despliegue falló: $($deploymentError.Exception.Message)"
     $escapedRepositoryName = [regex]::Escape($repositoryName)
-    if ($serviceState.PreviousImage -match "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
+    # Comillas dobles en PowerShell no escapan con barra invertida: "\\." exigiria una
+    # barra invertida literal y el rollback nunca se dispararia.
+    if ($serviceState.PreviousImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
         Write-Warning "Iniciando rollback Terraform al digest anterior."
         $rollbackPlanPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-rollback.tfplan"
         $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath

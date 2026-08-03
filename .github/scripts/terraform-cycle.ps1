@@ -149,7 +149,9 @@ function Set-CurrentBackendImage {
 
         $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
         $repositoryPattern = [regex]::Escape($repositoryName)
-        $imagePattern = "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$"
+        # PowerShell no escapa con barra invertida dentro de comillas dobles: "\\." llega
+        # al motor de regex como \\. y exigiria una barra invertida literal en la URI.
+        $imagePattern = "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$"
         $image = [string]$backend[0].image
         if ($image -notmatch $imagePattern) {
             throw "La imagen activa no esta fijada al digest esperado de $repositoryName."
@@ -160,7 +162,7 @@ function Set-CurrentBackendImage {
     catch {
         $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
         $repositoryPattern = [regex]::Escape($repositoryName)
-        if ($configuredImage -match "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$") {
+        if ($configuredImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$") {
             $env:TF_VAR_backend_image_uri = $configuredImage
             Write-Host "[Terraform] No existe baseline ECS; se usara BACKEND_IMAGE_URI para el primer despliegue." -ForegroundColor Yellow
             return
