@@ -11,6 +11,9 @@ Parameters:
     AllowedValues:
       - dev
       - prod
+  BootstrapRoleArn:
+    Type: String
+    AllowedPattern: "^arn:[^:]+:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
 
 Resources:
   StateKey:
@@ -29,6 +32,15 @@ Resources:
             Principal:
               AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
             Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowBootstrapRoleToManageStateAlias
+            Effect: Allow
+            Principal:
+              AWS: !Ref BootstrapRoleArn
+            Action:
+              - kms:CreateAlias
+              - kms:UpdateAlias
+              - kms:DeleteAlias
             Resource: "*"
       Tags:
         - Key: Project

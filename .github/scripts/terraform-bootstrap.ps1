@@ -48,9 +48,15 @@ function Get-StackOutput {
 
 $awsRegion = Assert-EnvironmentValue -Name "AWS_REGION"
 $expectedAccountId = Assert-EnvironmentValue -Name "AWS_ACCOUNT_ID"
+$bootstrapRoleArn = Assert-EnvironmentValue -Name "AWS_ROLE_TO_ASSUME"
 $githubOrganization = Assert-EnvironmentValue -Name "GH_ORGANIZATION"
 $githubOrganizationId = Assert-EnvironmentValue -Name "GH_ORGANIZATION_ID"
 $repositoryIdsJson = Assert-EnvironmentValue -Name "GH_REPOSITORY_IDS_JSON"
+
+$expectedBootstrapRoleArn = "arn:aws:iam::${expectedAccountId}:role/${projectName}-github-bootstrap-${Environment}"
+if ($bootstrapRoleArn -ne $expectedBootstrapRoleArn) {
+    throw "AWS_ROLE_TO_ASSUME debe ser $expectedBootstrapRoleArn para aislar el bootstrap $Environment."
+}
 
 try {
     $repositoryIds = $repositoryIdsJson | ConvertFrom-Json -AsHashtable
@@ -86,14 +92,25 @@ if ($callerIdentity.Account -ne $expectedAccountId) {
 
 $stackName = "$projectName-$Environment-terraform-state"
 $templatePath = Join-Path $bootstrapDirectory "state-backend.yml"
-Invoke-ExternalCommand -Command "aws" -Arguments @(
+$deployArguments = @(
     "cloudformation", "deploy",
     "--stack-name", $stackName,
     "--template-file", $templatePath,
-    "--parameter-overrides", "ProjectName=$projectName", "Environment=$Environment",
+    "--parameter-overrides", "ProjectName=$projectName", "Environment=$Environment", "BootstrapRoleArn=$bootstrapRoleArn",
     "--no-fail-on-empty-changeset",
     "--region", $awsRegion
 )
+& aws @deployArguments
+$deployExitCode = $LASTEXITCODE
+if ($deployExitCode -ne 0) {
+    Write-Warning "CloudFormation fallo; consultando eventos del stack $stackName."
+    & aws cloudformation describe-stack-events `
+        --stack-name $stackName `
+        --query "StackEvents[?contains(ResourceStatus, 'FAILED')].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]" `
+        --output table `
+        --region $awsRegion
+    throw "aws cloudformation deploy fallo con codigo $deployExitCode."
+}
 
 $stackOutputsJson = & aws cloudformation describe-stacks `
     --stack-name $stackName `
