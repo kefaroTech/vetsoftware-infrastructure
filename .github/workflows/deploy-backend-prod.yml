@@ -1,15 +1,10 @@
-name: Deploy backend image
+name: Deploy backend image prod
 
+# Circuito de imagen productiva. Solo acepta una release SemVer cuyo digest
+# lleve tanto el tag X.Y.Z como sha-<12>, con escaneo ECR sin High ni Critical.
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - prod
       version:
         description: "Strict SemVer release (X.Y.Z)"
         required: true
@@ -32,7 +27,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: terraform-${{ inputs.environment }}
+  group: terraform-prod
   cancel-in-progress: false
 
 env:
@@ -41,10 +36,10 @@ env:
 
 jobs:
   plan:
-    name: Certify and plan ${{ inputs.environment }}
+    name: Certify and plan prod
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: iac-plan-${{ inputs.environment }}
+    environment: iac-plan-prod
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
@@ -74,7 +69,7 @@ jobs:
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-${{ inputs.environment }}."
+            throw "Configure AWS_IAC_ROLE_ARN in iac-plan-prod."
           }
 
       - name: Configure read-only AWS credentials
@@ -85,7 +80,6 @@ jobs:
 
       - name: Certify release and guard Terraform plan
         env:
-          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -94,18 +88,18 @@ jobs:
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Plan `
-            -Environment $env:DEPLOY_ENVIRONMENT `
+            -Environment prod `
             -Version $env:RELEASE_VERSION `
             -ImageDigest $env:IMAGE_DIGEST `
             -SourceCommit $env:SOURCE_COMMIT `
             -SourceRunUrl $env:SOURCE_RUN_URL
 
   apply:
-    name: Approve, deploy and verify ${{ inputs.environment }}
+    name: Approve, deploy and verify prod
     needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: iac-apply-${{ inputs.environment }}
+    environment: iac-apply-prod
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_IAC_ROLE_ARN }}
@@ -135,7 +129,7 @@ jobs:
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AWS_ROLE_TO_ASSUME)) {
-            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-${{ inputs.environment }}."
+            throw "Configure AWS_IAC_ROLE_ARN in iac-apply-prod."
           }
 
       - name: Configure apply AWS credentials
@@ -146,7 +140,6 @@ jobs:
 
       - name: Deploy immutable image, verify and roll back on failure
         env:
-          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -155,7 +148,7 @@ jobs:
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Apply `
-            -Environment $env:DEPLOY_ENVIRONMENT `
+            -Environment prod `
             -Version $env:RELEASE_VERSION `
             -ImageDigest $env:IMAGE_DIGEST `
             -SourceCommit $env:SOURCE_COMMIT `

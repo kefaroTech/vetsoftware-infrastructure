@@ -2,17 +2,16 @@
 
 ## Objetivo
 
-El workflow `.github/workflows/deploy-backend.yml` recibe una release ya publicada, certifica su digest en ECR y despliega exclusivamente esa imagen en ECS. Nunca transforma un tag mutable en estado deseado de Terraform.
+Los workflows `.github/workflows/deploy-backend-dev.yml` y `deploy-backend-prod.yml` reciben una imagen ya publicada, certifican su digest en ECR y despliegan exclusivamente esa imagen en ECS. Nunca transforman un tag mutable en estado deseado de Terraform. Son dos definiciones separadas: cada entorno tiene su propio contrato de identidad del artefacto, su propio grupo de concurrencia y su propio historial de runs.
 
-El contrato de entrada contiene:
+El contrato de entrada de ambos contiene cuatro datos:
 
-- entorno `dev` o `prod`;
-- versión SemVer estricta `X.Y.Z`;
+- identificador de la imagen: versión SemVer estricta `X.Y.Z` en producción, o el tag `dev-<12 caracteres del commit>` en desarrollo;
 - digest `sha256:<64 hex>`;
 - SHA completo del commit del backend;
 - URL HTTPS del run que publicó la imagen.
 
-ECR debe demostrar que el mismo digest contiene tanto el tag SemVer como `sha-<12 caracteres del commit>`. El escaneo debe estar completo y reportar cero vulnerabilidades High y Critical.
+La certificación en ECR depende del entorno. En **producción**, el mismo digest debe contener tanto el tag SemVer como `sha-<12 caracteres del commit>`. En **desarrollo** basta el tag `dev-<12>`, porque no existe release y la identidad del artefacto es el propio commit de `develop`. En los dos casos el escaneo debe estar completo y reportar cero vulnerabilidades High y Critical.
 
 ## Flujo protegido
 
@@ -72,19 +71,14 @@ Proteja `iac-apply-prod` con revisor obligatorio, sin autoaprobación y limitado
 
 No agregue JWT, tokens Cloudflare ni credenciales Grafana a estos environments para el flujo image-only. Una rotación real de secretos pertenece al workflow general de IaC y debe usar sus propios secrets protegidos y un plan que autorice explícitamente esos recursos.
 
-## Conexión desde el backend, pendiente
+## Ningún repositorio de aplicación dispara este despliegue
 
-Cree una GitHub App de la organización con permiso `Actions: read and write`, instálela únicamente en `VetSoftwareIaC` y guarde en el environment `production` de `VetSoftware`:
+El repositorio del backend publica el artefacto y ahí termina su responsabilidad. No existe GitHub App, token cruzado ni `workflow_dispatch` remoto: `VetSoftware` deja los cuatro datos en el Summary de su run de publicación y quien opera la infraestructura los copia al lanzar el workflow correspondiente desde `VetSoftwareIaC`.
 
-- variable `IAC_DISPATCH_CLIENT_ID`;
-- secret `IAC_DISPATCH_PRIVATE_KEY`.
-
-Opcionalmente defina `IAC_GITHUB_OWNER` e `IAC_GITHUB_REPOSITORY`; los valores predeterminados son `kefaroTech` y `VetSoftwareIaC`. La política de Actions debe permitir `actions/create-github-app-token`, siempre fijada a un SHA completo.
-
-Hasta completar esta sección, publicar una release fallará de forma segura en el paso de creación del token: la imagen y la GitHub Release serán idempotentes y una reejecución podrá solicitar el despliegue después de configurar la App.
+Esto mantiene una sola dirección de confianza. El repositorio IaC concede a los repositorios de aplicación permiso para publicar en ECR mediante roles OIDC de mínimo privilegio; ninguno de ellos obtiene la capacidad inversa de iniciar un cambio en la infraestructura.
 
 ## Operación manual y auditoría
 
-`deploy-backend.yml` también puede iniciarse manualmente desde Actions con los cinco inputs. Cada job escribe en su Summary el entorno, versión, digest, commit, run de origen y recursos incluidos en el plan. La concurrencia se serializa por entorno y nunca cancela un apply en curso.
+Ambos workflows se inician manualmente desde Actions con sus cuatro inputs. Cada job escribe en su Summary la versión, el digest, el commit, el run de origen y los recursos incluidos en el plan. La concurrencia se serializa dentro de cada entorno mediante `terraform-<entorno>` y nunca cancela un apply en curso; los dos entornos avanzan sin esperarse.
 
 No use este workflow para cambios generales de infraestructura. Red, base de datos, cache, seguridad, secretos o capacidad requieren su propio PR, plan revisado y apply controlado.
