@@ -9,10 +9,10 @@ output "state_kms_key_arn" {
 }
 
 output "backend_hcl" {
-  description = "Configuración sugerida del backend remoto."
+  description = "Configuración del state de prod en una key propia del bucket compartido."
   value = {
     bucket       = aws_s3_bucket.state.id
-    key          = "${var.project_name}/${var.environment}/terraform.tfstate"
+    key          = "${var.project_name}/prod/terraform.tfstate"
     region       = var.aws_region
     encrypt      = true
     use_lockfile = true
@@ -40,6 +40,11 @@ output "ecr_repository_urls" {
 output "github_ecr_publisher_role_arns" {
   description = "Configure cada valor como AWS_ECR_PUBLISH_ROLE_ARN en el environment production del repositorio GitHub correspondiente."
   value       = module.ecr.publisher_role_arns
+}
+
+output "github_ecr_development_publisher_role_arns" {
+  description = "Configure cada valor como AWS_ECR_PUBLISH_ROLE_ARN en el environment development del repositorio GitHub correspondiente. Hoy solo aplica al backend."
+  value       = module.ecr.development_publisher_role_arns
 }
 
 output "github_iac_role_arns" {

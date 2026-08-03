@@ -19,7 +19,7 @@ Cree los cuatro environments emitidos por `terraform -chdir=bootstrap output git
 |---|---|---|
 | `iac-plan-dev` | PR hacia `develop`, ejecucion manual y drift desde la rama por defecto | Sin secretos de runtime; rol OIDC `dev.plan`. |
 | `iac-plan-prod` | PR hacia `main`, ejecucion manual y drift desde la rama por defecto | Sin secretos de runtime; rol OIDC `prod.plan`. |
-| `iac-apply-dev` | `develop` para el ciclo general y `main` para el deploy especializado de imagen | Limitar deployment branches a `develop` y `main`. |
+| `iac-apply-dev` | Exclusivamente `develop`, tanto para el ciclo general como para el deploy de imagen | Limitar deployment branches a `develop`. |
 | `iac-apply-prod` | Exclusivamente `main` | Revisor obligatorio, impedir autoaprobacion y limitar deployment branches a `main`. |
 
 La trust policy OIDC exige audiencia `sts.amazonaws.com`, repositorio/organizacion por nombre e ID inmutables y el nombre exacto del GitHub Environment. Los roles de plan solo leen infraestructura y state -salvo el lockfile S3 requerido por Terraform-; solo los roles de apply escriben state y recursos del entorno.

@@ -2,8 +2,9 @@
 aws_region  = "us-east-1"
 environment = "dev"
 
-# Dev descubre por tags la VPC y las subredes creadas por prod.
-shared_environment = "prod"
+# Dev crea su propia VPC. El CIDR no debe solaparse con el de prod (10.40.0.0/16).
+vpc_cidr                = "10.50.0.0/16"
+availability_zone_count = 2
 
 # En Cloudflare Tunnel publique este host con origen http://localhost:8080.
 api_domain_name = "dev-api.kefaro.tech"

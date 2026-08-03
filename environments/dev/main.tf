@@ -5,6 +5,17 @@ module "kms" {
   tags = local.common_tags
 }
 
+module "network" {
+  source = "../../modules/network"
+
+  name                    = local.name
+  vpc_cidr                = var.vpc_cidr
+  availability_zone_count = var.availability_zone_count
+  kms_key_arn             = module.kms.key_arn
+  flow_log_retention_days = var.log_retention_days
+  tags                    = local.common_tags
+}
+
 module "secrets" {
   source = "../../modules/secrets"
 
@@ -22,7 +33,7 @@ module "secrets" {
 resource "aws_security_group" "backend" {
   name_prefix = "${local.name}-backend-"
   description = "Development Fargate backend"
-  vpc_id      = data.aws_vpc.shared.id
+  vpc_id      = module.network.vpc_id
   tags        = merge(local.common_tags, { Name = "${local.name}-backend" })
 
   lifecycle {
@@ -56,7 +67,7 @@ resource "aws_vpc_security_group_egress_rule" "backend_cloudflare_tunnel" {
 resource "aws_security_group" "database" {
   name_prefix = "${local.name}-database-"
   description = "Development MySQL"
-  vpc_id      = data.aws_vpc.shared.id
+  vpc_id      = module.network.vpc_id
   tags        = merge(local.common_tags, { Name = "${local.name}-database" })
 
   lifecycle {
@@ -85,7 +96,7 @@ resource "aws_vpc_security_group_egress_rule" "backend_to_database" {
 resource "aws_security_group" "cache" {
   name_prefix = "${local.name}-cache-"
   description = "Development Valkey"
-  vpc_id      = data.aws_vpc.shared.id
+  vpc_id      = module.network.vpc_id
   tags        = merge(local.common_tags, { Name = "${local.name}-cache" })
 
   lifecycle {
@@ -207,7 +218,7 @@ module "database" {
   source = "../../modules/database"
 
   name                         = "${local.name}-mysql"
-  subnet_ids                   = sort(data.aws_subnets.shared_data.ids)
+  subnet_ids                   = module.network.data_subnet_ids
   security_group_ids           = [aws_security_group.database.id]
   database_name                = var.database_name
   master_username              = var.database_master_username
@@ -227,7 +238,7 @@ module "cache" {
   source = "../../modules/cache"
 
   name                     = "${local.name}-valkey"
-  subnet_ids               = sort(data.aws_subnets.shared_data.ids)
+  subnet_ids               = module.network.data_subnet_ids
   security_group_ids       = [aws_security_group.cache.id]
   major_engine_version     = var.valkey_major_engine_version
   password_version         = var.valkey_password_version
@@ -242,7 +253,7 @@ module "backend" {
 
   name                  = "${local.name}-backend"
   image_uri             = var.backend_image_uri
-  subnet_ids            = sort(data.aws_subnets.shared_public.ids)
+  subnet_ids            = module.network.public_subnet_ids
   security_group_ids    = [aws_security_group.backend.id]
   assign_public_ip      = true
   cpu                   = var.backend_cpu

@@ -6,9 +6,10 @@ variable "project_name" {
 variable "repositories" {
   description = "Repositorios ECR y repositorios GitHub autorizados para publicar en cada uno."
   type = map(object({
-    name                 = string
-    github_repository    = string
-    github_repository_id = string
+    name                    = string
+    github_repository       = string
+    github_repository_id    = string
+    development_publication = optional(bool, false)
   }))
 
   validation {
@@ -44,7 +45,40 @@ variable "github_environment" {
 
   validation {
     condition     = var.github_environment == "production"
-    error_message = "Los roles publicadores ECR solo pueden confiar en el environment production."
+    error_message = "El rol publicador de releases solo puede confiar en el environment production."
+  }
+}
+
+variable "github_development_environment" {
+  description = "Environment GitHub que publica imágenes de desarrollo. Solo aplica a los repositorios con development_publication activo y usa un rol propio, distinto del de release."
+  type        = string
+  default     = "development"
+
+  validation {
+    condition     = var.github_development_environment == "development"
+    error_message = "El rol publicador de desarrollo solo puede confiar en el environment development."
+  }
+}
+
+variable "development_images_to_keep" {
+  description = "Imágenes de desarrollo conservadas por repositorio antes de expirar las más antiguas."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.development_images_to_keep >= 3 && var.development_images_to_keep <= 100
+    error_message = "development_images_to_keep debe estar entre 3 y 100."
+  }
+}
+
+variable "development_tag_prefix" {
+  description = "Prefijo obligatorio de los tags publicados desde develop. Aísla los artefactos de dev de los tags de release."
+  type        = string
+  default     = "dev-"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+-$", var.development_tag_prefix))
+    error_message = "development_tag_prefix debe ser minúsculas y terminar en guion."
   }
 }
 

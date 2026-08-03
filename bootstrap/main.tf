@@ -131,6 +131,10 @@ module "ecr" {
       name                 = "${var.project_name}-backend"
       github_repository    = var.github_repositories.backend
       github_repository_id = var.github_repository_ids.backend
+
+      # Solo el backend publica imagen desde develop: es el unico artefacto que
+      # Terraform consume por digest. Los fronts dev van a Cloudflare Pages.
+      development_publication = true
     }
     private_front = {
       name                 = "${var.project_name}-front"

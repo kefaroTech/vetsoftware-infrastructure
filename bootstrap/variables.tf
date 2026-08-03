@@ -10,9 +10,9 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Nombre del ambiente."
+  description = "Etiqueta del bootstrap. No pertenece a dev ni a prod: nombra la plataforma comun que ambos consumen antes de existir."
   type        = string
-  default     = "prod"
+  default     = "shared"
 
   validation {
     condition     = can(regex("^[a-z0-9-]{2,15}$", var.environment))

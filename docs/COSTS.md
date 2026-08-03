@@ -23,11 +23,11 @@ Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión 
 
 ## Perfil de desarrollo
 
-`environments/dev` evita duplicar los costos fijos de red:
+`environments/dev` es independiente de produccion y sostiene su costo con capacidad minima, no compartiendo recursos:
 
 | Recurso | Configuracion dev |
 |---|---|
-| Red | Reutiliza VPC, dos AZ y S3 Gateway Endpoint de `prod`; no usa ALB |
+| Red | VPC propia `10.50.0.0/16` con dos AZ y S3 Gateway Endpoint; sin ALB, sin NAT Gateway y sin Interface Endpoints |
 | Backend | 512 CPU, 2048 MiB, solo Fargate Spot, escalado limitado a 0-1 tarea |
 | RDS | `db.t4g.micro`, 20 GiB fijos, backup 7 dias, proteccion contra borrado y snapshot final |
 | Valkey | Serverless limitado a 1 GB y 1000 ECPU/s |
@@ -35,6 +35,8 @@ Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión 
 | Logs | Retención de 3 días para backend y `cloudflared` |
 | KMS | Una CMK dev adicional, desde USD 1 al mes mas solicitudes |
 | Horario | RDS 07:30-20:15 y ECS 08:00-20:00, lunes a viernes, `America/Bogota` |
+
+Tener VPC propia no agrega costo fijo: la VPC, las subredes, el Internet Gateway y el S3 Gateway Endpoint no se facturan. El unico incremento frente al modelo anterior es la ingesta de VPC Flow Logs de una segunda red, acotada por la retencion de tres dias de dev.
 
 Mantener `db.t4g.micro` es una decision explicita de costo. IAM DB Auth queda habilitado y una alarma se activa si la memoria libre media cae por debajo de 256 MiB durante diez minutos. Si esa alarma se repite, el siguiente ajuste debe ser `db.t4g.small`; no se reduce la proteccion de backups.
 
