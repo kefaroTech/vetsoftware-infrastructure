@@ -367,7 +367,7 @@ data "aws_iam_policy_document" "infrastructure_read" {
       "ecr:DescribeImageScanFindings",
     ]
     resources = [
-      "arn:${var.aws_partition}:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.project_name}-backend"
+      "arn:${var.aws_partition}:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.backend_repository_name}"
     ]
   }
 

@@ -19,7 +19,7 @@ La certificación en ECR depende del entorno. En **producción**, el mismo diges
 2. Inicializa la key remota `vetsoftware/<entorno>/terraform.tfstate` y genera un plan fresco.
 3. El guard rechaza cualquier cambio fuera de `module.backend.aws_ecs_task_definition.backend` y `module.backend.aws_ecs_service.backend`.
 4. El job `apply` espera la aprobación del environment `iac-apply-<entorno>`, vuelve a certificar ECR y genera otro plan fresco con el rol OIDC de escritura.
-5. Terraform registra una task definition que usa `vetsoftware-backend@sha256:...`; ECS espera estabilidad y su circuit breaker revierte tareas fallidas.
+5. Terraform registra una task definition que usa el repositorio del ambiente por digest; ECS espera estabilidad y su circuit breaker revierte tareas fallidas.
 6. El workflow comprueba conteos desired/running/pending, rollout `COMPLETED`, imagen activa exacta y readiness público a través de Cloudflare Tunnel.
 7. Si falla la verificación, Terraform intenta volver al digest previamente activo. Si la instalación anterior todavía usaba tags, el circuit breaker conserva la revisión estable y el run falla con una remediación explícita.
 
@@ -31,8 +31,8 @@ Cada entorno tiene su propio ciclo de artefacto y ninguno espera al otro:
 
 | Entorno | Workflow del backend | Rama | Tag ECR |
 |---|---|---|---|
-| `dev` | `publish-dev-image.yml` | `develop` | `dev-<12 caracteres del commit>` |
-| `prod` | `publish-release.yml` | `main` (merge de `release/X.Y.Z`) | `X.Y.Z` y `sha-<12>` |
+| `dev` | `publish-dev-image.yml` | `develop` | `dev-<12>` en `vetsoftware-dev-backend` |
+| `prod` | `publish-release.yml` | `main` (merge de `release/X.Y.Z`) | `X.Y.Z` y `sha-<12>` en `vetsoftware-backend` |
 
 La certificación descrita abajo -doble tag `X.Y.Z` + `sha-<12>` y escaneo sin hallazgos High/Critical- pertenece al circuito de release productiva. La imagen de desarrollo no la exige: se publica desde `develop`, se identifica por su digest y expira con la retención corta de su prefijo.
 
@@ -40,7 +40,7 @@ La certificación descrita abajo -doble tag `X.Y.Z` + `sha-<12>` y escaneo sin h
 
 Este workflow es intencionalmente `image-only`. Antes de usarlo debe existir un primer `terraform apply` completo y validado para el entorno, incluyendo ECS, RDS, Valkey, secretos, red, observabilidad y el state remoto. Si falta `ecs_cluster_name` o `ecs_service_name`, el despliegue se detiene; no intenta crear toda la plataforma como efecto secundario de una release.
 
-También debe aplicarse `bootstrap` para materializar los roles OIDC y sus permisos de lectura de `vetsoftware-backend`. La preparación del código no crea recursos en AWS.
+También debe ejecutarse el workflow de bootstrap del mismo ambiente para materializar sus roles OIDC, state y ECR. Dev no requiere que se haya ejecutado el bootstrap prod, ni viceversa.
 
 ## Configuración pendiente en GitHub
 
@@ -67,7 +67,7 @@ En cada uno configure las variables:
 | `PASSWORD_RESET_URL` | URL absoluta de restablecimiento. |
 | `REGISTRATION_VERIFICATION_URL` | URL absoluta de verificación. |
 
-Proteja `iac-apply-prod` con revisor obligatorio, sin autoaprobación y limitado a `main`. Limite `iac-apply-dev` a `main` para este workflow manual, o cree posteriormente un flujo de promoción dev desde `develop` con una trust policy específica. La policy OIDC y la regla de deployment branch deben coincidir: una diferencia bloquea correctamente la asunción del rol.
+Proteja `iac-apply-prod` con revisor obligatorio, sin autoaprobación y limitado a `main`. Limite `iac-apply-dev` exclusivamente a `develop`. La policy OIDC y la regla de deployment branch deben coincidir.
 
 No agregue JWT, tokens Cloudflare ni credenciales Grafana a estos environments para el flujo image-only. Una rotación real de secretos pertenece al workflow general de IaC y debe usar sus propios secrets protegidos y un plan que autorice explícitamente esos recursos.
 

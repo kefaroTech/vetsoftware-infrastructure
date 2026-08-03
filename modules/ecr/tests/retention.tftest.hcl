@@ -19,7 +19,7 @@ variables {
       name                    = "vetsoftware-backend"
       github_repository       = "VetSoftware"
       github_repository_id    = "100000001"
-      development_publication = true
+      development_publication = false
     }
     private_front = {
       name                 = "vetsoftware-front"
@@ -34,7 +34,7 @@ variables {
   }
 }
 
-run "registry_stays_single_and_immutable" {
+run "production_registries_are_immutable" {
   command = plan
 
   assert {
@@ -44,20 +44,20 @@ run "registry_stays_single_and_immutable" {
       repository.image_scanning_configuration[0].scan_on_push &&
       !strcontains(repository.name, "-dev")
     ])
-    error_message = "Deben existir solo los tres repositorios, inmutables, escaneados y sin variantes dev separadas."
+    error_message = "Prod debe crear solo sus tres repositorios inmutables y escaneados."
   }
 
   assert {
     condition = (
-      aws_ecr_repository.this["backend"].tags["RetentionScope"] == "release-and-development" &&
+      aws_ecr_repository.this["backend"].tags["RetentionScope"] == "production-only" &&
       aws_ecr_repository.this["private_front"].tags["RetentionScope"] == "production-only" &&
       aws_ecr_repository.this["public_front"].tags["RetentionScope"] == "production-only"
     )
-    error_message = "Solo el backend publica desde develop; los fronts siguen siendo production-only."
+    error_message = "Todos los repositorios del bootstrap prod deben ser production-only."
   }
 }
 
-run "release_and_development_publishers_stay_separated" {
+run "production_has_no_development_identity" {
   command = plan
 
   assert {
@@ -71,20 +71,10 @@ run "release_and_development_publishers_stay_separated" {
 
   assert {
     condition = (
-      length(data.aws_iam_policy_document.github_assume_development) == 1 &&
-      strcontains(data.aws_iam_policy_document.github_assume_development["backend"].json, ":environment:development") &&
-      !strcontains(data.aws_iam_policy_document.github_assume_development["backend"].json, ":environment:production")
+      length(aws_iam_role.github_ecr) == 3 &&
+      length(aws_iam_role.github_ecr_development) == 0
     )
-    error_message = "El publicador de desarrollo debe existir solo para el backend y confiar solo en el environment development."
-  }
-
-  assert {
-    condition = (
-      length(aws_iam_role.github_ecr_development) == 1 &&
-      aws_iam_role.github_ecr_development["backend"].name == "vetsoftware-backend-github-ecr-dev" &&
-      aws_iam_role.github_ecr_development["backend"].name != aws_iam_role.github_ecr["backend"].name
-    )
-    error_message = "Los dos ciclos deben usar roles IAM distintos; ninguna credencial se comparte."
+    error_message = "Prod debe crear solo publicadores production y ninguna identidad development."
   }
 }
 
@@ -130,4 +120,38 @@ run "reject_production_development_publisher" {
   }
 
   expect_failures = [var.github_development_environment]
+}
+
+run "development_registry_has_no_production_identity" {
+  command = plan
+
+  variables {
+    repositories = {
+      backend = {
+        name                    = "vetsoftware-dev-backend"
+        github_repository       = "VetSoftware"
+        github_repository_id    = "100000001"
+        production_publication  = false
+        development_publication = true
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_ecr_repository.this)) == toset(["backend"]) &&
+      aws_ecr_repository.this["backend"].name == "vetsoftware-dev-backend" &&
+      aws_ecr_repository.this["backend"].tags["RetentionScope"] == "development-only"
+    )
+    error_message = "Dev debe tener un repositorio backend propio y marcado como development-only."
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role.github_ecr) == 0 &&
+      length(aws_iam_role.github_ecr_development) == 1 &&
+      strcontains(data.aws_iam_policy_document.github_assume_development["backend"].json, ":environment:development")
+    )
+    error_message = "El bootstrap dev no debe crear ninguna identidad publicadora de produccion."
+  }
 }

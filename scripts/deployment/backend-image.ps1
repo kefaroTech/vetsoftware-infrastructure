@@ -25,7 +25,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $environmentDirectory = Join-Path $repositoryRoot "environments/$Environment"
-$repositoryName = "vetsoftware-backend"
+$repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
 $stateKey = "vetsoftware/$Environment/terraform.tfstate"
 $allowedAddresses = @(
     "module.backend.aws_ecs_service.backend",
@@ -391,7 +391,8 @@ try {
 catch {
     $deploymentError = $_
     Write-Warning "El despliegue falló: $($deploymentError.Exception.Message)"
-    if ($serviceState.PreviousImage -match '^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/vetsoftware-backend@sha256:[0-9a-f]{64}$') {
+    $escapedRepositoryName = [regex]::Escape($repositoryName)
+    if ($serviceState.PreviousImage -match "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
         Write-Warning "Iniciando rollback Terraform al digest anterior."
         $rollbackPlanPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-rollback.tfplan"
         $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath

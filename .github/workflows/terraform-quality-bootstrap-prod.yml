@@ -1,12 +1,8 @@
-name: Terraform quality platform
+name: Terraform quality bootstrap prod
 
-# El bootstrap y los modulos de identidad no pertenecen a dev ni a prod: crean
-# el state, los repositorios ECR y los roles OIDC que ambos consumen antes de
-# existir. Por eso conservan su propio job, con su propio historial de runs.
 on:
   pull_request:
     branches:
-      - develop
       - main
     paths:
       - "bootstrap/**"
@@ -14,10 +10,11 @@ on:
       - "modules/github_iac_roles/**"
       - "scripts/quality/**"
       - "scripts/security/**"
-      - ".github/workflows/terraform-quality-platform.yml"
+      - ".github/scripts/terraform-bootstrap.ps1"
+      - ".github/workflows/terraform-bootstrap-prod.yml"
+      - ".github/workflows/terraform-quality-bootstrap-prod.yml"
   push:
     branches:
-      - develop
       - main
     paths:
       - "bootstrap/**"
@@ -25,19 +22,21 @@ on:
       - "modules/github_iac_roles/**"
       - "scripts/quality/**"
       - "scripts/security/**"
-      - ".github/workflows/terraform-quality-platform.yml"
+      - ".github/scripts/terraform-bootstrap.ps1"
+      - ".github/workflows/terraform-bootstrap-prod.yml"
+      - ".github/workflows/terraform-quality-bootstrap-prod.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-quality-platform-${{ github.ref }}
+  group: terraform-quality-bootstrap-prod-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    name: Format, lint and validate the shared platform
+    name: Validate prod bootstrap code
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -61,7 +60,7 @@ jobs:
         with:
           tflint_version: v0.64.0
 
-      - name: Run the quality gate scoped to the shared platform
+      - name: Run the bootstrap quality gate
         shell: pwsh
         run: >-
           ./scripts/quality/terraform-gate.ps1 -Mode ci

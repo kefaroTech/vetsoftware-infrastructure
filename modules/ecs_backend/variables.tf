@@ -7,8 +7,8 @@ variable "image_uri" {
   type        = string
 
   validation {
-    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware-backend@sha256:[0-9a-f]{64}$", var.image_uri))
-    error_message = "image_uri debe ser la URI ECR vetsoftware-backend fijada con @sha256:<64 hex>."
+    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware(-dev)?-backend@sha256:[0-9a-f]{64}$", var.image_uri))
+    error_message = "image_uri debe usar el repositorio backend de dev o prod fijado con @sha256:<64 hex>."
   }
 }
 

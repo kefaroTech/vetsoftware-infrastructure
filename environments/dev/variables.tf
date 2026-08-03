@@ -64,12 +64,12 @@ variable "api_domain_name" {
 }
 
 variable "backend_image_uri" {
-  description = "Imagen ARM64 de vetsoftware-backend fijada por digest ECR."
+  description = "Imagen ARM64 de vetsoftware-dev-backend fijada por digest ECR."
   type        = string
 
   validation {
-    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware-backend@sha256:[0-9a-f]{64}$", var.backend_image_uri))
-    error_message = "backend_image_uri debe usar vetsoftware-backend@sha256:<64 hex>; los tags no son desplegables."
+    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware-dev-backend@sha256:[0-9a-f]{64}$", var.backend_image_uri))
+    error_message = "backend_image_uri debe usar vetsoftware-dev-backend@sha256:<64 hex>; los tags no son desplegables."
   }
 }
 

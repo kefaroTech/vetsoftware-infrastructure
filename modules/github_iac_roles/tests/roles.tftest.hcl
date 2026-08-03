@@ -15,6 +15,7 @@ run "environment_and_function_roles_are_isolated" {
     project_name             = "vetsoftware"
     aws_account_id           = "123456789012"
     aws_region               = "us-east-1"
+    backend_repository_name  = "vetsoftware-backend"
     github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
     github_organization      = "kefaroTech"
     github_organization_id   = "12345678"

@@ -11,13 +11,13 @@ Los valores son una referencia inicial para `us-east-1`; AWS factura por uso, re
 | RDS MySQL | `db.t4g.small`, 20 GiB | USD 26-30 |
 | Valkey Serverless | Carga baja | USD 6-15 |
 | S3 Gateway Endpoint | Tablas publicas y de datos | USD 0 adicional |
-| KMS | Una CMK de produccion | Desde USD 1 mas solicitudes |
+| KMS | CMK de datos prod + CMK exclusiva del state prod | Desde USD 2 mas solicitudes |
 | VPC Flow Logs y logs ECS/Cloudflare | Ingesta y retención según tráfico | USD 5-20 iniciales |
 | S3, Firehose y transferencia | Segun uso | USD 6-20 |
 | Cloudflare Tunnel | Plan Free | USD 0 |
 | Cloudflare Pages | Plan Free | USD 0 |
 | Grafana Cloud | Plan Free dentro de cuotas | USD 0 |
-| **Total orientativo prod + compartidos** |  | **USD 90-146** |
+| **Total orientativo prod aislado** |  | **USD 91-147** |
 
 Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión FinOps. El ahorro base combinado es aproximadamente USD 139,06 mensuales más procesamiento de datos y logs de acceso. Fargate y Alloy conservan IPv4 pública; el backend no acepta conexiones de entrada y `cloudflared` usa `localhost`.
 
@@ -33,10 +33,10 @@ Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión 
 | Valkey | Serverless limitado a 1 GB y 1000 ECPU/s |
 | Telemetria | Exportacion OTLP directa a Grafana Cloud; sin EC2 Alloy dedicada |
 | Logs | Retención de 3 días para backend y `cloudflared` |
-| KMS | Una CMK dev adicional, desde USD 1 al mes mas solicitudes |
+| KMS | CMK de datos dev + CMK exclusiva del state dev, desde USD 2 al mes mas solicitudes |
 | Horario | RDS 07:30-20:15 y ECS 08:00-20:00, lunes a viernes, `America/Bogota` |
 
-Tener VPC propia no agrega costo fijo: la VPC, las subredes, el Internet Gateway y el S3 Gateway Endpoint no se facturan. El unico incremento frente al modelo anterior es la ingesta de VPC Flow Logs de una segunda red, acotada por la retencion de tres dias de dev.
+Tener VPC propia no agrega costo fijo: la VPC, las subredes, el Internet Gateway y el S3 Gateway Endpoint no se facturan. El aislamiento agrega una CMK de state por ambiente y la ingesta de VPC Flow Logs de una segunda red, acotada por la retencion de tres dias de dev.
 
 Mantener `db.t4g.micro` es una decision explicita de costo. IAM DB Auth queda habilitado y una alarma se activa si la memoria libre media cae por debajo de 256 MiB durante diez minutos. Si esa alarma se repite, el siguiente ajuste debe ser `db.t4g.small`; no se reduce la proteccion de backups.
 

@@ -1,4 +1,9 @@
 locals {
+  production_repositories = {
+    for key, repository in var.repositories : key => repository
+    if repository.production_publication
+  }
+
   development_repositories = {
     for key, repository in var.repositories : key => repository
     if repository.development_publication
@@ -22,7 +27,10 @@ resource "aws_ecr_repository" "this" {
   tags = merge(var.tags, {
     Component        = "container-registry"
     GitHubRepository = each.value.github_repository
-    RetentionScope   = each.value.development_publication ? "release-and-development" : "production-only"
+    RetentionScope = (
+      each.value.production_publication && each.value.development_publication ? "release-and-development" :
+      each.value.development_publication ? "development-only" : "production-only"
+    )
   })
 
   lifecycle {
@@ -80,7 +88,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
 }
 
 data "aws_iam_policy_document" "github_assume" {
-  for_each = var.repositories
+  for_each = local.production_repositories
 
   statement {
     sid     = "GitHubEnvironment"
@@ -107,7 +115,7 @@ data "aws_iam_policy_document" "github_assume" {
 }
 
 resource "aws_iam_role" "github_ecr" {
-  for_each = var.repositories
+  for_each = local.production_repositories
 
   name                 = "${var.project_name}-${each.key}-github-ecr"
   assume_role_policy   = data.aws_iam_policy_document.github_assume[each.key].json
@@ -148,7 +156,7 @@ data "aws_iam_policy_document" "github_ecr" {
 }
 
 resource "aws_iam_role_policy" "github_ecr" {
-  for_each = var.repositories
+  for_each = local.production_repositories
 
   name   = "publish-${each.value.name}"
   role   = aws_iam_role.github_ecr[each.key].id
