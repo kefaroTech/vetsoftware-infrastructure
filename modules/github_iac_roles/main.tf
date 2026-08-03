@@ -312,6 +312,7 @@ data "aws_iam_policy_document" "infrastructure_read" {
     effect = "Allow"
     actions = [
       "secretsmanager:DescribeSecret",
+      "secretsmanager:GetResourcePolicy",
       "secretsmanager:ListSecretVersionIds",
     ]
     resources = [
@@ -343,7 +344,7 @@ data "aws_iam_policy_document" "infrastructure_read" {
     resources = [
       "arn:${var.aws_partition}:firehose:${var.aws_region}:${var.aws_account_id}:deliverystream/${var.project_name}-${each.value.environment}-*",
       "arn:${var.aws_partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/${var.project_name}-${each.value.environment}/*",
-      "arn:${var.aws_partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/firehose/${var.project_name}-${each.value.environment}-*",
+      "arn:${var.aws_partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/*/${var.project_name}-${each.value.environment}*",
       "arn:${var.aws_partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/${var.project_name}-${each.value.environment}-*",
       "arn:${var.aws_partition}:scheduler:${var.aws_region}:${var.aws_account_id}:schedule/default/${var.project_name}-${each.value.environment}-*",
       "arn:${var.aws_partition}:sns:${var.aws_region}:${var.aws_account_id}:${var.project_name}-${each.value.environment}-*",
