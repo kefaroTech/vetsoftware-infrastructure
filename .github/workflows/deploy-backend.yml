@@ -32,7 +32,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: backend-image-${{ inputs.environment }}
+  group: terraform-${{ inputs.environment }}
   cancel-in-progress: false
 
 env:

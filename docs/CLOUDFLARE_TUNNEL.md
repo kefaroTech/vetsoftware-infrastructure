@@ -37,6 +37,29 @@ En el túnel `vetsoftware-prod`, crear la ruta:
 
 En `vetsoftware-dev`, crear la misma ruta con hostname `dev-api.kefaro.tech` y URL `localhost:8080`.
 
+### Estado actual de desarrollo
+
+El túnel de desarrollo ya está aprovisionado en la cuenta `Software@kefaro.tech's Account`:
+
+| Elemento | Valor |
+|---|---|
+| Túnel | `vetsoftware-dev`, `config_src = cloudflare` (administrado remotamente) |
+| Tunnel ID | `6c11d95b-917c-4a5e-ac24-8c620cfb6d60` |
+| Ingress | `dev-api.kefaro.tech` → `http://localhost:8080`; catch-all `http_status:404` |
+| DNS | `dev-api.kefaro.tech` CNAME proxied → `6c11d95b-917c-4a5e-ac24-8c620cfb6d60.cfargotunnel.com` |
+
+El token del conector no se guarda en este repositorio. Obtenerlo desde **Zero Trust > Networks > Tunnels > vetsoftware-dev** o con la API:
+
+```powershell
+# Requiere un token de API con permiso Cloudflare Tunnel: Read
+$env:TF_VAR_cloudflare_tunnel_token = (
+  curl.exe -s -H "Authorization: Bearer $env:CF_API_TOKEN" `
+    "https://api.cloudflare.com/client/v4/accounts/9ee92528fcfa07b620f517a6173eca6b/cfd_tunnel/6c11d95b-917c-4a5e-ac24-8c620cfb6d60/token" |
+  ConvertFrom-Json).result
+```
+
+El túnel permanece sin conexiones hasta que la tarea ECS de dev arranque su sidecar `cloudflared` con ese token.
+
 Los dos roots Terraform exponen el contrato que debe coincidir con Cloudflare:
 
 ```powershell
