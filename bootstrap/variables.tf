@@ -80,7 +80,7 @@ variable "github_repositories" {
     iac           = string
   })
   default = {
-    backend       = "VetSoftware"
+    backend       = "vetsoftware-backend"
     private_front = "VetSoftwareFront"
     public_front  = "VetSoftwarePublicFront"
     iac           = "vetsoftware-infrastructure"

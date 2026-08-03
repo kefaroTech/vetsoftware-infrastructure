@@ -339,8 +339,8 @@ $parsedSourceRun = $null
 if (-not [Uri]::TryCreate($SourceRunUrl, [UriKind]::Absolute, [ref]$parsedSourceRun) -or
     $parsedSourceRun.Scheme -ne "https" -or
     $parsedSourceRun.Host -ne "github.com" -or
-    $parsedSourceRun.AbsolutePath -notmatch '^/kefaroTech/VetSoftware/actions/runs/[0-9]+/?$') {
-    throw "SourceRunUrl debe identificar un run de publicación de kefaroTech/VetSoftware en GitHub."
+    $parsedSourceRun.AbsolutePath -notmatch '^/kefaroTech/vetsoftware-backend/actions/runs/[0-9]+/?$') {
+    throw "SourceRunUrl debe identificar un run de publicación de kefaroTech/vetsoftware-backend en GitHub."
 }
 
 @(
