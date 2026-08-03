@@ -20,13 +20,14 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 ## Procedimiento obligatorio
 
 1. Antes de cualquier operación, inspeccionar el estado, la rama actual, las ramas existentes y los remotos. Nunca descartar, sobrescribir ni mezclar cambios locales ajenos.
-2. Actualizar la rama base correspondiente mediante un avance seguro antes de crear la rama temporal. No continuar si existen cambios sin confirmar o divergencias inesperadas.
-3. Crear la rama temporal correcta antes de modificar archivos o generar commits.
-4. Hacer commits atómicos, verificables y con el formato de mensajes exigido por el repositorio. No omitir hooks con `--no-verify`.
-5. Ejecutar las validaciones proporcionales al cambio antes de integrar. No integrar con conflictos, pruebas fallidas o un árbol de trabajo sucio.
-6. Cuando exista un remoto configurado, integrar exclusivamente mediante Pull Request en el proveedor Git. Está prohibido ejecutar `git merge` localmente o publicar un commit de merge creado por comandos locales hacia `main` o `develop`.
-7. Configurar cada Pull Request para crear un merge commit. Están prohibidos el fast-forward, el squash merge y el rebase de ramas compartidas. Sin remoto, un merge local `--no-ff` solo puede realizarse con la aprobación humana específica exigida por esta política.
-8. Eliminar la rama temporal local y remota solo después de confirmar en el proveedor Git que el Pull Request quedó integrado en todos sus destinos obligatorios.
+2. Cuando exista un remoto configurado, antes de iniciar cualquier trabajo nuevo ejecutar `git fetch --prune`, comparar la rama base local con su upstream y revisar cambios remotos. Está prohibido crear una rama temporal desde una base desactualizada.
+3. Si la rama base está atrasada, actualizarla exclusivamente mediante `git pull --ff-only` antes de crear la rama temporal. Detenerse ante divergencias, cambios sin confirmar o cualquier actualización que no sea fast-forward; no usar merge ni rebase para forzar la sincronización.
+4. Crear la rama temporal correcta antes de modificar archivos o generar commits.
+5. Hacer commits atómicos, verificables y con el formato de mensajes exigido por el repositorio. No omitir hooks con `--no-verify`.
+6. Ejecutar las validaciones proporcionales al cambio antes de integrar. No integrar con conflictos, pruebas fallidas o un árbol de trabajo sucio.
+7. Cuando exista un remoto configurado, integrar exclusivamente mediante Pull Request en el proveedor Git. Está prohibido ejecutar `git merge` localmente o publicar un commit de merge creado por comandos locales hacia `main` o `develop`.
+8. Configurar cada Pull Request para crear un merge commit. Están prohibidos el fast-forward, el squash merge y el rebase de ramas compartidas. Sin remoto, un merge local `--no-ff` solo puede realizarse con la aprobación humana específica exigida por esta política.
+9. Eliminar la rama temporal local y remota solo después de confirmar en el proveedor Git que el Pull Request quedó integrado en todos sus destinos obligatorios.
 
 ## Aprobación humana obligatoria antes de todo commit
 
