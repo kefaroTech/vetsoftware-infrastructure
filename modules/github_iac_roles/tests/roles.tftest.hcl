@@ -140,20 +140,25 @@ run "environment_and_function_roles_are_isolated" {
   }
 
   assert {
+    condition     = alltrue([for count in values(output.inline_policy_character_counts) : count <= 9500])
+    error_message = format("Las políticas inline deben conservar margen bajo el límite IAM de 10.240 caracteres; conteos=%s.", jsonencode(output.inline_policy_character_counts))
+  }
+
+  assert {
     condition = alltrue([
       !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "elasticloadbalancing:"),
       !strcontains(data.aws_iam_policy_document.infrastructure_read["prod_plan"].json, "elasticloadbalancing:"),
       !strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "elasticloadbalancing:"),
       !strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "elasticloadbalancing:"),
-      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "logs:PutMetricFilter"),
-      strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "logs:PutMetricFilter"),
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "logs:*MetricFilter"),
+      strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "logs:*MetricFilter"),
     ])
     error_message = "Los roles IaC no deben conservar permisos ELB y sí deben administrar métricas de errores del túnel."
   }
 
   assert {
     condition = alltrue([
-      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ce:GetAnomalyMonitors"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ce:GetAnomaly*"),
       strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "chatbot:DescribeSlackChannelConfigurations"),
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "ce:CreateAnomalyMonitor"),
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "chatbot:CreateSlackChannelConfiguration"),
