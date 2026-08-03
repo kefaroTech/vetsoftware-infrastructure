@@ -110,19 +110,23 @@ Resources:
                   StringEquals:
                     aws:ResourceTag/Project: !Ref ProjectName
                     aws:ResourceTag/Environment: !Ref Environment
-              - Sid: CreateOrUpdateEnvironmentStateAlias
+              - Sid: ManageEnvironmentStateAlias
                 Effect: Allow
                 Action:
                   - kms:CreateAlias
                   - kms:UpdateAlias
-                Resource: "*"
+                  - kms:DeleteAlias
+                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/${ProjectName}-${Environment}-tfstate"
+              - Sid: AssociateEnvironmentStateAliasWithKey
+                Effect: Allow
+                Action:
+                  - kms:CreateAlias
+                  - kms:UpdateAlias
+                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*"
                 Condition:
                   StringEquals:
-                    kms:RequestAlias: !Sub "alias/${ProjectName}-${Environment}-tfstate"
-              - Sid: DeleteEnvironmentStateAlias
-                Effect: Allow
-                Action: kms:DeleteAlias
-                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/${ProjectName}-${Environment}-tfstate"
+                    aws:ResourceTag/Project: !Ref ProjectName
+                    aws:ResourceTag/Environment: !Ref Environment
               - Sid: ManageEnvironmentEcr
                 Effect: Allow
                 Action: "ecr:*"
