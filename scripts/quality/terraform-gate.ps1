@@ -18,11 +18,13 @@ $terraformRoots = @(
     "bootstrap",
     "environments/prod",
     "environments/dev",
+    "modules/ecr",
     "modules/github_iac_roles"
 )
 $terraformTestRoots = @(
     "environments/prod",
     "environments/dev",
+    "modules/ecr",
     "modules/github_iac_roles"
 )
 $logDirectory = Join-Path $repositoryRoot ".tools/logs/terraform-gate"
@@ -367,8 +369,8 @@ function Get-PreCommitScope {
             $moduleName = $Matches[1]
             switch ($moduleName) {
                 "ecr" {
-                    $roots += "bootstrap"
-                    $scanTargets += "bootstrap"
+                    $roots += @("bootstrap", "modules/ecr")
+                    $scanTargets += @("bootstrap", "modules/ecr")
                 }
                 "github_iac_roles" {
                     $roots += @("bootstrap", "modules/github_iac_roles")
