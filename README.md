@@ -169,10 +169,10 @@ gh api orgs/kefaroTech --jq .id
 gh api repos/kefaroTech/VetSoftware --jq .id
 gh api repos/kefaroTech/VetSoftwareFront --jq .id
 gh api repos/kefaroTech/VetSoftwarePublicFront --jq .id
-gh api repos/kefaroTech/VetSoftwareIaC --jq .id
+gh api repos/kefaroTech/vetsoftware-infrastructure --jq .id
 ```
 
-Copie los resultados en `github_organization_id` y `github_repository_ids`. GitHub incorporó estos IDs al subject OIDC de repositorios creados después del 15 de julio de 2026, por lo que los valores deben coincidir exactamente.
+Configure el ID del propietario como `GH_ORGANIZATION_ID` y los IDs de repositorio dentro de `GH_REPOSITORY_IDS_JSON` en el GitHub Environment de bootstrap. GitHub incorporó estos IDs al subject OIDC de repositorios creados después del 15 de julio de 2026, por lo que los valores deben coincidir exactamente.
 
 Los outputs se publican en los logs del workflow de bootstrap correspondiente; no se consultan mediante Terraform local.
 
@@ -196,7 +196,7 @@ En la política de Actions de la organización deben estar permitidas y fijadas 
 
 La primera ejecución de cada bootstrap es deliberadamente administrativa: crea su backend remoto, su ECR y su par de roles plan/apply. Dev no crea roles de prod y prod no crea roles de dev. Los cambios futuros de identidad, state o ECR se ejecutan nuevamente desde el workflow protegido del mismo ambiente.
 
-En **VetSoftwareIaC > Settings > Environments** cree estos nombres exactos y agregue en cada uno la variable de environment `AWS_IAC_ROLE_ARN` con el ARN correspondiente del output `github_iac_role_arns`:
+En **vetsoftware-infrastructure > Settings > Environments** cree estos nombres exactos y agregue en cada uno la variable de environment `AWS_IAC_ROLE_ARN` con el ARN correspondiente del output `github_iac_role_arns`:
 
 | GitHub Environment | Output | Capacidad |
 |---|---|---|

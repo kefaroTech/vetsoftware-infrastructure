@@ -17,8 +17,8 @@ Cargue `bootstrap/bootstrap-role.yml` como un stack de CloudFormation desde la c
 Los subjects de confianza deben usar los IDs inmutables:
 
 ```text
-repo:ORGANIZACION@ORG_ID/VetSoftwareIaC@REPO_ID:environment:iac-bootstrap-dev
-repo:ORGANIZACION@ORG_ID/VetSoftwareIaC@REPO_ID:environment:iac-bootstrap-prod
+repo:ORGANIZACION@ORG_ID/vetsoftware-infrastructure@REPO_ID:environment:iac-bootstrap-dev
+repo:ORGANIZACION@ORG_ID/vetsoftware-infrastructure@REPO_ID:environment:iac-bootstrap-prod
 ```
 
 La plantilla limita cada rol a su stack CloudFormation, bucket/KMS, ECR y roles IAM del ambiente. No comparta el rol dev con prod y no almacene access keys en GitHub. El proveedor OIDC debe existir antes de crear estos stacks y se entrega mediante el parametro `GitHubOidcProviderArn`.
@@ -30,7 +30,7 @@ La plantilla limita cada rol a su stack CloudFormation, bucket/KMS, ECR y roles 
 | `iac-bootstrap-dev` | `develop` | `AWS_BOOTSTRAP_ROLE_ARN=...bootstrap-dev` |
 | `iac-bootstrap-prod` | `main` | `AWS_BOOTSTRAP_ROLE_ARN=...bootstrap-prod` |
 
-Agregue tambien `AWS_ACCOUNT_ID`, `AWS_REGION`, `GITHUB_ORGANIZATION_ID` y `GITHUB_REPOSITORY_IDS_JSON`. Dev solo necesita los IDs `backend` e `iac`; prod agrega `private_front` y `public_front`. Produccion debe requerir aprobacion y bloquear autoaprobacion.
+Agregue tambien `AWS_ACCOUNT_ID`, `AWS_REGION`, `GH_ORGANIZATION_ID` y `GH_REPOSITORY_IDS_JSON`. GitHub reserva el prefijo `GITHUB_`, por lo que estas variables configurables usan `GH_`. Dev solo necesita los IDs `backend` e `iac`; prod agrega `private_front` y `public_front`. Produccion debe requerir aprobacion y bloquear autoaprobacion.
 
 ## Propiedad por ambiente
 

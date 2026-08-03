@@ -18,10 +18,10 @@ Configure en ambos GitHub Environments:
 - `AWS_BOOTSTRAP_ROLE_ARN`: rol inicial exclusivo del ambiente.
 - `AWS_ACCOUNT_ID`: cuenta AWS esperada; `configure-aws-credentials` rechaza otra cuenta.
 - `AWS_REGION`: `us-east-1` si no se define otro valor.
-- `GITHUB_ORGANIZATION_ID`: ID numerico inmutable del propietario.
-- `GITHUB_REPOSITORY_IDS_JSON`: dev requiere `backend` e `iac`; prod requiere ademas `private_front` y `public_front`.
+- `GH_ORGANIZATION_ID`: ID numerico inmutable del propietario.
+- `GH_REPOSITORY_IDS_JSON`: dev requiere `backend` e `iac`; prod requiere ademas `private_front` y `public_front`. Se usa `GH_` porque GitHub no permite crear variables con el prefijo reservado `GITHUB_`.
 
-Ejemplo de `GITHUB_REPOSITORY_IDS_JSON`:
+Ejemplo de `GH_REPOSITORY_IDS_JSON`:
 
 ```json
 {
