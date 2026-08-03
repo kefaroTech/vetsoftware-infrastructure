@@ -92,6 +92,31 @@ if ($callerIdentity.Account -ne $expectedAccountId) {
 
 $stackName = "$projectName-$Environment-terraform-state"
 $templatePath = Join-Path $bootstrapDirectory "state-backend.yml"
+$stackStatusOutput = & aws cloudformation describe-stacks `
+    --stack-name $stackName `
+    --query "Stacks[0].StackStatus" `
+    --output text `
+    --region $awsRegion 2>&1
+$describeStackExitCode = $LASTEXITCODE
+$stackStatusText = ($stackStatusOutput | Out-String).Trim()
+
+if ($describeStackExitCode -eq 0 -and $stackStatusText -eq "ROLLBACK_COMPLETE") {
+    Write-Warning "El stack $stackName esta en ROLLBACK_COMPLETE; eliminandolo antes de recrearlo."
+    Invoke-ExternalCommand -Command "aws" -Arguments @(
+        "cloudformation", "delete-stack",
+        "--stack-name", $stackName,
+        "--region", $awsRegion
+    )
+    Invoke-ExternalCommand -Command "aws" -Arguments @(
+        "cloudformation", "wait", "stack-delete-complete",
+        "--stack-name", $stackName,
+        "--region", $awsRegion
+    )
+}
+elseif ($describeStackExitCode -ne 0 -and $stackStatusText -notmatch "does not exist") {
+    throw "No fue posible consultar el estado del stack ${stackName}: $stackStatusText"
+}
+
 $deployArguments = @(
     "cloudformation", "deploy",
     "--stack-name", $stackName,
@@ -166,12 +191,16 @@ Invoke-ExternalCommand -Command "terraform" -Arguments @(
     "-chdir=$bootstrapDirectory", "validate", "-no-color"
 )
 
-& terraform "-chdir=$bootstrapDirectory" plan `
-    -input=false `
-    -lock-timeout=5m `
-    -detailed-exitcode `
-    -out=$planPath `
-    -var-file=$variablesPath
+$planArguments = @(
+    "-chdir=$bootstrapDirectory",
+    "plan",
+    "-input=false",
+    "-lock-timeout=5m",
+    "-detailed-exitcode",
+    "-out=$planPath",
+    "-var-file=$variablesPath"
+)
+& terraform @planArguments
 $planExitCode = $LASTEXITCODE
 if ($planExitCode -eq 1) {
     throw "Terraform no pudo generar el plan de bootstrap $Environment."
