@@ -117,6 +117,16 @@ run "environment_and_function_roles_are_isolated" {
   }
 
   assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ecr:DescribeImages"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["prod_apply"].json, "ecr:DescribeImageScanFindings"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "arn:aws:ecr:us-east-1:123456789012:repository/vetsoftware-backend"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "repository/*"),
+    ])
+    error_message = "Plan y apply deben certificar únicamente la imagen ECR del backend."
+  }
+
+  assert {
     condition = alltrue(concat(
       [for policy in data.aws_iam_policy_document.infrastructure_read : length(policy.json) <= 10240],
       [for policy in data.aws_iam_policy_document.state : length(policy.json) <= 10240],
