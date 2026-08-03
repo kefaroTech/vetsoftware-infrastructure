@@ -283,4 +283,4 @@ Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nue
 
 La configuración completa, el requisito de baseline y las variables externas pendientes están en [Despliegue inmutable del backend](docs/BACKEND_IMAGE_DEPLOYMENT.md).
 
-Los fronts continúan desplegándose en Cloudflare Pages según la arquitectura actual. Sus imágenes ECR proporcionan un artefacto reproducible para ejecución local, recuperación o una migración futura; Terraform consume directamente la imagen ARM64 del backend mediante `backend_image_uri`.
+Los fronts continúan desplegándose en Cloudflare Pages según la arquitectura actual; los proyectos, dominios y credenciales del entorno dev están documentados en [Cloudflare Pages](docs/CLOUDFLARE_PAGES.md). Sus imágenes ECR proporcionan un artefacto reproducible para ejecución local, recuperación o una migración futura; Terraform consume directamente la imagen ARM64 del backend mediante `backend_image_uri`.
