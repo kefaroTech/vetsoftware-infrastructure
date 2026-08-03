@@ -1,72 +1,101 @@
 # Automatizacion del ciclo Terraform
 
-**Cada entorno tiene sus propios workflows.** No existe ningun archivo compartido que reciba el entorno como parametro: `dev` y `prod` tienen definiciones, disparadores, historial de runs y alcance de validacion separados, de modo que un fallo de un entorno nunca bloquea el ciclo del otro. El bootstrap queda fuera del ciclo automatizado: crea el proveedor OIDC, el backend y los propios roles, por lo que conserva su procedimiento administrativo controlado.
+Todo Terraform se ejecuta en GitHub Actions. `dev` y `prod` tienen bootstrap, state, identidad, pipelines operativos, concurrencia e historial de runs independientes. Ningun workflow necesita credenciales AWS permanentes ni un `terraform apply` local.
+
+## Bootstrap independiente
+
+| Workflow | Rama | GitHub Environment | State de bootstrap | Recursos creados |
+|---|---|---|---|---|
+| `Terraform bootstrap dev` | `develop` | `iac-bootstrap-dev` | `vetsoftware-dev-tfstate-<cuenta>/vetsoftware/bootstrap/terraform.tfstate` | KMS, ECR `vetsoftware-dev-backend`, roles plan/apply de dev y rol publicador development. |
+| `Terraform bootstrap prod` | `main` | `iac-bootstrap-prod` | `vetsoftware-prod-tfstate-<cuenta>/vetsoftware/bootstrap/terraform.tfstate` | KMS, ECR productivos y roles plan/apply de prod y publicadores production. |
+
+Cada workflow crea primero su backend remoto mediante un stack CloudFormation propio y luego inicializa Terraform directamente contra ese backend. CloudFormation conserva bucket y KMS aunque el stack se elimine. No existe state local ni migracion entre ambientes.
+
+El proveedor `token.actions.githubusercontent.com` es un prerrequisito externo de la cuenta, no un recurso propiedad de dev o prod. Cree ademas dos roles iniciales distintos: uno confia exclusivamente en `iac-bootstrap-dev` y el otro exclusivamente en `iac-bootstrap-prod`.
+
+Configure en ambos GitHub Environments:
+
+- `AWS_BOOTSTRAP_ROLE_ARN`: rol inicial exclusivo del ambiente.
+- `AWS_ACCOUNT_ID`: cuenta AWS esperada; `configure-aws-credentials` rechaza otra cuenta.
+- `AWS_REGION`: `us-east-1` si no se define otro valor.
+- `GITHUB_ORGANIZATION_ID`: ID numerico inmutable del propietario.
+- `GITHUB_REPOSITORY_IDS_JSON`: dev requiere `backend` e `iac`; prod requiere ademas `private_front` y `public_front`.
+
+Ejemplo de `GITHUB_REPOSITORY_IDS_JSON`:
+
+```json
+{
+  "backend": "100000001",
+  "private_front": "100000002",
+  "public_front": "100000003",
+  "iac": "100000004"
+}
+```
+
+Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-prod` para aceptar solo `main`, exigir revisor e impedir autoaprobacion. Los dos workflows son manuales, generan un plan fresco y aplican exactamente ese archivo despues de obtener la autorizacion del Environment.
+
+## Ciclo operativo
 
 | Workflow | Disparador | Credencial AWS | Efecto |
 |---|---|---|---|
 | `Terraform quality dev` | PR y push a `develop` | Ninguna | Gate acotado a `environments/dev`. |
 | `Terraform quality prod` | PR y push a `main` | Ninguna | Gate acotado a `environments/prod`. |
-| `Terraform quality platform` | PR y push que toquen `bootstrap/`, `modules/ecr/`, `modules/github_iac_roles/` o los scripts del gate | Ninguna | Gate de la plataforma comun que ambos entornos consumen. |
-| `Terraform plan dev` | PR a `develop` o manual | `iac-plan-dev` | Publica un comentario actualizable con el plan de dev; nunca aplica. |
-| `Terraform plan prod` | PR a `main` o manual | `iac-plan-prod` | Igual para prod. |
-| `Terraform apply dev` | Manual | `iac-apply-dev` | Exige `refs/heads/develop`, espera la proteccion del environment, crea un plan nuevo y aplica exactamente ese archivo. |
-| `Terraform apply prod` | Manual | `iac-apply-prod` | Igual, exigiendo `refs/heads/main`. |
-| `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`; el drift hace fallar el job y nunca dispara apply. |
+| `Terraform quality bootstrap dev` | PR y push a `develop` que toquen bootstrap o identidad | Ninguna | Valida el codigo de bootstrap en el ciclo dev. |
+| `Terraform quality bootstrap prod` | PR y push a `main` que toquen bootstrap o identidad | Ninguna | Validacion productiva independiente. |
+| `Terraform plan dev` | PR a `develop` o manual | `iac-plan-dev` | Plan visible de dev; nunca aplica. |
+| `Terraform plan prod` | PR a `main` o manual | `iac-plan-prod` | Plan visible de prod; nunca aplica. |
+| `Terraform apply dev` | Manual desde `develop` | `iac-apply-dev` | Plan fresco y apply exclusivo de dev. |
+| `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
+| `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
-| `Deploy backend image dev` | Manual | `iac-plan-dev` y `iac-apply-dev` | Circuito de imagen de desarrollo; certifica el tag `dev-<12>`. |
-| `Deploy backend image prod` | Manual | `iac-plan-prod` y `iac-apply-prod` | Circuito de imagen productiva; certifica `X.Y.Z` y `sha-<12>`. |
+| `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. |
+| `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. |
 
-El unico elemento compartido entre los workflows de un mismo entorno es el grupo de concurrencia `terraform-<entorno>`, y existe precisamente para serializar plan, apply, drift y despliegue de imagen sobre el mismo state. Los grupos `terraform-dev` y `terraform-prod` son independientes entre si: una operacion en un entorno nunca espera a la del otro.
+Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
 
-El gate acotado por entorno tiene una consecuencia deliberada: `terraform fmt` sigue revisando todo el repositorio en cada job, pero TFLint, `validate`, los contratos y Trivy solo cubren las raices del entorno correspondiente. Un cambio en `environments/prod` integrado desde `develop` se valida cuando llega a su PR hacia `main`, no antes.
+## GitHub Environments operativos
 
-## GitHub Environments
+Cada bootstrap emite solamente los roles de su ambiente:
 
-Cree los cuatro environments emitidos por `terraform -chdir=bootstrap output github_iac_environments` y configure `AWS_IAC_ROLE_ARN` con el ARN correspondiente:
-
-| Environment | Rama o uso autorizado | Proteccion minima |
+| Environment | Rama autorizada | Rol |
 |---|---|---|
-| `iac-plan-dev` | PR hacia `develop`, ejecucion manual y drift desde la rama por defecto | Sin secretos de runtime; rol OIDC `dev.plan`. |
-| `iac-plan-prod` | PR hacia `main`, ejecucion manual y drift desde la rama por defecto | Sin secretos de runtime; rol OIDC `prod.plan`. |
-| `iac-apply-dev` | Exclusivamente `develop`, tanto para el ciclo general como para el deploy de imagen | Limitar deployment branches a `develop`. |
-| `iac-apply-prod` | Exclusivamente `main` | Revisor obligatorio, impedir autoaprobacion y limitar deployment branches a `main`. |
+| `iac-plan-dev` | PR/manual de dev | `dev.plan` |
+| `iac-apply-dev` | `develop` | `dev.apply` |
+| `iac-plan-prod` | PR/manual de prod | `prod.plan` |
+| `iac-apply-prod` | `main` | `prod.apply` |
 
-La trust policy OIDC exige audiencia `sts.amazonaws.com`, repositorio/organizacion por nombre e ID inmutables y el nombre exacto del GitHub Environment. Los roles de plan solo leen infraestructura y state -salvo el lockfile S3 requerido por Terraform-; solo los roles de apply escriben state y recursos del entorno.
-
-## Variables y secretos
-
-Configure estas variables en cada uno de los cuatro GitHub Environments, con valores propios de `dev` o `prod`:
+Configure en plan y apply del ambiente correspondiente:
 
 - `AWS_IAC_ROLE_ARN`
 - `TF_STATE_BUCKET`
-- `TF_STATE_KMS_KEY_ARN` cuando el state usa KMS
-- `TF_VARS_JSON` (opcional) como objeto JSON con cualquier override no sensible que difiera de los defaults del root
-- `AWS_REGION` (opcional; el valor predeterminado es `us-east-1`)
+- `TF_STATE_KMS_KEY_ARN`
+- `TF_VARS_JSON` opcional
+- `AWS_REGION`
 - `API_DOMAIN_NAME`
-- `CORS_ALLOWED_ORIGINS` como lista JSON de Terraform
+- `CORS_ALLOWED_ORIGINS`
 - `EMAIL_FROM`
 - `GRAFANA_OTLP_ENDPOINT`
 - `LOGIN_URL`
 - `PASSWORD_RESET_URL`
 - `REGISTRATION_VERIFICATION_URL`
-- `BACKEND_IMAGE_URI` solo para el primer despliegue; cuando ya existe baseline, el workflow conserva el digest activo de ECS y evita interferir con el deploy especializado de imagen
+- `BACKEND_IMAGE_URI` para el primer despliegue
 
-`TF_VARS_JSON` permite mantener en el environment, por ejemplo, capacidad, presupuesto y horarios no predeterminados. El ejecutor rechaza `application_secrets_json`, `grafana_secrets_json`, `cloudflare_tunnel_token`, `backend_image_uri` y `environment` dentro de ese objeto: los secretos usan GitHub Secrets, la imagen la conserva el circuito especializado y el entorno lo fija el workflow.
-
-Configure ademas estos secretos unicamente en `iac-apply-dev` e `iac-apply-prod`:
+Configure unicamente en los Environments de apply:
 
 - `APPLICATION_SECRETS_JSON`
 - `CLOUDFLARE_TUNNEL_TOKEN`
 - `GRAFANA_SECRETS_JSON`
 
-Plan y drift usan marcadores efimeros para los argumentos write-only y nunca reciben los secretos de runtime. Apply recibe los valores reales solo despues de superar la proteccion del environment.
+## Primera ejecucion
 
-## Flujo operativo
+1. Ejecute `Terraform bootstrap dev` desde `develop` o `Terraform bootstrap prod` desde `main`.
+2. Copie sus outputs al Environment `iac-plan-*`, `iac-apply-*` y al Environment publicador de la aplicacion correspondiente.
+3. Publique una imagen inmutable del backend en el ECR del mismo ambiente.
+4. Ejecute `Terraform plan dev/prod`.
+5. Revise el plan y ejecute `Terraform apply dev/prod`.
 
-1. Un PR hacia `develop` dispara `Terraform plan dev`; un PR de release hacia `main` dispara `Terraform plan prod`. El comentario se actualiza en cada ejecucion y el resumen del job conserva el mismo contenido.
-2. Tras integrar, ejecute `Terraform apply dev` desde `develop` o `Terraform apply prod` desde `main`.
-3. En produccion, GitHub detiene el job antes de entregar el token OIDC y los secretos hasta que un revisor autorizado aprueba el environment.
-4. Una vez aprobado, el mismo job inicializa el state, genera el plan con `-detailed-exitcode` y aplica ese archivo local inmediatamente. No descarga ni acepta planes de PR o de ejecuciones anteriores.
-5. Revise cualquier fallo diario de `Terraform drift dev` o `Terraform drift prod`. Un exit code `2` significa drift detectado; debe corregirse mediante un PR y el apply protegido, nunca desde el workflow programado.
+Dev puede completar los cinco pasos sin que exista prod, y prod puede hacer lo mismo sin que exista dev.
 
-En las reglas de proteccion de `develop` marque como checks requeridos `Terraform quality dev` y `Terraform plan dev`; en las de `main`, `Terraform quality prod` y `Terraform plan prod`. Agregue `Terraform quality platform` a ambas. Los PR desde forks no reciben OIDC y el job de plan se omite deliberadamente.
+## Ejecuciones posteriores
+
+Los cambios generales siguen PR, quality, plan, merge y apply manual. El bootstrap solo vuelve a ejecutarse cuando cambian su ECR, sus roles o su backend. Drift detecta cambios externos y falla con exit code `2`, pero nunca corrige automaticamente.

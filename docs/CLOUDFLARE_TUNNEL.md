@@ -60,12 +60,7 @@ $env:TF_VAR_cloudflare_tunnel_token = (
 
 El túnel permanece sin conexiones hasta que la tarea ECS de dev arranque su sidecar `cloudflared` con ese token.
 
-Los dos roots Terraform exponen el contrato que debe coincidir con Cloudflare:
-
-```powershell
-terraform -chdir=environments/prod output cloudflare_tunnel_origin_url
-terraform -chdir=environments/dev output cloudflare_tunnel_origin_url
-```
+Los dos roots Terraform exponen el contrato que debe coincidir con Cloudflare. Los valores `cloudflare_tunnel_origin_url` se consultan en los outputs publicados por los workflows de cada ambiente; no se ejecuta Terraform localmente.
 
 Ambos outputs deben devolver `http://localhost:8080`. El HTTPS público termina en Cloudflare; el transporte entre Cloudflare Edge y `cloudflared` permanece cifrado por el túnel.
 
