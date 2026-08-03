@@ -364,3 +364,8 @@ if ($Mode -eq "Drift" -and $planExitCode -eq 2) {
 }
 
 Write-Host "Terraform $($Mode.ToLowerInvariant()) finalizo: codigo detallado $planExitCode." -ForegroundColor Green
+
+# Un plan con cambios devuelve 2 por -detailed-exitcode. Sin este cierre
+# explicito el step hereda ese 2 y GitHub marca el job como fallido pese a que
+# el plan es correcto; los casos de error real ya salieron por throw.
+exit 0
