@@ -308,7 +308,7 @@ else {
     # ephemeral y sus versiones controlan cualquier rotacion intencional.
     $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"terraform-plan-placeholder-32chars","RESEND_API_KEY":"not-used","RECAPTCHA_SECRET":"not-used"}'
     $env:TF_VAR_cloudflare_tunnel_token = "terraform-plan-placeholder-32chars"
-    $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used"}'
+    $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="}'
 }
 
 Resolve-StateBackend
