@@ -76,7 +76,14 @@ Configure en plan y apply del ambiente correspondiente:
 - `LOGIN_URL`
 - `PASSWORD_RESET_URL`
 - `REGISTRATION_VERIFICATION_URL`
-- `BACKEND_IMAGE_URI` para el primer despliegue
+- `BACKEND_IMAGE_URI` para el primer apply
+
+`BACKEND_IMAGE_URI` solo hace falta en el Environment de apply y solo hasta que
+exista el servicio ECS: desde el segundo ciclo el script hereda el digest de la
+task definition viva. Plan y drift no la necesitan nunca. Cuando el state esta
+vacio y el ECR todavia no publica nada, el plan usa un digest marcador para
+poder revisarse igual y lo anuncia como advertencia; el apply sigue exigiendo un
+digest real.
 
 El rol OIDC, el bucket y la KMS key del state no se configuran: se derivan de la
 convencion que fija `bootstrap/state-backend.yml`. Cada workflow arma el ARN como
