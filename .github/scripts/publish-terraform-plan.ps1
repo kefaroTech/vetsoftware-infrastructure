@@ -30,7 +30,11 @@ $headers = @{
     "User-Agent"           = "VetSoftwareIaC-Terraform-Plan"
 }
 $commentsUri = "https://api.github.com/repos/$Repository/issues/$PullRequestNumber/comments?per_page=100"
-$comments = @(Invoke-RestMethod -Method Get -Uri $commentsUri -Headers $headers)
+# Un PR sin comentarios devuelve [], que Invoke-RestMethod desenrolla a $null. Envolverlo
+# directamente con @(...) daria un arreglo de un elemento nulo y Set-StrictMode abortaria
+# al leer .body sobre el.
+$response = Invoke-RestMethod -Method Get -Uri $commentsUri -Headers $headers
+$comments = @($response | Where-Object { $null -ne $_ })
 $existing = $comments | Where-Object {
     -not [string]::IsNullOrWhiteSpace([string]$_.body) -and
     ([string]$_.body).StartsWith($marker, [StringComparison]::Ordinal)
