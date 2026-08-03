@@ -308,7 +308,7 @@ else {
     # ephemeral y sus versiones controlan cualquier rotacion intencional.
     $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"terraform-plan-placeholder-32chars","RESEND_API_KEY":"not-used","RECAPTCHA_SECRET":"not-used"}'
     $env:TF_VAR_cloudflare_tunnel_token = "terraform-plan-placeholder-32chars"
-    $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used"}'
+    $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="}'
 }
 
 Resolve-StateBackend
@@ -364,3 +364,8 @@ if ($Mode -eq "Drift" -and $planExitCode -eq 2) {
 }
 
 Write-Host "Terraform $($Mode.ToLowerInvariant()) finalizo: codigo detallado $planExitCode." -ForegroundColor Green
+
+# Un plan con cambios devuelve 2 por -detailed-exitcode. Sin este cierre
+# explicito el step hereda ese 2 y GitHub marca el job como fallido pese a que
+# el plan es correcto; los casos de error real ya salieron por throw.
+exit 0

@@ -381,7 +381,7 @@ if (-not [Uri]::TryCreate($SourceRunUrl, [UriKind]::Absolute, [ref]$parsedSource
 # appears outside the ECS allowlist and is rejected before apply.
 $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"image-only-plan-placeholder-32chars","RESEND_API_KEY":"not-used","RECAPTCHA_SECRET":"not-used"}'
 $env:TF_VAR_cloudflare_tunnel_token = "image-only-plan-placeholder-32chars"
-$env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used"}'
+$env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="}'
 
 $accountId = (& aws sts get-caller-identity --query Account --output text)
 if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
