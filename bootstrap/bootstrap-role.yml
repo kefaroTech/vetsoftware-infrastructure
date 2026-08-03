@@ -63,6 +63,7 @@ Resources:
                 Action:
                   - cloudformation:CreateChangeSet
                   - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
                   - cloudformation:DescribeChangeSet
                   - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStackResources
@@ -117,6 +118,16 @@ Resources:
                   - kms:UpdateAlias
                   - kms:DeleteAlias
                 Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/${ProjectName}-${Environment}-tfstate"
+              - Sid: AssociateEnvironmentStateAliasWithKey
+                Effect: Allow
+                Action:
+                  - kms:CreateAlias
+                  - kms:UpdateAlias
+                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: !Ref ProjectName
+                    aws:ResourceTag/Environment: !Ref Environment
               - Sid: ManageEnvironmentEcr
                 Effect: Allow
                 Action: "ecr:*"
