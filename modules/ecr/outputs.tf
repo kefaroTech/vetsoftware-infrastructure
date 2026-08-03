@@ -9,12 +9,12 @@ output "repository_urls" {
 }
 
 output "publisher_role_arns" {
-  description = "Role ARN que debe guardarse como variable AWS_ECR_PUBLISH_ROLE_ARN en el environment production de cada repositorio GitHub."
+  description = "Role ARN productivo por repositorio habilitado."
   value       = { for key, role in aws_iam_role.github_ecr : key => role.arn }
 }
 
 output "development_publisher_role_arns" {
-  description = "Role ARN de publicacion desde develop, para el environment development de los repositorios habilitados."
+  description = "Role ARN de desarrollo por repositorio habilitado."
   value       = { for key, role in aws_iam_role.github_ecr_development : key => role.arn }
 }
 

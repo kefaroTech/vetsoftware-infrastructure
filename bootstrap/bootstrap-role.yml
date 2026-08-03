@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: One-time GitHub OIDC bootstrap role for one isolated VetSoftware environment
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: vetsoftware
+    AllowedPattern: "^[a-z0-9-]{3,30}$"
+  Environment:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  GitHubOrganization:
+    Type: String
+  GitHubOrganizationId:
+    Type: String
+    AllowedPattern: "^[0-9]+$"
+  GitHubRepository:
+    Type: String
+    Default: VetSoftwareIaC
+  GitHubRepositoryId:
+    Type: String
+    AllowedPattern: "^[0-9]+$"
+  GitHubOidcProviderArn:
+    Type: String
+    AllowedPattern: "^arn:[^:]+:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+
+Conditions:
+  IsDevelopment: !Equals [!Ref Environment, dev]
+  IsProduction: !Equals [!Ref Environment, prod]
+
+Resources:
+  BootstrapRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-github-bootstrap-${Environment}"
+      Description: !Sub "GitHub OIDC bootstrap for isolated ${ProjectName} ${Environment}"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: GitHubBootstrapEnvironment
+            Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrganization}@${GitHubOrganizationId}/${GitHubRepository}@${GitHubRepositoryId}:environment:iac-bootstrap-${Environment}"
+      Policies:
+        - PolicyName: !Sub "bootstrap-${Environment}"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ValidateStateTemplate
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ManageEnvironmentStateStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ProjectName}-${Environment}-terraform-state/*"
+              - Sid: ManageEnvironmentStateBucket
+                Effect: Allow
+                Action: "s3:*"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-tfstate-${AWS::AccountId}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-tfstate-${AWS::AccountId}/*"
+              - Sid: CreateTaggedEnvironmentStateKey
+                Effect: Allow
+                Action: kms:CreateKey
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: !Ref ProjectName
+                    aws:RequestTag/Environment: !Ref Environment
+              - Sid: DiscoverKmsAliases
+                Effect: Allow
+                Action: kms:ListAliases
+                Resource: "*"
+              - Sid: ManageEnvironmentStateKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:EnableKeyRotation
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                  - kms:GetKeyPolicy
+                  - kms:GetKeyRotationStatus
+                  - kms:ListResourceTags
+                  - kms:PutKeyPolicy
+                  - kms:ScheduleKeyDeletion
+                  - kms:TagResource
+                  - kms:UntagResource
+                  - kms:UpdateKeyDescription
+                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: !Ref ProjectName
+                    aws:ResourceTag/Environment: !Ref Environment
+              - Sid: CreateOrUpdateEnvironmentStateAlias
+                Effect: Allow
+                Action:
+                  - kms:CreateAlias
+                  - kms:UpdateAlias
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:RequestAlias: !Sub "alias/${ProjectName}-${Environment}-tfstate"
+              - Sid: DeleteEnvironmentStateAlias
+                Effect: Allow
+                Action: kms:DeleteAlias
+                Resource: !Sub "arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/${ProjectName}-${Environment}-tfstate"
+              - Sid: ManageEnvironmentEcr
+                Effect: Allow
+                Action: "ecr:*"
+                Resource:
+                  - !If
+                    - IsDevelopment
+                    - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-dev-backend"
+                    - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-backend"
+                  - !If
+                    - IsProduction
+                    - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-front"
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsProduction
+                    - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-public-front"
+                    - !Ref AWS::NoValue
+              - Sid: ManageEnvironmentAutomationRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:UpdateRoleDescription
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-iac-*-${Environment}"
+                  - !If
+                    - IsDevelopment
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-backend-github-ecr-dev"
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsProduction
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-backend-github-ecr"
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsProduction
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-private_front-github-ecr"
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsProduction
+                    - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-public_front-github-ecr"
+                    - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Component
+          Value: github-bootstrap
+
+Outputs:
+  BootstrapRoleArn:
+    Description: Configure as AWS_BOOTSTRAP_ROLE_ARN in the matching GitHub Environment
+    Value: !GetAtt BootstrapRole.Arn

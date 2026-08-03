@@ -10,7 +10,7 @@ availability_zone_count = 2
 api_domain_name = "dev-api.kefaro.tech"
 
 # Use digest inmutable y una imagen ARM64 compatible con Fargate Spot.
-backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend@sha256:REEMPLAZAR_64_HEX"
+backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:REEMPLAZAR_64_HEX"
 
 grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
 # Fronts dev publicados en Cloudflare Pages sobre la zona kefaro.tech.

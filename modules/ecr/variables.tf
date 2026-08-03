@@ -9,6 +9,7 @@ variable "repositories" {
     name                    = string
     github_repository       = string
     github_repository_id    = string
+    production_publication  = optional(bool, true)
     development_publication = optional(bool, false)
   }))
 

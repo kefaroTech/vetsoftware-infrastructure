@@ -2,119 +2,62 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  name        = "${var.project_name}-${var.environment}-tfstate"
-  bucket_name = var.state_bucket_name != "" ? var.state_bucket_name : "${local.name}-${data.aws_caller_identity.current.account_id}"
-}
-
-resource "aws_kms_key" "state" {
-  count = var.enable_kms ? 1 : 0
-
-  description             = "Terraform state for ${var.project_name} ${var.environment}"
-  deletion_window_in_days = 30
-  enable_key_rotation     = true
-}
-
-resource "aws_kms_alias" "state" {
-  count = var.enable_kms ? 1 : 0
-
-  name          = "alias/${local.name}"
-  target_key_id = aws_kms_key.state[0].key_id
-}
-
-resource "aws_s3_bucket" "state" {
-  bucket = local.bucket_name
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
-resource "aws_s3_bucket_versioning" "state" {
-  bucket = aws_s3_bucket.state.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = var.enable_kms ? "aws:kms" : "AES256"
-      kms_master_key_id = var.enable_kms ? aws_kms_key.state[0].arn : null
+  repository_definitions = {
+    dev_backend = {
+      environment             = "dev"
+      logical_name            = "backend"
+      name                    = "${var.project_name}-dev-backend"
+      github_repository       = var.github_repositories.backend
+      github_repository_id    = var.github_repository_ids.backend
+      production_publication  = false
+      development_publication = true
     }
-
-    bucket_key_enabled = var.enable_kms
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "state" {
-  bucket = aws_s3_bucket.state.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_ownership_controls" "state" {
-  bucket = aws_s3_bucket.state.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
-data "aws_iam_policy_document" "state" {
-  statement {
-    sid    = "DenyInsecureTransport"
-    effect = "Deny"
-
-    principals {
-      type        = "*"
-      identifiers = ["*"]
+    prod_backend = {
+      environment             = "prod"
+      logical_name            = "backend"
+      name                    = "${var.project_name}-backend"
+      github_repository       = var.github_repositories.backend
+      github_repository_id    = var.github_repository_ids.backend
+      production_publication  = true
+      development_publication = false
     }
-
-    actions = ["s3:*"]
-    resources = [
-      aws_s3_bucket.state.arn,
-      "${aws_s3_bucket.state.arn}/*"
-    ]
-
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
+    prod_private_front = {
+      environment             = "prod"
+      logical_name            = "private_front"
+      name                    = "${var.project_name}-front"
+      github_repository       = var.github_repositories.private_front
+      github_repository_id    = var.github_repository_ids.private_front
+      production_publication  = true
+      development_publication = false
+    }
+    prod_public_front = {
+      environment             = "prod"
+      logical_name            = "public_front"
+      name                    = "${var.project_name}-public-front"
+      github_repository       = var.github_repositories.public_front
+      github_repository_id    = var.github_repository_ids.public_front
+      production_publication  = true
+      development_publication = false
     }
   }
-}
 
-resource "aws_s3_bucket_policy" "state" {
-  bucket = aws_s3_bucket.state.id
-  policy = data.aws_iam_policy_document.state.json
-}
+  repositories = {
+    for repository in values(local.repository_definitions) : repository.logical_name => {
+      name                    = repository.name
+      github_repository       = repository.github_repository
+      github_repository_id    = repository.github_repository_id
+      production_publication  = repository.production_publication
+      development_publication = repository.development_publication
+    } if repository.environment == var.environment
+  }
 
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.existing_github_oidc_provider_arn == "" ? 1 : 0
-
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = []
-
-  tags = merge(var.tags, {
-    Component = "github-oidc"
-  })
-}
-
-locals {
-  github_oidc_provider_arn = var.existing_github_oidc_provider_arn != "" ? var.existing_github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
-}
-
-moved {
-  from = module.ecr.aws_iam_openid_connect_provider.github[0]
-  to   = aws_iam_openid_connect_provider.github[0]
+  iac_environments = {
+    (var.environment) = {
+      state_key                = "${var.project_name}/${var.environment}/terraform.tfstate"
+      github_plan_environment  = "iac-plan-${var.environment}"
+      github_apply_environment = "iac-apply-${var.environment}"
+    }
+  }
 }
 
 module "ecr" {
@@ -123,31 +66,11 @@ module "ecr" {
   project_name             = var.project_name
   github_organization      = var.github_organization
   github_organization_id   = var.github_organization_id
-  github_environment       = var.github_environment
-  github_oidc_provider_arn = local.github_oidc_provider_arn
+  github_environment       = "production"
+  github_oidc_provider_arn = var.existing_github_oidc_provider_arn
   images_to_keep           = var.ecr_images_to_keep
-  repositories = {
-    backend = {
-      name                 = "${var.project_name}-backend"
-      github_repository    = var.github_repositories.backend
-      github_repository_id = var.github_repository_ids.backend
-
-      # Solo el backend publica imagen desde develop: es el unico artefacto que
-      # Terraform consume por digest. Los fronts dev van a Cloudflare Pages.
-      development_publication = true
-    }
-    private_front = {
-      name                 = "${var.project_name}-front"
-      github_repository    = var.github_repositories.private_front
-      github_repository_id = var.github_repository_ids.private_front
-    }
-    public_front = {
-      name                 = "${var.project_name}-public-front"
-      github_repository    = var.github_repositories.public_front
-      github_repository_id = var.github_repository_ids.public_front
-    }
-  }
-  tags = var.tags
+  repositories             = local.repositories
+  tags                     = var.tags
 }
 
 module "github_iac_roles" {
@@ -157,13 +80,14 @@ module "github_iac_roles" {
   aws_partition            = data.aws_partition.current.partition
   aws_account_id           = data.aws_caller_identity.current.account_id
   aws_region               = var.aws_region
-  github_oidc_provider_arn = local.github_oidc_provider_arn
+  backend_repository_name  = local.repositories.backend.name
+  github_oidc_provider_arn = var.existing_github_oidc_provider_arn
   github_organization      = var.github_organization
   github_organization_id   = var.github_organization_id
   github_repository        = var.github_repositories.iac
   github_repository_id     = var.github_repository_ids.iac
-  state_bucket_name        = aws_s3_bucket.state.id
-  state_kms_key_arn        = var.enable_kms ? aws_kms_key.state[0].arn : null
-  environments             = var.github_iac_environments
+  state_bucket_name        = var.state_bucket_name
+  state_kms_key_arn        = var.state_kms_key_arn
+  environments             = local.iac_environments
   tags                     = var.tags
 }

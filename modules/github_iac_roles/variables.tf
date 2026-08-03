@@ -29,6 +29,16 @@ variable "aws_region" {
   type        = string
 }
 
+variable "backend_repository_name" {
+  description = "Repositorio ECR del backend que este ambiente puede inspeccionar."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+(?:[._/-][a-z0-9]+)*$", var.backend_repository_name))
+    error_message = "backend_repository_name debe ser un nombre ECR valido."
+  }
+}
+
 variable "github_oidc_provider_arn" {
   description = "ARN del proveedor OIDC token.actions.githubusercontent.com."
   type        = string
