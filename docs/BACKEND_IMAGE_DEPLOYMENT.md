@@ -26,6 +26,17 @@ ECR debe demostrar que el mismo digest contiene tanto el tag SemVer como `sha-<1
 
 Los planes no se publican como artifacts: contienen configuración operativa y se generan dentro del job que los consume. Este workflow no recibe secretos de runtime. Usa marcadores efímeros únicamente para satisfacer las validaciones del root; cualquier intento de cambiar Secrets Manager queda fuera del allowlist ECS y bloquea el run antes del apply.
 
+## Origen de la imagen por entorno
+
+Cada entorno tiene su propio ciclo de artefacto y ninguno espera al otro:
+
+| Entorno | Workflow del backend | Rama | Tag ECR |
+|---|---|---|---|
+| `dev` | `publish-dev-image.yml` | `develop` | `dev-<12 caracteres del commit>` |
+| `prod` | `publish-release.yml` | `main` (merge de `release/X.Y.Z`) | `X.Y.Z` y `sha-<12>` |
+
+La certificación descrita abajo -doble tag `X.Y.Z` + `sha-<12>` y escaneo sin hallazgos High/Critical- pertenece al circuito de release productiva. La imagen de desarrollo no la exige: se publica desde `develop`, se identifica por su digest y expira con la retención corta de su prefijo.
+
 ## Prerrequisito: baseline
 
 Este workflow es intencionalmente `image-only`. Antes de usarlo debe existir un primer `terraform apply` completo y validado para el entorno, incluyendo ECS, RDS, Valkey, secretos, red, observabilidad y el state remoto. Si falta `ecs_cluster_name` o `ecs_service_name`, el despliegue se detiene; no intenta crear toda la plataforma como efecto secundario de una release.

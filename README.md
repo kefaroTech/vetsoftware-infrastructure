@@ -22,10 +22,12 @@ La configuración evita NAT Gateway e Interface Endpoints de pago. S3 conserva s
 
 ## Entornos
 
-- `environments/prod`: infraestructura completa y protegida, con VPC, Alloy, RDS, Valkey y archivo de auditoría propios.
-- `environments/dev`: state y datos separados, pero reutiliza por tags la VPC y sus subredes. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+- `environments/prod`: infraestructura completa y protegida, con VPC `10.40.0.0/16`, Alloy, RDS, Valkey y archivo de auditoría propios.
+- `environments/dev`: infraestructura completa e independiente, con VPC propia `10.50.0.0/16`. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
 
-Compartir solo la red reduce costo sin compartir base de datos, cache, secretos, KMS, bucket ni roles. Cada entorno usa un túnel y token independientes; sus hostnames remotos apuntan a `http://localhost:8080` dentro de la tarea correspondiente.
+**Los dos entornos son independientes y no comparten ningún recurso.** Cada root crea su propia VPC, subredes, security groups, RDS, Valkey, KMS, bucket, secretos, roles y túnel Cloudflare. Ninguno lee datos del otro, así que pueden desplegarse en cualquier orden: `dev` primero, `prod` primero o solo uno de los dos. Lo único común es la plataforma que crea `bootstrap` antes que ambos —bucket de state con una key por entorno, repositorios ECR y proveedor OIDC—, y sus permisos están segmentados por entorno.
+
+Los CIDR no deben solaparse. Si cambia `vpc_cidr` en un entorno, verifique que el otro conserve un rango distinto.
 
 ## Versiones fijadas
 
@@ -64,12 +66,13 @@ El progreso se imprime en vivo y los logs persistentes quedan en `.tools/logs/te
 
 ```powershell
 $env:TF_VAR_project_name = "vetsoftware"
-$env:TF_VAR_environment  = "prod"
 $env:TF_VAR_aws_region   = "us-east-1"
 
 terraform -chdir=bootstrap init
 terraform -chdir=bootstrap apply
 ```
+
+El bootstrap no pertenece a dev ni a prod: crea la plataforma que ambos consumen antes de existir. Por eso `environment` usa `shared` y el bucket queda como `vetsoftware-shared-tfstate-<cuenta>`, con una key independiente por entorno.
 
 La forma recomendada crea el bucket, genera `backend.hcl` e inicializa producción automáticamente:
 
@@ -124,7 +127,9 @@ terraform -chdir=environments/prod apply vetsoftware.tfplan
 
 ## Desplegar desarrollo
 
-Producción debe existir primero porque dev descubre su VPC y subredes mediante tags. Los states usan el mismo bucket protegido, pero keys independientes: `vetsoftware/prod/terraform.tfstate` y `vetsoftware/dev/terraform.tfstate`.
+Dev no depende de producción: puede aplicarse primero, después o sin que prod exista. Solo necesita `bootstrap` aplicado. Los states usan el mismo bucket protegido, pero keys independientes: `vetsoftware/prod/terraform.tfstate` y `vetsoftware/dev/terraform.tfstate`.
+
+Bajo GitFlow, `develop` planifica y aplica `dev` mediante el environment `iac-apply-dev`, y `main` hace lo propio con `prod` mediante `iac-apply-prod`. Los dos ciclos avanzan sin bloquearse entre sí.
 
 ```powershell
 Copy-Item environments/dev/backend.hcl.example environments/dev/backend.hcl
@@ -219,7 +224,16 @@ El bootstrap también crea tres repositorios ECR inmutables:
 - `vetsoftware-front`
 - `vetsoftware-public-front`
 
-Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes de release productiva más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios. No existen repositorios ni historiales ECR por entorno: los tres registros tienen alcance `production-only`.
+Cada repositorio escanea al push, cifra con AES-256, elimina imágenes sin tag después de siete días y conserva las 30 imágenes de release productiva más recientes por omisión. `prevent_destroy` evita borrar accidentalmente los repositorios.
+
+`vetsoftware-backend` es el único con publicación de desarrollo habilitada (`development_publication`), porque su imagen es el artefacto que Terraform consume por digest. Los artefactos de los dos ciclos conviven separados por prefijo y por regla de retención:
+
+| Origen | Rama | Environment GitHub | Prefijo del tag | Retención |
+|---|---|---|---|---|
+| Release productiva | `main` | `production` | `X.Y.Z` y `sha-<12>` | 30 imágenes |
+| Imagen de desarrollo | `develop` | `development` | `dev-<12>` | 10 imágenes |
+
+Los fronts siguen siendo `production-only`: su entorno dev vive en Cloudflare Pages y no necesita imagen.
 
 El bootstrap crea un único proveedor OIDC de GitHub. El módulo ECR crea un rol IAM de mínimo privilegio por repositorio de aplicación, mientras que el módulo `github_iac_roles` crea roles independientes para plan y apply de Terraform. La confianza queda limitada por los nombres e IDs inmutables de la organización y el repositorio, además del GitHub Environment exacto; no se almacenan access keys en GitHub.
 
@@ -242,6 +256,7 @@ Después de aplicar el bootstrap, obtenga los valores:
 ```powershell
 terraform -chdir=bootstrap output ecr_repository_urls
 terraform -chdir=bootstrap output github_ecr_publisher_role_arns
+terraform -chdir=bootstrap output github_ecr_development_publisher_role_arns
 terraform -chdir=bootstrap output github_iac_role_arns
 terraform -chdir=bootstrap output github_iac_environments
 ```
@@ -255,6 +270,8 @@ En cada repositorio GitHub abra **Settings > Environments > production > Environ
 | `VetSoftwarePublicFront` | output `public_front` | `VITE_RECAPTCHA_SITE_KEY` |
 
 En ese mismo environment seleccione **Deployment branches and tags > Selected branches and tags**, agregue únicamente la rama protegida `main`, configure al menos un required reviewer e impida la autoaprobación. Esta regla externa es obligatoria: el subject OIDC demuestra el environment `production`, mientras que la política de deployment de GitHub impide que un workflow modificado en una rama dev llegue a ese environment.
+
+Además, en `VetSoftware` cree **Settings > Environments > development** y configure `AWS_ECR_PUBLISH_ROLE_ARN` con el output `github_ecr_development_publisher_role_arns.backend`. Limite sus deployment branches a `develop` y no le agregue required reviewers: el ciclo de dev debe avanzar sin bloquearse en producción. Es un rol distinto, con una trust policy distinta, así que ninguna credencial se comparte entre los dos ciclos.
 
 `AWS_REGION` es opcional y usa `us-east-1` por omisión.
 
@@ -277,7 +294,7 @@ Los roles `plan` no pueden mutar infraestructura ni escribir el state; solo crea
 
 Los buckets administrados deben conservar el patrón `vetsoftware-<entorno>-*`. Si una variable `application_bucket_name` o `audit_bucket_name` usa otro nombre, declare su ARN exacto en `additional_s3_bucket_arns` dentro de `github_iac_environments`; no amplíe la política a `arn:aws:s3:::*`.
 
-Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoaprobación, limite el despliegue a `main` y mantenga `Wait timer` desactivado salvo que exista una exigencia operativa. Permita `develop` y `main` en `iac-apply-dev`: el ciclo general de dev se aplica desde `develop`, mientras que el workflow image-only se solicita desde `main`. Este último no recibe secretos de runtime: usa marcadores efímeros de validación y bloquea cualquier cambio fuera de ECS. Mantenga los roles de plan sin permisos AWS de mutación.
+Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoaprobación, limite el despliegue a `main` y mantenga `Wait timer` desactivado salvo que exista una exigencia operativa. Limite `iac-apply-dev` exclusivamente a `develop`: desde que el backend publica su propia imagen dev, el ciclo general y el deploy de imagen de desarrollo nacen de esa rama y dev no necesita `main` para nada. El workflow image-only no recibe secretos de runtime: usa marcadores efímeros de validación y bloquea cualquier cambio fuera de ECS. Mantenga los roles de plan sin permisos AWS de mutación.
 
 `deploy-backend.yml` consume estos roles para el circuito especializado de imágenes: certifica ECR, ejecuta un plan limitado a ECS, exige aprobación antes del apply, espera estabilidad, ejecuta smoke test y revierte al digest anterior cuando es posible. El ciclo general está cubierto por workflows independientes de quality, plan, apply y drift; su configuración y operación se describen en [Automatización del ciclo Terraform](docs/TERRAFORM_AUTOMATION.md).
 
@@ -285,4 +302,4 @@ Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nue
 
 La configuración completa, el requisito de baseline y las variables externas pendientes están en [Despliegue inmutable del backend](docs/BACKEND_IMAGE_DEPLOYMENT.md).
 
-Los fronts continúan desplegándose en Cloudflare Pages; los proyectos, dominios y credenciales del entorno dev están documentados en [Cloudflare Pages](docs/CLOUDFLARE_PAGES.md). Sus builds de CI/dev son efímeros y no se publican en ECR; solo las releases productivas conservan una imagen de recuperación. El backend dev tampoco mantiene una copia histórica propia: reutiliza por digest una release productiva retenida, que permanece disponible para reinicios y escalado de ECS. Terraform consume directamente esa imagen ARM64 mediante `backend_image_uri`.
+Los fronts continúan desplegándose en Cloudflare Pages; los proyectos, dominios y credenciales del entorno dev están documentados en [Cloudflare Pages](docs/CLOUDFLARE_PAGES.md). Sus builds de CI/dev son efímeros y no se publican en ECR; solo las releases productivas conservan una imagen de recuperación. El backend dev publica su propia imagen ARM64 desde `develop` mediante `publish-dev-image.yml`, con tag `dev-<12>` y retención acotada. No necesita ninguna release productiva. Terraform consume ese digest mediante `backend_image_uri`.

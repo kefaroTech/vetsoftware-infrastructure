@@ -3,8 +3,13 @@ output "api_url" {
   value       = "https://${var.api_domain_name}"
 }
 
-output "shared_vpc_id" {
-  value = data.aws_vpc.shared.id
+output "vpc_id" {
+  description = "VPC exclusiva de desarrollo; dev no depende de la red de ningun otro entorno."
+  value       = module.network.vpc_id
+}
+
+output "vpc_cidr" {
+  value = module.network.vpc_cidr
 }
 
 output "cloudflare_tunnel_origin_url" {
@@ -55,6 +60,7 @@ output "cost_profile" {
     log_retention_days     = var.log_retention_days
     load_balancer_count    = 0
     dedicated_alloy        = false
+    dedicated_vpc          = true
     assign_public_ip       = module.backend.assign_public_ip
     public_https_cidr      = aws_vpc_security_group_egress_rule.backend_public_https.cidr_ipv4
     public_https_port      = aws_vpc_security_group_egress_rule.backend_public_https.to_port

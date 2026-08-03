@@ -7,15 +7,9 @@ mock_provider "aws" {
     }
   }
 
-  mock_data "aws_vpc" {
+  mock_data "aws_availability_zones" {
     defaults = {
-      id = "vpc-0123456789abcdef0"
-    }
-  }
-
-  mock_data "aws_subnets" {
-    defaults = {
-      ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
+      names = ["us-east-1a", "us-east-1b", "us-east-1c"]
     }
   }
 
@@ -100,6 +94,11 @@ run "development_cost_profile_plans" {
   assert {
     condition     = output.cost_profile.log_retention_days == 3 && output.cost_profile.load_balancer_count == 0 && !output.cost_profile.dedicated_alloy
     error_message = "Dev debe retener logs tres días y operar sin ALB ni Alloy dedicado."
+  }
+
+  assert {
+    condition     = output.cost_profile.dedicated_vpc && output.vpc_cidr == "10.50.0.0/16"
+    error_message = "Dev debe crear su propia VPC y no depender de la red de otro entorno."
   }
 
   assert {

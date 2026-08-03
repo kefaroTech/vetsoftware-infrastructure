@@ -1,3 +1,10 @@
+locals {
+  development_repositories = {
+    for key, repository in var.repositories : key => repository
+    if repository.development_publication
+  }
+}
+
 resource "aws_ecr_repository" "this" {
   for_each = var.repositories
 
@@ -15,7 +22,7 @@ resource "aws_ecr_repository" "this" {
   tags = merge(var.tags, {
     Component        = "container-registry"
     GitHubRepository = each.value.github_repository
-    RetentionScope   = "production-only"
+    RetentionScope   = each.value.development_publication ? "release-and-development" : "production-only"
   })
 
   lifecycle {
@@ -44,6 +51,19 @@ resource "aws_ecr_lifecycle_policy" "this" {
       },
       {
         rulePriority = 2
+        description  = "Keep the ${var.development_images_to_keep} newest development images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = [var.development_tag_prefix]
+          countType     = "imageCountMoreThan"
+          countNumber   = var.development_images_to_keep
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 3
         description  = "Keep the ${var.images_to_keep} newest production release images"
         selection = {
           tagStatus     = "tagged"
@@ -132,5 +152,56 @@ resource "aws_iam_role_policy" "github_ecr" {
 
   name   = "publish-${each.value.name}"
   role   = aws_iam_role.github_ecr[each.key].id
+  policy = data.aws_iam_policy_document.github_ecr[each.key].json
+}
+
+# Publicacion de desarrollo: rol propio y environment propio, para que develop
+# nunca dependa de una release productiva ni comparta credenciales con ella.
+data "aws_iam_policy_document" "github_assume_development" {
+  for_each = local.development_repositories
+
+  statement {
+    sid     = "GitHubDevelopmentEnvironment"
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [var.github_oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_organization}@${var.github_organization_id}/${each.value.github_repository}@${each.value.github_repository_id}:environment:${var.github_development_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_ecr_development" {
+  for_each = local.development_repositories
+
+  name                 = "${var.project_name}-${each.key}-github-ecr-dev"
+  assume_role_policy   = data.aws_iam_policy_document.github_assume_development[each.key].json
+  max_session_duration = 3600
+
+  tags = merge(var.tags, {
+    Component        = "github-ecr-publisher-development"
+    GitHubRepository = each.value.github_repository
+    RetentionScope   = "development-only"
+  })
+}
+
+resource "aws_iam_role_policy" "github_ecr_development" {
+  for_each = local.development_repositories
+
+  name   = "publish-development-${each.value.name}"
+  role   = aws_iam_role.github_ecr_development[each.key].id
   policy = data.aws_iam_policy_document.github_ecr[each.key].json
 }

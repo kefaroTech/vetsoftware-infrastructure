@@ -18,10 +18,26 @@ variable "environment" {
   }
 }
 
-variable "shared_environment" {
-  description = "Entorno cuya VPC y subredes se reutilizan."
+variable "vpc_cidr" {
+  description = "CIDR exclusivo de la VPC de desarrollo. No debe solaparse con el de produccion."
   type        = string
-  default     = "prod"
+  default     = "10.50.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr, 0))
+    error_message = "vpc_cidr debe ser un bloque CIDR IPv4 valido."
+  }
+}
+
+variable "availability_zone_count" {
+  description = "Cantidad de AZ propias de dev. Las subredes de datos exigen al menos dos."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.availability_zone_count >= 2 && var.availability_zone_count <= 3
+    error_message = "availability_zone_count debe estar entre 2 y 3."
+  }
 }
 
 variable "aws_region" {

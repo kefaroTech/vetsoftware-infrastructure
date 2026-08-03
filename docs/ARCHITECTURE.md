@@ -48,7 +48,7 @@ Los valores ingresan como variables efimeras de Terraform 1.15 y se escriben med
 - ECS escala por CPU y memoria entre `backend_min_count` y `backend_max_count`; cada replica abre conexiones independientes al mismo tunel del entorno.
 - RDS autoescala almacenamiento hasta `database_max_allocated_storage` y puede habilitarse Multi-AZ.
 - Valkey escala automaticamente dentro de sus topes de almacenamiento y ECPU.
-- Desarrollo comparte únicamente VPC y subredes con producción; mantiene task, RDS, Valkey, KMS, bucket, túnel y secretos separados.
+- Desarrollo no comparte ningún recurso con producción: crea su propia VPC (`10.50.0.0/16`), subredes, security groups, task, RDS, Valkey, KMS, bucket, túnel y secretos. Ninguno de los dos roots lee datos del otro, así que se aplican en cualquier orden.
 - Desarrollo conserva `db.t4g.micro`, siete dias de backup y alarma de memoria libre a 256 MiB.
 
 CloudWatch conserva alarmas de CPU y memoria de ECS, RDS, Alloy y errores JSON del conector `cloudflared`. Las métricas HTTP de Spring Boot continúan exportándose por OTLP a Grafana Cloud, donde deben mantenerse los SLO de tasa 5xx y latencia p95.
