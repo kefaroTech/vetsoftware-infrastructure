@@ -89,7 +89,7 @@ Terraform lee automáticamente las variables prefijadas con `TF_VAR_`.
 $env:AWS_REGION = "us-east-1"
 $env:TF_VAR_project_name = "vetsoftware"
 $env:TF_VAR_environment = "prod"
-$env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend:1.0.0"
+$env:TF_VAR_backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 $env:TF_VAR_api_domain_name = "api.kefaro.tech"
 
@@ -271,14 +271,16 @@ En **VetSoftwareIaC > Settings > Environments** cree estos nombres exactos y agr
 | `iac-plan-prod` | `prod.plan` | Leer infraestructura y state de prod; administrar solo su lockfile. |
 | `iac-apply-prod` | `prod.apply` | Aplicar prod y escribir exclusivamente el state de prod. |
 
-Los roles `plan` no pueden mutar infraestructura ni escribir el state; solo crean y eliminan su lockfile para mantener el bloqueo nativo de S3. Los roles `apply` limitan IAM, Secrets Manager y S3 por cuenta, entorno y prefijo; las mutaciones de servicios regionales se restringen a `aws_region`. Ningún rol permite `secretsmanager:GetSecretValue`, y cada trust policy exige audiencia `sts.amazonaws.com` y el subject inmutable del repositorio IaC.
+Los roles `plan` no pueden mutar infraestructura ni escribir el state; solo crean y eliminan su lockfile para mantener el bloqueo nativo de S3. Plan y apply pueden certificar metadatos y hallazgos exclusivamente de `vetsoftware-backend`. Los roles `apply` limitan IAM, Secrets Manager y S3 por cuenta, entorno y prefijo; las mutaciones de servicios regionales se restringen a `aws_region`. Ningún rol permite `secretsmanager:GetSecretValue`, y cada trust policy exige audiencia `sts.amazonaws.com` y el subject inmutable del repositorio IaC.
 
 Los buckets administrados deben conservar el patrón `vetsoftware-<entorno>-*`. Si una variable `application_bucket_name` o `audit_bucket_name` usa otro nombre, declare su ARN exacto en `additional_s3_bucket_arns` dentro de `github_iac_environments`; no amplíe la política a `arn:aws:s3:::*`.
 
-Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoaprobación, limite el despliegue a `main` y mantenga `Wait timer` desactivado salvo que exista una exigencia operativa. Restrinja `iac-apply-dev` a `develop`. Los environments de plan no deben almacenar secretos y deben quedar limitados a los eventos y ramas que usará el workflow de plan.
+Proteja como mínimo `iac-apply-prod` con revisor obligatorio, impida la autoaprobación, limite el despliegue a `main` y mantenga `Wait timer` desactivado salvo que exista una exigencia operativa. Para este workflow manual limite también `iac-apply-dev` a `main`; cualquier promoción automática desde `develop` requerirá una trust policy específica. El workflow image-only no recibe secretos de runtime: usa marcadores efímeros de validación y bloquea cualquier cambio fuera de ECS. Mantenga los roles de plan sin permisos AWS de mutación.
 
-El workflow actual solo valida calidad y los contratos de estos roles. Los workflows de plan, apply y drift que consumirán `AWS_IAC_ROLE_ARN` corresponden al siguiente punto del plan de auditoría y no se habilitan implícitamente con este cambio.
+`deploy-backend.yml` consume estos roles para el circuito especializado de imágenes: certifica ECR, ejecuta un plan limitado a ECS, exige aprobación antes del apply, espera estabilidad, ejecuta smoke test y revierte al digest anterior cuando es posible. El plan general de PR y la detección periódica de drift siguen siendo tareas independientes.
 
-Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release.
+Al cerrar con merge un PR `release/X.Y.Z` hacia `main`, cada workflow valida nuevamente calidad y versión, publica la imagen antes del tag y asigna dos tags ECR: `X.Y.Z` y `sha-<12 caracteres>`. Una reejecución solo continúa si ambos tags ya apuntan al mismo digest; un estado parcial o conflictivo bloquea la release. El backend solicita después un despliegue auditable por digest mediante una GitHub App de alcance exclusivo al repositorio IaC.
+
+La configuración completa, el requisito de baseline y las variables externas pendientes están en [Despliegue inmutable del backend](docs/BACKEND_IMAGE_DEPLOYMENT.md).
 
 Los fronts continúan desplegándose en Cloudflare Pages según la arquitectura actual. Sus imágenes ECR proporcionan un artefacto reproducible para ejecución local, recuperación o una migración futura; Terraform consume directamente la imagen ARM64 del backend mediante `backend_image_uri`.

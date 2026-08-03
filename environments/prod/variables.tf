@@ -51,8 +51,13 @@ variable "api_domain_name" {
 }
 
 variable "backend_image_uri" {
-  description = "Imagen Spring Boot publicada. No use :latest."
+  description = "Imagen Spring Boot de vetsoftware-backend fijada por digest ECR."
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware-backend@sha256:[0-9a-f]{64}$", var.backend_image_uri))
+    error_message = "backend_image_uri debe usar vetsoftware-backend@sha256:<64 hex>; los tags no son desplegables."
+  }
 }
 
 variable "backend_health_check_path" {

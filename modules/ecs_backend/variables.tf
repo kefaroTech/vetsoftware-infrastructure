@@ -3,12 +3,12 @@ variable "name" {
 }
 
 variable "image_uri" {
-  description = "Imagen inmutable del backend, preferiblemente con digest o tag de versión."
+  description = "Imagen ECR inmutable del backend fijada por digest sha256."
   type        = string
 
   validation {
-    condition     = length(trimspace(var.image_uri)) > 0 && !endswith(var.image_uri, ":latest")
-    error_message = "image_uri es obligatorio y no debe usar el tag mutable :latest."
+    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/vetsoftware-backend@sha256:[0-9a-f]{64}$", var.image_uri))
+    error_message = "image_uri debe ser la URI ECR vetsoftware-backend fijada con @sha256:<64 hex>."
   }
 }
 

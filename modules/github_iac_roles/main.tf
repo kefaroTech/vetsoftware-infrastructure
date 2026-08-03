@@ -359,6 +359,19 @@ data "aws_iam_policy_document" "infrastructure_read" {
   }
 
   statement {
+    sid    = "CertifyBackendReleaseImage"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:DescribeImageScanFindings",
+    ]
+    resources = [
+      "arn:${var.aws_partition}:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.project_name}-backend"
+    ]
+  }
+
+  statement {
     sid     = "ReadEnvironmentRuntimeRoles"
     effect  = "Allow"
     actions = local.iam_read_actions
