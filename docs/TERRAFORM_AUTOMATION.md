@@ -133,3 +133,32 @@ registrados: revise el plan siguiente antes de aplicarlo.
 
 Prod no tiene un workflow equivalente; su desbloqueo se hace a mano y de forma
 deliberada.
+
+## Servicio ECS huerfano
+
+Liberar el lock no alcanza cuando el apply se corto a mitad de `CreateService`: el
+servicio queda vivo en ECS y fuera del state, el ciclo siguiente lo replanea como
+create y ECS responde `Creation of service was not idempotent`.
+
+Es el unico recurso del stack que sufre esto de forma realista. La task definition
+crea revisiones aditivas, los roles del modulo usan `name_prefix`, y el presupuesto y
+los schedules tienen nombre fijo pero se crean en menos de un segundo. El servicio, en
+cambio, mantiene el create abierto entre cuatro y seis minutos por
+`wait_for_steady_state = true`, y esa es la ventana en la que cabe una cancelacion.
+
+`terraform-cycle.ps1` lo reconcilia solo: antes de generar el plan compara el state
+contra ECS y, si el servicio existe `ACTIVE` en AWS pero no en el state, lo adopta con
+`terraform import`. El plan resultante es un update en lugar de un create. La adopcion
+solo ocurre en `-Mode Apply`; plan y drift se limitan a reportar el huerfano en el step
+summary, porque nunca mutan el state.
+
+Se importa en lugar de borrar por dos razones. La primera es que el script lo comparten
+dev y prod, y un borrado desatendido ante un falso positivo tumbaria el servicio
+productivo. La segunda es que el output `ecs_service_name` depende del propio servicio:
+mientras falta del state, `Set-CurrentBackendImage` no puede leer la imagen en ejecucion
+y cae al respaldo `BACKEND_IMAGE_URI`, que puede ser un digest viejo. Adoptarlo
+restituye el output y el ciclo vuelve a conservar la imagen desplegada.
+
+Dos casos que el paso no resuelve. Si el servicio quedo en `DRAINING`, ECS todavia
+rechaza el nombre y no hay nada que importar: el ciclo avisa y hay que reintentar en
+unos minutos. Si quedo `INACTIVE`, no estorba, porque ECS permite reusar el nombre.
