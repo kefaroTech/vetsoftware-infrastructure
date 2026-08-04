@@ -30,6 +30,9 @@ locals {
 
   global_infrastructure_read_actions = [
     "application-autoscaling:Describe*",
+    # Describe* no la cubre: el proveedor lee las etiquetas del scalable target al
+    # refrescarlo, y sin este permiso el apply falla despues de haberlo creado.
+    "application-autoscaling:ListTagsForResource",
     "budgets:Describe*",
     "budgets:ListTagsForResource",
     "budgets:ViewBudget",
