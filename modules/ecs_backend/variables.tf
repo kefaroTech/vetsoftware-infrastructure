@@ -201,9 +201,12 @@ variable "enable_execute_command" {
   default = true
 }
 
+# Ventana en la que el scheduler ignora los health checks de una tarea recien
+# lanzada. Debe cubrir el arranque completo del contenedor; con 120 se quedaba por
+# debajo de los 90-120 segundos que tarda la aplicacion.
 variable "health_check_grace_period_seconds" {
   type    = number
-  default = 120
+  default = 300
 }
 
 variable "autoscaling_cpu_target" {
