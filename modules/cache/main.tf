@@ -1,3 +1,13 @@
+# La contrasena no se persiste en ningun sitio: se regenera en cada ejecucion y la
+# consumen el usuario de ElastiCache y el secreto de conexion, ambos gobernados por
+# var.password_version.
+#
+# De ahi sale una invariante fragil: los dos tienen que escribirse en el MISMO apply.
+# Si uno se escribe y el otro no —un apply cancelado a la mitad, por ejemplo— cada
+# cual queda con un valor distinto del ephemeral, y como la version no cambio ninguno
+# se reescribe nunca mas. El sintoma es un backend que arranca y muere con
+# "WRONGPASS invalid username-password pair or user is disabled". La unica salida es
+# subir var.password_version para forzar que los dos se reescriban juntos.
 ephemeral "random_password" "valkey" {
   length           = 40
   special          = true
