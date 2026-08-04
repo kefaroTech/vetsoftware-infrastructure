@@ -36,10 +36,14 @@ locals {
     CODE_RECOVERY_LOGIN_URL             = var.login_url
     EMPLOYEE_LOGIN_URL                  = var.login_url
     RECAPTCHA_ENABLED                   = tostring(var.recaptcha_enabled)
-    AUDIT_OUTBOX_ENABLED                = "false"
-    S3_BUCKET                           = aws_s3_bucket.application.id
-    AWS_REGION                          = var.aws_region
-    JAVA_TOOL_OPTIONS                   = "-XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=20.0 -XX:+ExitOnOutOfMemoryError"
+    # dev no despliega el modulo storage_audit, asi que no hay delivery stream ni permiso
+    # firehose:PutRecordBatch en el task role (ecs_backend.firehose_stream_arn queda vacio).
+    # Ambas banderas deben ir apagadas: publisher-enabled es la que instancia el FirehoseClient.
+    AUDIT_OUTBOX_ENABLED           = "false"
+    AUDIT_OUTBOX_PUBLISHER_ENABLED = "false"
+    S3_BUCKET                      = aws_s3_bucket.application.id
+    AWS_REGION                     = var.aws_region
+    JAVA_TOOL_OPTIONS              = "-XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=20.0 -XX:+ExitOnOutOfMemoryError"
   }, var.backend_extra_environment)
 
   backend_secrets = {
