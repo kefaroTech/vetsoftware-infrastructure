@@ -44,5 +44,9 @@ locals {
     JWT_SECRET       = "${module.secrets.application_secret_arn}:JWT_SECRET::"
     RESEND_API_KEY   = "${module.secrets.application_secret_arn}:RESEND_API_KEY::"
     RECAPTCHA_SECRET = "${module.secrets.application_secret_arn}:RECAPTCHA_SECRET::"
+    # EncryptedStringConverter la lee con System.getenv en un inicializador estatico,
+    # no como propiedad de Spring: sin ella Hibernate no puede cargar la clase y el
+    # arranque muere antes del EntityManagerFactory.
+    DIAN_ENC_KEY = "${module.secrets.application_secret_arn}:DIAN_ENC_KEY::"
   }
 }
