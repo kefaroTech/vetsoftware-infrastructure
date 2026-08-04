@@ -315,8 +315,10 @@ data "aws_iam_policy_document" "infrastructure_read" {
       "secretsmanager:GetResourcePolicy",
       "secretsmanager:ListSecretVersionIds",
     ]
+    # El prefijo va sin separador: cubre tanto vetsoftware-<env>/application como
+    # los secretos por recurso, p. ej. vetsoftware-<env>-valkey/connection.
     resources = [
-      "arn:${var.aws_partition}:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}-${each.value.environment}/*"
+      "arn:${var.aws_partition}:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}-${each.value.environment}*"
     ]
   }
 
@@ -439,6 +441,7 @@ data "aws_iam_policy_document" "apply_identity" {
         "ecs.amazonaws.com",
         "ecs.application-autoscaling.amazonaws.com",
         "elasticache.amazonaws.com",
+        "management.chatbot.amazonaws.com",
         "rds.amazonaws.com",
       ]
     }
@@ -479,8 +482,24 @@ data "aws_iam_policy_document" "apply_identity" {
       "secretsmanager:UpdateSecret",
       "secretsmanager:UpdateSecretVersionStage",
     ]
+    # El prefijo va sin separador: cubre tanto vetsoftware-<env>/application como
+    # los secretos por recurso, p. ej. vetsoftware-<env>-valkey/connection.
     resources = [
-      "arn:${var.aws_partition}:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}-${each.value.environment}/*"
+      "arn:${var.aws_partition}:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}-${each.value.environment}*"
+    ]
+  }
+
+  # RDS genera el secreto del master user con nombre propio (rds!db-<uuid>) cuando
+  # manage_master_user_password esta activo, y exige que el llamador pueda crearlo y etiquetarlo.
+  statement {
+    sid    = "CreateRdsManagedMasterSecret"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:TagResource",
+    ]
+    resources = [
+      "arn:${var.aws_partition}:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:rds!*"
     ]
   }
 }
@@ -517,21 +536,12 @@ data "aws_iam_policy_document" "apply_storage" {
     resources = each.value.managed_bucket_arns
   }
 
+  # El Deny apunta solo al ARN del bucket, asi que cubre toda la administracion a nivel
+  # de bucket sin tocar los objetos de state, cuyo ARN incluye la key.
   statement {
-    sid    = "ProtectTerraformStateBucketAdministration"
-    effect = "Deny"
-    actions = [
-      "s3:DeleteBucket",
-      "s3:DeleteBucketPolicy",
-      "s3:PutLifecycleConfiguration",
-      "s3:PutBucketObjectLockConfiguration",
-      "s3:PutBucketOwnershipControls",
-      "s3:PutBucketPolicy",
-      "s3:PutBucketPublicAccessBlock",
-      "s3:PutBucketTagging",
-      "s3:PutBucketVersioning",
-      "s3:PutEncryptionConfiguration",
-    ]
+    sid       = "ProtectTerraformStateBucketAdministration"
+    effect    = "Deny"
+    actions   = ["s3:Delete*", "s3:Put*"]
     resources = ["arn:${var.aws_partition}:s3:::${var.state_bucket_name}"]
   }
 }

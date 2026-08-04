@@ -296,7 +296,9 @@ module "monitoring" {
   alarm_email                      = var.alarm_email
   monthly_budget_usd               = var.monthly_budget_usd
   budget_sns_notifications_enabled = true
-  cost_anomaly_detection_enabled   = true
+  # Cost Explorer no esta habilitado en la cuenta (opt-in manual desde Billing);
+  # ce:CreateAnomalyMonitor responde "User not enabled for cost explorer access".
+  cost_anomaly_detection_enabled   = false
   cost_anomaly_threshold_usd       = var.cost_anomaly_threshold_usd
   slack_workspace_id               = var.slack_workspace_id
   slack_channel_id                 = var.slack_channel_id
