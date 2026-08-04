@@ -1,0 +1,89 @@
+name: Terraform unlock dev
+run-name: Terraform unlock dev · ${{ inputs.lock_id }} · ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      lock_id:
+        description: "ID del lock que reporta el error 'Error acquiring the state lock'."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authorize-ref:
+    name: Authorize GitFlow revision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce the development branch
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/develop') {
+            throw "dev solo puede desbloquearse desde refs/heads/develop; revision recibida: $env:GITHUB_REF."
+          }
+
+  unlock:
+    name: Approve and release the dev state lock
+    needs: authorize-ref
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: iac-apply-dev
+    # Comparte el grupo con plan, apply y drift: el unlock nunca corre en paralelo
+    # con otro ciclo de dev, asi que no puede liberar un lock que este vivo.
+    concurrency:
+      group: terraform-dev
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-apply-dev
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+
+    steps:
+      - name: Check out authorized IaC revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Validate apply role configuration
+        shell: pwsh
+        run: |
+          if ($env:AWS_ACCOUNT_ID -notmatch '^\d{12}$') {
+            throw "Configure AWS_ACCOUNT_ID con los 12 digitos de la cuenta AWS en iac-apply-dev."
+          }
+
+      - name: Configure apply AWS credentials
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: vetsoftware-unlock-dev-${{ github.run_id }}
+
+      # El ID viaja por entorno, no interpolado en la linea de comandos: una entrada
+      # de workflow_dispatch es texto libre y no puede llegar al shell sin pasar por
+      # una variable.
+      - name: Release the state lock
+        shell: pwsh
+        env:
+          LOCK_ID: ${{ inputs.lock_id }}
+        run: >-
+          ./.github/scripts/terraform-cycle.ps1
+          -Mode Unlock
+          -Environment dev
+          -LockId $env:LOCK_ID
