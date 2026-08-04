@@ -41,12 +41,18 @@ resource "aws_iam_role_policy" "scheduler" {
 }
 
 locals {
+  # Los targets universales nombran los campos con la convencion del SDK de Java v2,
+  # que no repite mayusculas consecutivas: el campo es DbInstanceIdentifier, no
+  # DBInstanceIdentifier como lo llama la API de RDS. Con el nombre equivocado el
+  # campo se ignora y CreateSchedule falla con "Request payload is missing the
+  # following field(s): DbInstanceIdentifier". Los targets de ECS no lo sufren
+  # porque Cluster, Service y DesiredCount ya casan con esa convencion.
   schedules = {
     database-start = {
       expression = var.database_start_schedule
       target_arn = "arn:${data.aws_partition.current.partition}:scheduler:::aws-sdk:rds:startDBInstance"
       input = {
-        DBInstanceIdentifier = var.database_identifier
+        DbInstanceIdentifier = var.database_identifier
       }
     }
     backend-start = {
@@ -71,7 +77,7 @@ locals {
       expression = var.database_stop_schedule
       target_arn = "arn:${data.aws_partition.current.partition}:scheduler:::aws-sdk:rds:stopDBInstance"
       input = {
-        DBInstanceIdentifier = var.database_identifier
+        DbInstanceIdentifier = var.database_identifier
       }
     }
   }
