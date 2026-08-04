@@ -113,3 +113,23 @@ Dev puede completar los cinco pasos sin que exista prod, y prod puede hacer lo m
 ## Ejecuciones posteriores
 
 Los cambios generales siguen PR, quality, plan, merge y apply manual. El bootstrap solo vuelve a ejecutarse cuando cambian su ECR, sus roles o su backend. Drift detecta cambios externos y falla con exit code `2`, pero nunca corrige automaticamente.
+
+## Lock de state huerfano
+
+Un apply cancelado deja el `.tflock` en S3 y todo ciclo posterior muere tras agotar
+el `-lock-timeout=5m` con `Error acquiring the state lock`. `Terraform unlock dev`
+(`workflow_dispatch` desde `develop`) libera ese lock: recibe como input el `ID` que
+imprime el error y ejecuta `terraform force-unlock` con el rol de apply, que ya tiene
+`s3:DeleteObject` sobre el `.tflock` de su ambiente.
+
+Tres frenos evitan que libere un lock vivo: `force-unlock` compara el ID contra el
+lock existente y falla si no coincide, el workflow comparte el grupo de concurrencia
+`terraform-<ambiente>` con plan, apply y drift, y pasa por el Environment de apply
+con su aprobacion.
+
+Antes de desbloquear, confirme en Actions que ninguna ejecucion siga en curso. Y
+tenga presente que un apply cortado a la mitad pudo crear recursos que no quedaron
+registrados: revise el plan siguiente antes de aplicarlo.
+
+Prod no tiene un workflow equivalente; su desbloqueo se hace a mano y de forma
+deliberada.

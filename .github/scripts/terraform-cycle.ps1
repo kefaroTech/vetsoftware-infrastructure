@@ -1,12 +1,16 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Plan", "Apply", "Drift")]
+    [ValidateSet("Plan", "Apply", "Drift", "Unlock")]
     [string]$Mode,
 
     [Parameter(Mandatory)]
     [ValidateSet("dev", "prod")]
-    [string]$Environment
+    [string]$Environment,
+
+    # Solo para -Mode Unlock: el ID que reporta Terraform al no poder tomar el lock.
+    [Parameter()]
+    [string]$LockId
 )
 
 $ErrorActionPreference = "Stop"
@@ -285,6 +289,36 @@ function Write-PlanReport {
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "has_changes=$($ExitCode -eq 2)" -Encoding utf8
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "report_path=$reportPath" -Encoding utf8
     }
+}
+
+# Un apply cancelado deja el .tflock en S3 y todo ciclo posterior muere tras agotar
+# el -lock-timeout. Liberarlo exige el ID exacto: force-unlock lo compara contra el
+# lock vivo, de modo que un ID viejo no puede pisar una ejecucion en curso.
+if ($Mode -eq "Unlock") {
+    Assert-RequiredEnvironmentVariable -Name "AWS_REGION"
+    if ($LockId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        throw "El modo Unlock exige -LockId con el UUID que aparece en el error 'Error acquiring the state lock'."
+    }
+
+    Resolve-StateBackend
+    Initialize-Terraform
+
+    Write-Host "[Terraform] Liberando el lock $LockId del state de $Environment..." -ForegroundColor Yellow
+    Invoke-ExternalCommand -Command "terraform" -Arguments @(
+        "-chdir=$environmentDirectory", "force-unlock", "-force", $LockId
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+            "### Unlock",
+            "",
+            "Lock ``$LockId`` liberado en el state de **$Environment**.",
+            "",
+            "El apply cancelado pudo dejar recursos creados fuera del state: revise el proximo plan antes de aplicar."
+        )
+    }
+
+    exit 0
 }
 
 @(
