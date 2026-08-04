@@ -226,6 +226,125 @@ function New-OptionalVariableFile {
     return $variableFile
 }
 
+# Un apply cortado a mitad de CreateService deja el servicio vivo en ECS y fuera del
+# state: el ciclo siguiente lo replanea como create y ECS responde
+# "Creation of service was not idempotent". Es el unico recurso del stack con una
+# ventana de cancelacion apreciable, porque wait_for_steady_state mantiene el create
+# abierto varios minutos; el resto se crea en menos de un segundo o usa name_prefix.
+# Adoptarlo con import no destruye nada y ademas devuelve el output ecs_service_name
+# del que depende Set-CurrentBackendImage para conservar la imagen desplegada.
+function Restore-OrphanedEcsService {
+    param([Parameter()][string]$VariableFile)
+
+    # El modulo ecs_backend fija el nombre del servicio; no viaja por variable.
+    $serviceAddress = "module.backend.aws_ecs_service.backend"
+    $serviceName = "backend"
+
+    $stateEntries = & terraform "-chdir=$environmentDirectory" state list 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "No fue posible listar el state para buscar un servicio ECS huerfano; el ciclo continua sin reconciliar."
+        return $false
+    }
+    if (@($stateEntries) -contains $serviceAddress) {
+        return $false
+    }
+
+    # El output del cluster no depende del servicio, asi que sigue disponible justo
+    # en el escenario que hay que detectar. Si falla, el ambiente todavia no tiene
+    # cluster y por lo tanto no puede haber un servicio huerfano.
+    $clusterName = & terraform "-chdir=$environmentDirectory" output -raw ecs_cluster_name 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($clusterName)) {
+        return $false
+    }
+
+    # No usa Get-ExternalJson porque un cluster inexistente sale con codigo distinto
+    # de cero y eso no es un error del ciclo: significa que no hay huerfano posible.
+    $describeArguments = @(
+        "ecs", "describe-services",
+        "--cluster", [string]$clusterName,
+        "--services", $serviceName,
+        "--output", "json"
+    )
+    $describeOutput = & aws @describeArguments 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "No fue posible consultar el servicio $serviceName del cluster $clusterName; el ciclo continua sin reconciliar."
+        return $false
+    }
+
+    $described = ($describeOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    $service = if ($described.PSObject.Properties.Name -contains "services") {
+        @($described.services) | Select-Object -First 1
+    }
+    else {
+        $null
+    }
+    if ($null -eq $service) {
+        return $false
+    }
+
+    # Un servicio borrado sigue visible como INACTIVE y no estorba: ECS permite
+    # reusar el nombre. DRAINING si estorba, y no hay nada que importar.
+    $status = [string]$service.status
+    if ($status -eq "DRAINING") {
+        Write-Warning "El servicio $serviceName de $clusterName sigue DRAINING: ECS rechazara el create hasta que quede INACTIVE. Reintente el ciclo en unos minutos."
+        return $false
+    }
+    if ($status -ne "ACTIVE") {
+        return $false
+    }
+
+    $summaryPath = $env:GITHUB_STEP_SUMMARY
+    if ($Mode -ne "Apply") {
+        # Plan y drift jamas mutan el state: solo avisan para que el huerfano se vea
+        # antes de aprobar el apply, que es quien lo adopta.
+        Write-Warning "El servicio ECS $serviceName existe ACTIVE en $clusterName pero no esta en el state: quedo huerfano de un apply cancelado. Este plan lo muestra como create; el apply lo adoptara con terraform import."
+        if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+            Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+                "",
+                "### Servicio ECS huerfano",
+                "",
+                "``$clusterName/$serviceName`` existe **ACTIVE** en AWS pero no esta en el state, seguramente por un apply cancelado.",
+                "",
+                "Este plan lo muestra como *create* y ECS lo rechazaria con ``Creation of service was not idempotent``.",
+                "El apply lo adopta con ``terraform import`` antes de planear, asi que el plan definitivo sera un *update*."
+            )
+        }
+
+        return $false
+    }
+
+    Write-Host "[Terraform] Adoptando el servicio ECS huerfano $clusterName/$serviceName al state..." -ForegroundColor Yellow
+    $importArguments = @(
+        "-chdir=$environmentDirectory",
+        "import",
+        "-input=false",
+        "-lock-timeout=5m",
+        "-no-color"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($VariableFile)) {
+        $importArguments += "-var-file=$VariableFile"
+    }
+    $importArguments += @($serviceAddress, "$clusterName/$serviceName")
+
+    # El pipe a Write-Host evita que la salida de terraform contamine el valor de
+    # retorno de la funcion, que es el booleano que consulta el cuerpo del script.
+    Invoke-ExternalCommand -Command "terraform" -Arguments $importArguments |
+        ForEach-Object { Write-Host $_ }
+
+    if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+        Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+            "",
+            "### Servicio ECS huerfano adoptado",
+            "",
+            "``$clusterName/$serviceName`` existia **ACTIVE** en AWS pero no en el state, seguramente por un apply cancelado.",
+            "",
+            "Se importo a ``$serviceAddress`` antes de generar el plan, de modo que el apply lo actualiza en lugar de recrearlo."
+        )
+    }
+
+    return $true
+}
+
 function Write-PlanReport {
     param(
         [Parameter(Mandatory)][int]$ExitCode,
@@ -314,7 +433,7 @@ if ($Mode -eq "Unlock") {
             "",
             "Lock ``$LockId`` liberado en el state de **$Environment**.",
             "",
-            "El apply cancelado pudo dejar recursos creados fuera del state: revise el proximo plan antes de aplicar."
+            "El apply cancelado pudo dejar recursos creados fuera del state. El servicio ECS se adopta solo al inicio del proximo apply; el resto exige revisar el plan antes de aplicar."
         )
     }
 
@@ -349,8 +468,17 @@ else {
 
 Resolve-StateBackend
 Initialize-Terraform
+# Va antes del import porque terraform evalua la configuracion completa al importar
+# y el root module exige un backend_image_uri fijado a un digest valido.
 Set-CurrentBackendImage
 $variableFile = New-OptionalVariableFile
+
+if (Restore-OrphanedEcsService -VariableFile $variableFile) {
+    # Con el servicio de vuelta en el state vuelve a existir ecs_service_name, asi
+    # que releer la imagen activa evita que el apply revierta el despliegue al
+    # BACKEND_IMAGE_URI que se uso como respaldo mientras el servicio faltaba.
+    Set-CurrentBackendImage
+}
 
 $temporaryDirectory = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     [IO.Path]::GetTempPath()
