@@ -207,13 +207,16 @@ locals {
     cpu       = var.cloudflare_tunnel_cpu
     memory    = var.cloudflare_tunnel_memory
 
+    # El formato de log se selecciona con --output, no con --logformat: esa bandera
+    # no existe en cloudflared y el binario sale con "Incorrect Usage" sin llegar a
+    # abrir el tunel. Como el contenedor es essential, se lleva la tarea entera.
     command = [
       "tunnel",
       "--protocol",
       "http2",
       "--loglevel",
       "info",
-      "--logformat",
+      "--output",
       "json",
       "--metrics",
       "0.0.0.0:2000",
