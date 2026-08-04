@@ -175,9 +175,15 @@ variable "valkey_major_engine_version" {
   default = "8"
 }
 
+# La contrasena de Valkey se genera en un recurso ephemeral y la consumen dos
+# recursos distintos, ambos gobernados por esta version. Una serie de applies
+# cortados los dejo escritos en ejecuciones distintas: cada uno capturo un valor
+# distinto del ephemeral y, al no cambiar la version, ninguno se reescribio. El
+# backend fallaba con "WRONGPASS invalid username-password pair". Subirla a 2
+# fuerza a que los dos vuelvan a escribirse en el mismo apply, con el mismo valor.
 variable "valkey_password_version" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "valkey_maximum_data_storage_gb" {
