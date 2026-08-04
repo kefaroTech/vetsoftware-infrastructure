@@ -2,6 +2,11 @@ name: Terraform apply dev
 
 on:
   workflow_dispatch:
+    inputs:
+      backend_image_uri:
+        description: "Opcional. Digest a desplegar cuando la imagen en ejecucion esta rota y el ciclo no debe heredarla. Vacio = conservar la activa."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -78,6 +83,11 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # El digest viaja por entorno, no interpolado en la linea de comandos: una entrada
+      # de workflow_dispatch es texto libre y no puede llegar al shell sin pasar por una
+      # variable. El script lo valida contra el patron del ECR del ambiente.
       - name: Generate and apply a fresh Terraform plan
         shell: pwsh
+        env:
+          FORCE_BACKEND_IMAGE_URI: ${{ inputs.backend_image_uri }}
         run: ./.github/scripts/terraform-cycle.ps1 -Mode Apply -Environment dev

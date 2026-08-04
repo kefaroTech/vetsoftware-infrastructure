@@ -118,6 +118,37 @@ function Initialize-Terraform {
 
 function Set-CurrentBackendImage {
     $configuredImage = $env:TF_VAR_backend_image_uri
+    $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
+    $repositoryPattern = [regex]::Escape($repositoryName)
+    # PowerShell no escapa con barra invertida dentro de comillas dobles: "\\." llega
+    # al motor de regex como \\. y exigiria una barra invertida literal en la URI.
+    $imagePattern = "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$"
+
+    # Escotilla de operacion. El ciclo general hereda la imagen en ejecucion para no
+    # revertir despliegues, pero cuando esa imagen esta rota el servicio nunca alcanza
+    # steady state y cada apply la vuelve a fijar: sin una salida explicita solo queda
+    # reescribir la task definition a mano. Un digest pasado en el dispatch manda sobre
+    # la lectura de ECS. El circuito de imagen (deploy-backend-*) sigue siendo la via
+    # normal; esto es para cuando ese circuito no puede correr.
+    if (-not [string]::IsNullOrWhiteSpace($env:FORCE_BACKEND_IMAGE_URI)) {
+        if ($env:FORCE_BACKEND_IMAGE_URI -notmatch $imagePattern) {
+            throw "FORCE_BACKEND_IMAGE_URI debe fijar $repositoryName por digest inmutable: <cuenta>.dkr.ecr.<region>.amazonaws.com/$repositoryName@sha256:<64 hex>."
+        }
+
+        $env:TF_VAR_backend_image_uri = $env:FORCE_BACKEND_IMAGE_URI
+        Write-Host "[Terraform] Imagen forzada desde el dispatch: $env:FORCE_BACKEND_IMAGE_URI" -ForegroundColor Yellow
+        if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+                "",
+                "### Imagen del backend forzada",
+                "",
+                "El ciclo no heredo la imagen en ejecucion. El dispatch fijo ``$env:FORCE_BACKEND_IMAGE_URI``."
+            )
+        }
+
+        return
+    }
+
     Write-Host "[Terraform] Conservando la imagen ECS activa durante el ciclo general..." -ForegroundColor Cyan
     try {
         $clusterName = (& terraform "-chdir=$environmentDirectory" output -raw ecs_cluster_name)
@@ -136,8 +167,14 @@ function Set-CurrentBackendImage {
             "--services", [string]$serviceName,
             "--output", "json"
         )
+        # Un servicio borrado sigue visible como INACTIVE cerca de una hora y conserva su
+        # ultima task definition. Sin filtrar por estado, el ciclo heredaria la imagen de
+        # un servicio que ya no existe y volveria a desplegarla.
         $service = @($services.services) | Select-Object -First 1
-        if ($null -eq $service -or [string]::IsNullOrWhiteSpace([string]$service.taskDefinition)) {
+        if ($null -eq $service -or [string]$service.status -ne "ACTIVE") {
+            throw "No hay un servicio ECS ACTIVE del que heredar la imagen."
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$service.taskDefinition)) {
             throw "El servicio ECS no tiene una task definition activa."
         }
 
@@ -151,11 +188,6 @@ function Set-CurrentBackendImage {
             throw "La task definition activa no contiene exactamente un contenedor backend."
         }
 
-        $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
-        $repositoryPattern = [regex]::Escape($repositoryName)
-        # PowerShell no escapa con barra invertida dentro de comillas dobles: "\\." llega
-        # al motor de regex como \\. y exigiria una barra invertida literal en la URI.
-        $imagePattern = "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$"
         $image = [string]$backend[0].image
         if ($image -notmatch $imagePattern) {
             throw "La imagen activa no esta fijada al digest esperado de $repositoryName."
@@ -164,9 +196,7 @@ function Set-CurrentBackendImage {
         return
     }
     catch {
-        $repositoryName = if ($Environment -eq "dev") { "vetsoftware-dev-backend" } else { "vetsoftware-backend" }
-        $repositoryPattern = [regex]::Escape($repositoryName)
-        if ($configuredImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${repositoryPattern}@sha256:[0-9a-f]{64}$") {
+        if ($configuredImage -match $imagePattern) {
             $env:TF_VAR_backend_image_uri = $configuredImage
             Write-Host "[Terraform] No existe baseline ECS; se usara BACKEND_IMAGE_URI para el primer despliegue." -ForegroundColor Yellow
             return
