@@ -339,6 +339,17 @@ resource "aws_ecs_service" "backend" {
 
   tags = var.tags
 
+  # Acota la espera de wait_for_steady_state. Sin esto rige el default del proveedor,
+  # 20 minutos, y un servicio que no converge deja el apply colgado todo ese rato antes
+  # de reportar el error. Diez minutos dejan margen sobre el arranque real —el
+  # aprovisionamiento y el pull rondan el minuto y medio, el backend tarda otro tanto en
+  # responder readiness, cloudflared solo arranca cuando el backend esta HEALTHY y el
+  # scheduler todavia tarda en emitir el evento— sin castigar el diagnostico.
+  timeouts {
+    create = "10m"
+    update = "10m"
+  }
+
   lifecycle {
     # Application Auto Scaling and the dev scheduler own the runtime count.
     # Terraform sets the initial value but image deployments must not reset it.
