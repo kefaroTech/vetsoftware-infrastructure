@@ -131,8 +131,9 @@ run "development_cost_profile_plans" {
       output.finops_alerts.actual_threshold_usd == 35 &&
       output.finops_alerts.anomaly_threshold_usd == 3 &&
       output.finops_alerts.email_enabled &&
-      output.finops_alerts.slack_enabled
+      output.finops_alerts.slack_enabled &&
+      output.finops_alerts.anomaly_monitor_arn == null
     )
-    error_message = "Dev debe alertar por correo y Slack al forecast USD 28, real USD 35 y anomalías desde USD 3."
+    error_message = "Dev debe alertar por correo y Slack al forecast USD 28 y real USD 35; el monitor de anomalías queda apagado hasta habilitar Cost Explorer en la cuenta."
   }
 }

@@ -101,16 +101,16 @@ run "environment_and_function_roles_are_isolated" {
     condition = alltrue([
       !strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secretsmanager:GetSecretValue"),
       !strcontains(data.aws_iam_policy_document.apply_identity["prod_apply"].json, "secretsmanager:GetSecretValue"),
-      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secret:vetsoftware-dev/*"),
-      strcontains(data.aws_iam_policy_document.apply_identity["prod_apply"].json, "secret:vetsoftware-prod/*"),
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secret:vetsoftware-dev*"),
+      strcontains(data.aws_iam_policy_document.apply_identity["prod_apply"].json, "secret:vetsoftware-prod*"),
     ])
     error_message = "Apply administra secretos por entorno, pero nunca puede leer sus valores."
   }
 
   assert {
     condition = alltrue([
-      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "secret:vetsoftware-dev/*"),
-      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "secret:vetsoftware-prod/*"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "secret:vetsoftware-dev*"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "secret:vetsoftware-prod*"),
       strcontains(data.aws_iam_policy_document.infrastructure_read["prod_plan"].json, "arn:aws:s3:::vetsoftware-prod-*"),
       !strcontains(data.aws_iam_policy_document.infrastructure_read["prod_plan"].json, "arn:aws:s3:::vetsoftware-dev-*"),
     ])
@@ -163,7 +163,29 @@ run "environment_and_function_roles_are_isolated" {
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "ce:CreateAnomalyMonitor"),
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "chatbot:CreateSlackChannelConfiguration"),
       strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "chatbot.amazonaws.com"),
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "management.chatbot.amazonaws.com"),
     ])
     error_message = "Plan y apply deben poder leer y administrar Cost Anomaly Detection y el canal Slack sin ampliar prod desde dev."
+  }
+
+  assert {
+    condition = alltrue([
+      !strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secret:vetsoftware-dev/*"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "secret:vetsoftware-dev/*"),
+      !strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secret:vetsoftware-prod*"),
+    ])
+    error_message = "El prefijo de secretos no debe llevar separador: vetsoftware-dev-valkey/connection queda fuera de secret:vetsoftware-dev/*."
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "secret:rds!*"),
+      strcontains(data.aws_iam_policy_document.apply_identity["prod_apply"].json, "secret:rds!*"),
+      length([
+        for statement in jsondecode(data.aws_iam_policy_document.apply_identity["dev_apply"].json).Statement :
+        statement if statement.Sid == "CreateRdsManagedMasterSecret"
+      ]) == 1,
+    ])
+    error_message = "Apply debe poder crear y etiquetar el secreto que RDS genera para el master user."
   }
 }

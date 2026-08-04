@@ -37,10 +37,24 @@ resource "aws_sns_topic_subscription" "email" {
 data "aws_iam_policy_document" "alarms" {
   count = local.notification_topic_enabled ? 1 : 0
 
+  # SNS valida cada accion contra el catalogo permitido en policies de topico y
+  # rechaza comodines como SNS:* con "Policy statement action out of service scope".
   statement {
-    sid     = "TopicOwnerFullAccess"
-    effect  = "Allow"
-    actions = ["SNS:*"]
+    sid    = "TopicOwnerFullAccess"
+    effect = "Allow"
+    actions = [
+      "SNS:AddPermission",
+      "SNS:DeleteTopic",
+      "SNS:GetDataProtectionPolicy",
+      "SNS:GetTopicAttributes",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:ListTagsForResource",
+      "SNS:Publish",
+      "SNS:PutDataProtectionPolicy",
+      "SNS:RemovePermission",
+      "SNS:SetTopicAttributes",
+      "SNS:Subscribe",
+    ]
 
     principals {
       type        = "AWS"
