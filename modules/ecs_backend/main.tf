@@ -159,12 +159,18 @@ locals {
       appProtocol   = "http"
     }]
 
+    # El presupuesto es startPeriod + retries * interval desde que arranca el
+    # contenedor. Con 60 y 5 la aplicacion no llegaba: tarda entre 90 y 120 segundos
+    # en levantar, asi que gastaba dos reintentos antes de estar viva, y el tercero
+    # llegaba justo cuando el DispatcherServlet se inicializa de forma perezosa con
+    # la primera peticion —que es el propio health check— y no cabia en 5 segundos.
+    # El contenedor moria por lento, no por caido.
     healthCheck = {
       command     = ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:${var.container_port}${var.health_check_path} >/dev/null || exit 1"]
       interval    = 30
-      timeout     = 5
+      timeout     = 10
       retries     = 3
-      startPeriod = 60
+      startPeriod = 180
     }
 
     environment = [for key in sort(keys(var.environment_variables)) : {
