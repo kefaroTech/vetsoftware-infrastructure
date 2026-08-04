@@ -162,3 +162,33 @@ restituye el output y el ciclo vuelve a conservar la imagen desplegada.
 Dos casos que el paso no resuelve. Si el servicio quedo en `DRAINING`, ECS todavia
 rechaza el nombre y no hay nada que importar: el ciclo avisa y hay que reintentar en
 unos minutos. Si quedo `INACTIVE`, no estorba, porque ECS permite reusar el nombre.
+
+## Forzar la imagen del backend
+
+El ciclo general nunca cambia la imagen: `Set-CurrentBackendImage` lee la que el
+servicio ECS tiene en ejecucion y la fija, de modo que un `apply` de infraestructura no
+puede revertir un despliegue. Los cambios de imagen van por `deploy-backend-dev/prod`,
+que recibe el digest como input y valida tags y escaneo.
+
+Ese diseño se atasca cuando la imagen en ejecucion esta rota. El servicio no alcanza
+steady state, el apply falla, y el apply siguiente vuelve a heredar la misma imagen
+rota. Y el circuito de imagen no puede rescatarlo: su guard rechaza cualquier plan con
+cambios fuera de la task definition y el servicio, asi que basta con que quede un
+recurso pendiente —por ejemplo los `aws_scheduler_schedule`, que dependen del propio
+servicio— para que tampoco pueda correr. Las dos vias se bloquean entre si.
+
+Para eso existe el input opcional `backend_image_uri` en `Terraform apply dev/prod`.
+Cuando se pasa un digest, el ciclo lo fija y se salta la lectura de ECS; vacio, el
+comportamiento es el de siempre. El valor viaja como variable de entorno
+`FORCE_BACKEND_IMAGE_URI` y el script lo valida contra el patron del ECR **del
+ambiente**, de modo que un digest de dev no puede aplicarse en prod ni al reves, y solo
+se aceptan referencias por digest inmutable, nunca por tag.
+
+Es una salida de emergencia, no la via normal: no certifica tags ni escaneo, cosa que
+`deploy-backend-*` si hace. Usela para desatascar y vuelva al circuito de imagen en
+cuanto el ambiente converja.
+
+Relacionado: `Set-CurrentBackendImage` solo hereda de un servicio en estado `ACTIVE`.
+Un servicio borrado sigue visible como `INACTIVE` cerca de una hora conservando su
+ultima task definition, y sin ese filtro el ciclo resucitaba la imagen de un servicio
+que ya no existia.
