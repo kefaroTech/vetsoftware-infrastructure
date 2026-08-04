@@ -31,6 +31,7 @@ locals {
   global_infrastructure_read_actions = [
     "application-autoscaling:Describe*",
     "budgets:Describe*",
+    "budgets:ListTagsForResource",
     "budgets:ViewBudget",
     "ce:GetAnomaly*",
     "ce:ListTagsForResource",
@@ -561,7 +562,10 @@ data "aws_iam_policy_document" "apply_global" {
     sid    = "ManageGlobalDnsCostAlertsAndChat"
     effect = "Allow"
     actions = [
+      # default_tags del provider hace que CreateBudget etiquete el presupuesto.
       "budgets:ModifyBudget",
+      "budgets:TagResource",
+      "budgets:UntagResource",
       "ce:CreateAnomalyMonitor",
       "ce:CreateAnomalySubscription",
       "ce:DeleteAnomalyMonitor",

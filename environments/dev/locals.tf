@@ -11,9 +11,12 @@ locals {
   application_bucket_name = var.application_bucket_name != "" ? var.application_bucket_name : "${local.name}-app-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
 
   backend_environment = merge({
-    SPRING_PROFILES_ACTIVE              = "prod"
-    SERVER_FORWARD_HEADERS_STRATEGY     = "framework"
-    DB_URL                              = "jdbc:mysql://${module.database.endpoint}:${module.database.port}/${module.database.database_name}?sslMode=VERIFY_IDENTITY&enabledTLSProtocols=TLSv1.2,TLSv1.3&serverTimezone=UTC"
+    SPRING_PROFILES_ACTIVE          = "prod"
+    SERVER_FORWARD_HEADERS_STRATEGY = "framework"
+    # REQUIRED cifra pero no valida la identidad del servidor. VERIFY_IDENTITY exige que la
+    # root de Amazon RDS este en el truststore del JVM, y ningun JDK la trae; hasta que la
+    # imagen del backend incorpore el bundle de RDS, VERIFY_IDENTITY rompe el arranque.
+    DB_URL                              = "jdbc:mysql://${module.database.endpoint}:${module.database.port}/${module.database.database_name}?sslMode=REQUIRED&enabledTLSProtocols=TLSv1.2,TLSv1.3&serverTimezone=UTC"
     DB_USERNAME                         = module.database.master_username
     PDF_MAX_CONCURRENT_RENDERS          = tostring(var.pdf_max_concurrent_renders)
     PDF_ACQUIRE_TIMEOUT                 = var.pdf_acquire_timeout
