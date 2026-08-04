@@ -43,11 +43,15 @@ locals {
   }, var.backend_extra_environment)
 
   backend_secrets = {
-    DB_PASSWORD                = "${module.database.master_secret_arn}:password::"
-    REDIS_URL                  = "${module.cache.connection_secret_arn}:REDIS_URL::"
-    JWT_SECRET                 = "${module.secrets.application_secret_arn}:JWT_SECRET::"
-    RESEND_API_KEY             = "${module.secrets.application_secret_arn}:RESEND_API_KEY::"
-    RECAPTCHA_SECRET           = "${module.secrets.application_secret_arn}:RECAPTCHA_SECRET::"
+    DB_PASSWORD      = "${module.database.master_secret_arn}:password::"
+    REDIS_URL        = "${module.cache.connection_secret_arn}:REDIS_URL::"
+    JWT_SECRET       = "${module.secrets.application_secret_arn}:JWT_SECRET::"
+    RESEND_API_KEY   = "${module.secrets.application_secret_arn}:RESEND_API_KEY::"
+    RECAPTCHA_SECRET = "${module.secrets.application_secret_arn}:RECAPTCHA_SECRET::"
+    # EncryptedStringConverter la lee con System.getenv en un inicializador estatico,
+    # no como propiedad de Spring: sin ella Hibernate no puede cargar la clase y el
+    # arranque muere antes del EntityManagerFactory.
+    DIAN_ENC_KEY               = "${module.secrets.application_secret_arn}:DIAN_ENC_KEY::"
     OTEL_EXPORTER_OTLP_HEADERS = "${module.secrets.grafana_secret_arn}:OTEL_EXPORTER_OTLP_HEADERS::"
   }
 }

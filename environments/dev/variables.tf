@@ -190,9 +190,13 @@ variable "valkey_maximum_ecpu_per_second" {
   default = 1000
 }
 
+# El secreto de aplicacion es write-only: Terraform solo lo reescribe cuando cambia
+# esta version. Subirla a 2 empuja el JSON que ahora incluye DIAN_ENC_KEY; sin el
+# bump, APPLICATION_SECRETS_JSON puede tener la clave y Secrets Manager seguir
+# sirviendo el contenido viejo.
 variable "application_secret_version" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "grafana_secret_version" {
@@ -206,7 +210,7 @@ variable "cloudflare_tunnel_token_version" {
 }
 
 variable "application_secrets_json" {
-  description = "JSON con JWT_SECRET, RESEND_API_KEY y RECAPTCHA_SECRET."
+  description = "JSON con JWT_SECRET, RESEND_API_KEY, RECAPTCHA_SECRET y DIAN_ENC_KEY (AES-256, 32 bytes en base64)."
   type        = string
   sensitive   = true
   ephemeral   = true
