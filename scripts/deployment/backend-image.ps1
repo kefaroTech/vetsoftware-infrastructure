@@ -85,7 +85,10 @@ function Assert-RequiredEnvironmentVariable {
 }
 
 function Write-WorkflowSummary {
-    param([Parameter(Mandatory)][string[]]$Lines)
+    # Mandatory aplica una validacion implicita de "no vacio" a cada elemento del
+    # array, y el resumen usa lineas en blanco como separadores de markdown: sin
+    # AllowEmptyString, escribirlo falla con "Cannot bind argument".
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
 
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $Lines -Encoding utf8
