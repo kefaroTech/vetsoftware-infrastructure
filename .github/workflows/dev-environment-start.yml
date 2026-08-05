@@ -1,0 +1,51 @@
+name: Start dev environment
+
+# Enciende a mano lo que el apagado programado detiene: la instancia RDS y las
+# tareas del servicio ECS. Util para trabajar fuera de la franja 07:30-20:00, y
+# para desplegar de noche sin que el circuito de imagen tenga que levantar nada.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Mismo grupo que el resto de los ciclos de dev: encender o apagar el ambiente no
+# puede cruzarse con un despliegue ni con un apply.
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+jobs:
+  start:
+    name: Start dev environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: iac-apply-dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-apply-dev
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate AWS configuration
+        shell: pwsh
+        run: |
+          if ($env:AWS_ACCOUNT_ID -notmatch '^\d{12}$') {
+            throw "Configure AWS_ACCOUNT_ID con los 12 digitos de la cuenta AWS en iac-apply-dev."
+          }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Start the development environment
+        shell: pwsh
+        run: ./scripts/operations/dev-environment.ps1 -Mode Start
