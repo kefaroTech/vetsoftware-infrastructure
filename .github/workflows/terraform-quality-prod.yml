@@ -41,7 +41,14 @@ jobs:
         uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
         with:
           tflint_version: v0.64.0
+          github_token: ${{ github.token }}
 
       - name: Run the quality gate scoped to the production root
+        # Sin token, la descarga del plugin de TFLint va sin autenticar contra
+        # la API de GitHub y comparte el limite de 60 por hora con las demas IP
+        # del runner: el gate se cae con un 403 que no tiene nada que ver con el
+        # codigo. Con el token del run el limite pasa a ser propio.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: ./scripts/quality/terraform-gate.ps1 -Mode ci -Roots environments/prod
