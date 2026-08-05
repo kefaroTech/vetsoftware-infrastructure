@@ -38,6 +38,28 @@ resource "aws_ecr_repository" "this" {
   }
 }
 
+# El scan_on_push de cada repositorio es la configuracion heredada, y queda
+# sombreada en cuanto el registro tiene una configuracion propia: Terraform sigue
+# mostrando true mientras AWS no escanea nada. Eso fue exactamente lo que paso —
+# el primer despliegue real se rechazo porque ninguna imagen del backend llegaba
+# a tener escaneo— asi que la configuracion del registro se declara aca en vez de
+# depender de como quedo la cuenta.
+#
+# Es un recurso unico por cuenta y region. No colisiona entre ambientes porque
+# dev y prod viven en cuentas distintas, cada una con su propio registro.
+resource "aws_ecr_registry_scanning_configuration" "this" {
+  scan_type = "BASIC"
+
+  rule {
+    scan_frequency = "SCAN_ON_PUSH"
+
+    repository_filter {
+      filter      = "*"
+      filter_type = "WILDCARD"
+    }
+  }
+}
+
 resource "aws_ecr_lifecycle_policy" "this" {
   for_each = aws_ecr_repository.this
 
