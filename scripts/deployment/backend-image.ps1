@@ -236,6 +236,24 @@ function Get-ImageScanState {
     }
 }
 
+# SCAN_ON_PUSH solo alcanza a las imagenes empujadas despues de configurarlo. Para
+# una anterior -o para un escaneo que expiro- se pide uno a demanda, que el
+# escaneo basico admite una vez cada 24 horas por imagen. Si no se puede, el gate
+# sigue su curso y termina con el diagnostico de siempre.
+function Start-ImageScanOnce {
+    param([Parameter(Mandatory)][string]$Digest)
+
+    Write-Host "[ECR] Sin escaneo registrado; solicitando uno a demanda..." -ForegroundColor Cyan
+    & aws ecr start-image-scan `
+        --repository-name $repositoryName `
+        --image-id "imageDigest=$Digest" `
+        --output json | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "No fue posible iniciar el escaneo a demanda; se evalúa lo que ECR tenga registrado."
+    }
+}
+
 function Assert-ImageIntegrity {
     param(
         [Parameter(Mandatory)][string]$Digest,
@@ -258,6 +276,12 @@ function Assert-ImageIntegrity {
     $missingDeadline = (Get-Date).AddMinutes(3)
     $progressDeadline = (Get-Date).AddMinutes(10)
     $state = Get-ImageScanState -Digest $platform.Digest
+
+    if ([string]::IsNullOrWhiteSpace($state.Status)) {
+        Start-ImageScanOnce -Digest $platform.Digest
+        $state = Get-ImageScanState -Digest $platform.Digest
+    }
+
     while ($state.Status -notin $terminal) {
         $deadline = if ([string]::IsNullOrWhiteSpace($state.Status)) { $missingDeadline } else { $progressDeadline }
         if ((Get-Date) -ge $deadline) { break }

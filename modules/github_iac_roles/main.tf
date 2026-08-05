@@ -299,6 +299,11 @@ data "aws_iam_policy_document" "infrastructure_read" {
       # -commit completo y URL del run que la publico- sin pedirselos a quien
       # despliega. Es solo lectura y esta acotado al repositorio del backend.
       "ecr:GetDownloadUrlForLayer",
+      # Dispara un escaneo cuando la imagen no tiene ninguno: el caso de una
+      # imagen publicada antes de que el registro tuviera SCAN_ON_PUSH. No
+      # modifica la imagen ni la infraestructura, y esta acotado al mismo
+      # repositorio.
+      "ecr:StartImageScan",
     ]
     resources = [
       "arn:${var.aws_partition}:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.backend_repository_name}"
