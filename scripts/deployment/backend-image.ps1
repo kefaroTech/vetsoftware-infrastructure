@@ -209,48 +209,92 @@ function Resolve-PlatformManifest {
     throw "No fue posible resolver el manifiesto de plataforma de $Digest."
 }
 
-# describe-images devuelve el estado del escaneo y el resumen de severidades sin
-# fallar cuando todavia no hay escaneo, asi que evita tener que distinguir un
-# ScanNotFoundException de un error real de permisos.
+# La fuente de verdad del escaneo es describe-image-scan-findings, la misma que
+# consulta el waiter de AWS. describe-images parece mas comodo -no falla cuando no
+# hay escaneo- pero puede no exponer todavia imageScanStatus mientras el escaneo
+# esta en vuelo, y eso hace ver como "sin escaneo" a una imagen que si lo tiene.
+# Aqui el error se captura a un archivo para distinguir un ScanNotFoundException,
+# que es "todavia no", de un error real de permisos.
 function Get-ImageScanState {
     param([Parameter(Mandatory)][string]$Digest)
 
-    $response = Get-ExternalJson -Command "aws" -Arguments @(
-        "ecr", "describe-images",
-        "--repository-name", $repositoryName,
-        "--image-ids", "imageDigest=$Digest",
-        "--output", "json"
-    )
-    $detail = @($response.imageDetails) | Select-Object -First 1
-    $counts = $detail.imageScanFindingsSummary.findingSeverityCounts
-    $critical = 0
-    $high = 0
-    if ($null -ne $counts.CRITICAL) { $critical = [int]$counts.CRITICAL }
-    if ($null -ne $counts.HIGH) { $high = [int]$counts.HIGH }
+    $errorPath = Join-Path ([System.IO.Path]::GetTempPath()) ("ecr-scan-" + [Guid]::NewGuid().ToString("N") + ".err")
 
-    return [PSCustomObject]@{
-        Status      = [string]$detail.imageScanStatus.status
-        Description = [string]$detail.imageScanStatus.description
-        Critical    = $critical
-        High        = $high
+    try {
+        $raw = & aws ecr describe-image-scan-findings `
+            --repository-name $repositoryName `
+            --image-id "imageDigest=$Digest" `
+            --output json 2>$errorPath
+
+        if ($LASTEXITCODE -ne 0) {
+            $detail = ""
+            if (Test-Path -LiteralPath $errorPath) {
+                $detail = ((Get-Content -LiteralPath $errorPath -Raw) -replace '\s+', ' ').Trim()
+            }
+
+            return [PSCustomObject]@{
+                Status      = ""
+                Description = $detail
+                Critical    = 0
+                High        = 0
+            }
+        }
+
+        $scan = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+        $counts = $scan.imageScanFindings.findingSeverityCounts
+        $critical = 0
+        $high = 0
+        if ($null -ne $counts.CRITICAL) { $critical = [int]$counts.CRITICAL }
+        if ($null -ne $counts.HIGH) { $high = [int]$counts.HIGH }
+
+        return [PSCustomObject]@{
+            Status      = [string]$scan.imageScanStatus.status
+            Description = [string]$scan.imageScanStatus.description
+            Critical    = $critical
+            High        = $high
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
     }
 }
 
 # SCAN_ON_PUSH solo alcanza a las imagenes empujadas despues de configurarlo. Para
 # una anterior -o para un escaneo que expiro- se pide uno a demanda, que el
-# escaneo basico admite una vez cada 24 horas por imagen. Si no se puede, el gate
-# sigue su curso y termina con el diagnostico de siempre.
+# escaneo basico admite una vez cada 24 horas por imagen.
+#
+# Devuelve si conviene seguir esperando: la quota agotada significa que ya hubo un
+# escaneo en las ultimas 24 horas, o sea que hay uno en vuelo y merece el margen
+# largo en vez del corto de "esto no va a aparecer nunca".
 function Start-ImageScanOnce {
     param([Parameter(Mandatory)][string]$Digest)
 
-    Write-Host "[ECR] Sin escaneo registrado; solicitando uno a demanda..." -ForegroundColor Cyan
-    & aws ecr start-image-scan `
-        --repository-name $repositoryName `
-        --image-id "imageDigest=$Digest" `
-        --output json | Out-Null
+    $errorPath = Join-Path ([System.IO.Path]::GetTempPath()) ("ecr-start-scan-" + [Guid]::NewGuid().ToString("N") + ".err")
 
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "No fue posible iniciar el escaneo a demanda; se evalúa lo que ECR tenga registrado."
+    try {
+        Write-Host "[ECR] Sin escaneo registrado; solicitando uno a demanda..." -ForegroundColor Cyan
+        & aws ecr start-image-scan `
+            --repository-name $repositoryName `
+            --image-id "imageDigest=$Digest" `
+            --output json 2>$errorPath | Out-Null
+
+        if ($LASTEXITCODE -eq 0) { return $true }
+
+        $detail = ""
+        if (Test-Path -LiteralPath $errorPath) {
+            $detail = ((Get-Content -LiteralPath $errorPath -Raw) -replace '\s+', ' ').Trim()
+        }
+
+        if ($detail -match "LimitExceededException") {
+            Write-Host "[ECR] La imagen ya consumió su escaneo del período; hay uno en vuelo." -ForegroundColor Cyan
+            return $true
+        }
+
+        Write-Warning "No fue posible iniciar el escaneo a demanda: $detail"
+        return $false
+    }
+    finally {
+        Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -271,19 +315,26 @@ function Assert-ImageIntegrity {
     # hallazgos utilizables.
     $terminal = @("COMPLETE", "ACTIVE", "FAILED", "UNSUPPORTED_IMAGE", "SCAN_ELIGIBILITY_EXPIRED", "FINDINGS_UNAVAILABLE")
     # Un escaneo en curso progresa y merece los diez minutos. Uno que nunca se
-    # encolo -estado vacio- no va a aparecer por esperarlo: se corta antes, con el
-    # margen justo para que ECR registre el escaneo de una imagen recien empujada.
+    # encolo no va a aparecer por esperarlo: se corta antes, con el margen justo
+    # para que ECR registre el de una imagen recien empujada. En cuanto sabemos
+    # que hay uno en vuelo, el corto deja de aplicar.
     $missingDeadline = (Get-Date).AddMinutes(3)
     $progressDeadline = (Get-Date).AddMinutes(10)
+    $scanPending = $false
     $state = Get-ImageScanState -Digest $platform.Digest
 
     if ([string]::IsNullOrWhiteSpace($state.Status)) {
-        Start-ImageScanOnce -Digest $platform.Digest
+        $scanPending = Start-ImageScanOnce -Digest $platform.Digest
         $state = Get-ImageScanState -Digest $platform.Digest
     }
 
     while ($state.Status -notin $terminal) {
-        $deadline = if ([string]::IsNullOrWhiteSpace($state.Status)) { $missingDeadline } else { $progressDeadline }
+        $deadline = if ([string]::IsNullOrWhiteSpace($state.Status) -and -not $scanPending) {
+            $missingDeadline
+        }
+        else {
+            $progressDeadline
+        }
         if ((Get-Date) -ge $deadline) { break }
         Start-Sleep -Seconds 15
         $state = Get-ImageScanState -Digest $platform.Digest
@@ -291,7 +342,11 @@ function Assert-ImageIntegrity {
 
     if ($state.Status -in @("COMPLETE", "ACTIVE")) {
         if ($state.Critical -ne 0 -or $state.High -ne 0) {
-            throw "El escaneo ECR rechazó la imagen: critical=$($state.Critical), high=$($state.High)."
+            throw (@(
+                    "El escaneo ECR rechazó la imagen: critical=$($state.Critical), high=$($state.High).",
+                    "  Para ver los hallazgos:",
+                    "  aws ecr describe-image-scan-findings --repository-name $repositoryName --image-id imageDigest=$($platform.Digest)"
+                ) -join [Environment]::NewLine)
         }
 
         Write-Host "[ECR] Imagen certificada: $ExpectedImageUri" -ForegroundColor Green
@@ -299,7 +354,7 @@ function Assert-ImageIntegrity {
     }
 
     $reason = if ([string]::IsNullOrWhiteSpace($state.Status)) {
-        "ECR no registró ningún escaneo para ese manifiesto"
+        "ECR no registró ningún escaneo para ese manifiesto. $($state.Description)".Trim()
     }
     else {
         "el escaneo terminó en $($state.Status). $($state.Description)".Trim()
