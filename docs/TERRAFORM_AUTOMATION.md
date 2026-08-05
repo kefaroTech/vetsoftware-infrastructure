@@ -85,6 +85,13 @@ vacio y el ECR todavia no publica nada, el plan usa un digest marcador para
 poder revisarse igual y lo anuncia como advertencia; el apply sigue exigiendo un
 digest real.
 
+`TF_VARS_JSON` lleva las variables no sensibles del ambiente -alertas, presupuesto,
+umbrales- y `deploy-backend-dev/prod` **tambien la consume**, no solo plan, apply y
+drift. Si el despliegue de imagen no la ve, su plan diverge del real y pide destruir
+lo que esas variables sostienen: el guard image-only lo rechaza por tocar recursos
+fuera de ECS, sin que haya nada mal en la imagen. Debe estar en los cuatro
+Environments del ambiente, plan y apply.
+
 El rol OIDC, el bucket y la KMS key del state no se configuran: se derivan de la
 convencion que fija `bootstrap/state-backend.yml`. Cada workflow arma el ARN como
 `arn:aws:iam::<AWS_ACCOUNT_ID>:role/vetsoftware-iac-<funcion>-<ambiente>`, y

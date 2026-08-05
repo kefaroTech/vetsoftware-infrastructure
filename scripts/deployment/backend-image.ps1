@@ -413,6 +413,55 @@ function Resolve-StateBackend {
     }
 }
 
+# Mismo contrato que New-OptionalVariableFile de .github/scripts/terraform-cycle.ps1.
+# El ciclo general pasa las variables no sensibles del ambiente por TF_VARS_JSON; si
+# el despliegue de imagen no las ve, su plan diverge del real y pide destruir lo que
+# esas variables sostienen -las alertas de costo, por ejemplo-, con lo que el guard
+# image-only lo rechaza sin que haya nada mal.
+function New-OptionalVariableFile {
+    if ([string]::IsNullOrWhiteSpace($env:TF_VARS_JSON)) {
+        return ""
+    }
+
+    try {
+        $configuration = $env:TF_VARS_JSON | ConvertFrom-Json
+    }
+    catch {
+        throw "TF_VARS_JSON no contiene un objeto JSON válido: $($_.Exception.Message)"
+    }
+    if ($null -eq $configuration -or $configuration -isnot [PSCustomObject]) {
+        throw "TF_VARS_JSON debe ser un objeto JSON."
+    }
+
+    # backend_image_uri lo fija este script con el digest ya certificado, y el resto
+    # son secretos que nunca deben viajar en una variable de repositorio.
+    $forbiddenVariables = @(
+        "application_secrets_json",
+        "backend_image_uri",
+        "cloudflare_tunnel_token",
+        "environment",
+        "grafana_secrets_json"
+    )
+    $forbiddenConfigured = @(@($configuration.PSObject.Properties.Name) | Where-Object {
+        $_ -in $forbiddenVariables
+    })
+    if ($forbiddenConfigured.Count -gt 0) {
+        throw "TF_VARS_JSON contiene variables reservadas o sensibles: $($forbiddenConfigured -join ', ')."
+    }
+
+    $temporaryDirectory = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+        [IO.Path]::GetTempPath()
+    }
+    else {
+        $env:RUNNER_TEMP
+    }
+    $variableFile = Join-Path $temporaryDirectory "terraform-$Environment.auto.tfvars.json"
+    $configuration | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $variableFile -Encoding utf8
+
+    Write-Host "[Terraform] Variables del ambiente tomadas de TF_VARS_JSON." -ForegroundColor Cyan
+    return $variableFile
+}
+
 function Initialize-Terraform {
     Write-Host "[Terraform] Inicializando state remoto de $Environment..." -ForegroundColor Cyan
     $arguments = @(
@@ -445,12 +494,24 @@ function New-GuardedPlan {
 
     $env:TF_VAR_backend_image_uri = $ImageUri
     Write-Host "[Terraform] Generando plan image-only..." -ForegroundColor Cyan
-    & terraform "-chdir=$environmentDirectory" plan `
-        -input=false `
-        -lock-timeout=5m `
-        -out=$PlanPath `
-        -no-color `
-        -detailed-exitcode | ForEach-Object { Write-Host $_ }
+    # Los argumentos van citados y en un array. Sin comillas, PowerShell pasa
+    # -out=$PlanPath literal -no expande una variable dentro de un token que
+    # empieza con guion-, terraform guarda el plan en un archivo llamado
+    # "$PlanPath" dentro del directorio del -chdir, y el show siguiente falla
+    # buscandolo en la ruta absoluta.
+    $planArguments = @(
+        "-chdir=$environmentDirectory",
+        "plan",
+        "-input=false",
+        "-lock-timeout=5m",
+        "-out=$PlanPath",
+        "-no-color",
+        "-detailed-exitcode"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($script:variableFile)) {
+        $planArguments += "-var-file=$script:variableFile"
+    }
+    & terraform @planArguments | ForEach-Object { Write-Host $_ }
     $planExitCode = $LASTEXITCODE
     if ($planExitCode -notin @(0, 2)) {
         throw "terraform plan falló con código $planExitCode."
@@ -721,6 +782,7 @@ if ($null -ne $serviceState) {
     }
 }
 
+$script:variableFile = New-OptionalVariableFile
 $planPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-$Mode.tfplan"
 $changeCount = New-GuardedPlan -ImageUri $imageUri -PlanPath $planPath -SummaryDetails $summaryDetails
 
