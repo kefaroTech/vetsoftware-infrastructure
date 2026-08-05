@@ -1,26 +1,20 @@
 name: Deploy backend image dev
 
-# Circuito de imagen de desarrollo. La identidad del artefacto es el commit de
-# develop, no una release: el digest debe llevar el tag dev-<12>.
+# Circuito de imagen de desarrollo. Un solo campo: la version que publico el
+# pipeline del backend. El digest, el commit y el run de origen se resuelven
+# desde ECR, y la forma X.Y.Z-dev.N es lo que impide desplegar aca una release.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Development tag (dev-<12 characters of the commit>)"
+        description: "Versión de desarrollo publicada desde develop (X.Y.Z-dev.N)"
         required: true
         type: string
-      image_digest:
-        description: "Immutable ECR digest (sha256:...)"
-        required: true
-        type: string
-      source_commit:
-        description: "Full backend commit SHA published from develop"
-        required: true
-        type: string
-      source_run_url:
-        description: "Auditable backend publication run URL"
-        required: true
-        type: string
+      allow_rollback:
+        description: "Permitir desplegar una versión anterior a la que está corriendo"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -81,19 +75,15 @@ jobs:
 
       - name: Certify image and guard Terraform plan
         env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
           IMAGE_VERSION: ${{ inputs.version }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+          ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
         shell: pwsh
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Plan `
             -Environment dev `
             -Version $env:IMAGE_VERSION `
-            -ImageDigest $env:IMAGE_DIGEST `
-            -SourceCommit $env:SOURCE_COMMIT `
-            -SourceRunUrl $env:SOURCE_RUN_URL
+            -AllowRollback:($env:ALLOW_ROLLBACK -eq 'true')
 
   apply:
     name: Approve, deploy and verify dev
@@ -142,16 +132,12 @@ jobs:
 
       - name: Deploy immutable image, verify and roll back on failure
         env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
           IMAGE_VERSION: ${{ inputs.version }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+          ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
         shell: pwsh
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Apply `
             -Environment dev `
             -Version $env:IMAGE_VERSION `
-            -ImageDigest $env:IMAGE_DIGEST `
-            -SourceCommit $env:SOURCE_COMMIT `
-            -SourceRunUrl $env:SOURCE_RUN_URL
+            -AllowRollback:($env:ALLOW_ROLLBACK -eq 'true')
