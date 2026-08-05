@@ -66,15 +66,47 @@ function Assert-EnvironmentResources {
     return ([string]$status).Trim()
 }
 
-function Get-ServiceDesiredCount {
-    $desired = (& aws ecs describe-services `
+# El desired count solo dice lo que el servicio pretende. Un deployment que el
+# circuit breaker marco fallido -y que no encontro revision estable a la que
+# volver- deja el servicio pidiendo tareas y sin levantar ninguna, sin reintentar
+# nunca mas. Por eso hace falta mirar tambien cuantas corren de verdad.
+function Get-ServiceCounts {
+    $raw = (& aws ecs describe-services `
             --cluster $clusterName --services $serviceName `
-            --query "services[0].desiredCount" --output text)
+            --query "services[0].[desiredCount,runningCount]" --output text)
     if ($LASTEXITCODE -ne 0) {
-        throw "No fue posible leer el desired count del servicio."
+        throw "No fue posible leer el estado del servicio."
     }
 
-    return [int]$desired
+    $parts = ([string]$raw).Trim() -split "\s+"
+    if ($parts.Count -lt 2) {
+        throw "Respuesta inesperada al leer el estado del servicio: '$raw'."
+    }
+
+    return [PSCustomObject]@{
+        Desired = [int]$parts[0]
+        Running = [int]$parts[1]
+    }
+}
+
+# Vuelve a poner en marcha un servicio atascado tras un deployment fallido: ECS
+# arranca un deployment nuevo con la task definition vigente.
+function Start-NewDeployment {
+    Write-Host "[ECS] El servicio pide tareas pero no tiene ninguna corriendo; se fuerza un deployment nuevo..." -ForegroundColor Cyan
+    & aws ecs update-service `
+        --cluster $clusterName `
+        --service $serviceName `
+        --force-new-deployment `
+        --query "service.desiredCount" --output text | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "No fue posible forzar un deployment nuevo."
+    }
+
+    Invoke-ExternalCommand -Command "aws" -Arguments @(
+        "ecs", "wait", "services-stable",
+        "--cluster", $clusterName,
+        "--services", $serviceName
+    )
 }
 
 function Set-ServiceDesiredCount {
@@ -107,8 +139,8 @@ function Wait-DatabaseAvailable {
 
 Write-Host "== $Mode del ambiente $environment ==" -ForegroundColor Cyan
 $databaseStatus = Assert-EnvironmentResources
-$previousDesiredCount = Get-ServiceDesiredCount
-Write-Host "Estado inicial: base '$databaseStatus', servicio en $previousDesiredCount tarea(s)." -ForegroundColor Cyan
+$serviceCounts = Get-ServiceCounts
+Write-Host "Estado inicial: base '$databaseStatus', servicio con $($serviceCounts.Running) de $($serviceCounts.Desired) tarea(s) corriendo." -ForegroundColor Cyan
 
 if ($Mode -eq "Start") {
     # La base primero: una tarea que arranca sin base muere en Liquibase y el
@@ -129,11 +161,14 @@ if ($Mode -eq "Start") {
         Write-Host "[RDS] La base ya estaba disponible." -ForegroundColor Green
     }
 
-    if ($previousDesiredCount -lt $runningDesiredCount) {
+    if ($serviceCounts.Desired -lt $runningDesiredCount) {
         Set-ServiceDesiredCount -DesiredCount $runningDesiredCount
     }
+    elseif ($serviceCounts.Running -lt $serviceCounts.Desired) {
+        Start-NewDeployment
+    }
     else {
-        Write-Host "[ECS] El servicio ya tenía $previousDesiredCount tarea(s)." -ForegroundColor Green
+        Write-Host "[ECS] El servicio ya tenía $($serviceCounts.Running) tarea(s) corriendo." -ForegroundColor Green
     }
 
     Write-Host "Ambiente $environment encendido." -ForegroundColor Green
@@ -148,7 +183,7 @@ if ($Mode -eq "Start") {
 else {
     # Al reves que el arranque: primero las tareas, para no dejar la aplicacion
     # golpeando una base que se esta deteniendo.
-    if ($previousDesiredCount -gt 0) {
+    if ($serviceCounts.Desired -gt 0) {
         Set-ServiceDesiredCount -DesiredCount 0
     }
     else {
