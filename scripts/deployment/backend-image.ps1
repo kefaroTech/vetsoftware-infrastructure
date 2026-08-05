@@ -743,20 +743,42 @@ function Assert-ServiceDeployment {
         "--services", $ServiceState.ServiceName
     )
 
-    $serviceResponse = Get-ExternalJson -Command "aws" -Arguments @(
-        "ecs", "describe-services",
-        "--cluster", $ServiceState.ClusterName,
-        "--services", $ServiceState.ServiceName,
-        "--output", "json"
-    )
-    $service = @($serviceResponse.services) | Select-Object -First 1
-    $primary = @($service.deployments | Where-Object { $_.status -eq "PRIMARY" }) | Select-Object -First 1
+    # El waiter da el servicio por estable en cuanto runningCount alcanza a
+    # desiredCount con un solo deployment, pero ECS tarda unos segundos mas en
+    # marcar rolloutState como COMPLETED. Leerlo de inmediato lo encuentra en
+    # IN_PROGRESS y dispara un rollback que nada justifica, sobre un despliegue que
+    # de hecho funciono. Se espera a que el estado se asiente; FAILED corta al
+    # instante, que es lo unico que si es un fallo.
+    $rolloutDeadline = (Get-Date).AddMinutes(3)
+    $service = $null
+    $primary = $null
+
+    while ($true) {
+        $serviceResponse = Get-ExternalJson -Command "aws" -Arguments @(
+            "ecs", "describe-services",
+            "--cluster", $ServiceState.ClusterName,
+            "--services", $ServiceState.ServiceName,
+            "--output", "json"
+        )
+        $service = @($serviceResponse.services) | Select-Object -First 1
+        $primary = @($service.deployments | Where-Object { $_.status -eq "PRIMARY" }) | Select-Object -First 1
+        $rolloutState = [string]$primary.rolloutState
+
+        if ($rolloutState -eq "COMPLETED") { break }
+        if ($rolloutState -eq "FAILED") {
+            throw "El deployment PRIMARY falló: $(([string]$primary.rolloutStateReason).Trim())"
+        }
+        if ((Get-Date) -ge $rolloutDeadline) {
+            $rollout = if ($null -eq $primary) { "sin deployment PRIMARY" } else { "rolloutState=$rolloutState. $($primary.rolloutStateReason)" }
+            throw "El deployment PRIMARY no terminó a tiempo: $($rollout.Trim())"
+        }
+
+        Write-Host "[ECS] El rollout figura en '$rolloutState'; se espera a que ECS lo cierre." -ForegroundColor Cyan
+        Start-Sleep -Seconds 10
+    }
+
     if ($service.runningCount -ne $service.desiredCount -or $service.pendingCount -ne 0) {
         throw "ECS no está estable: desired=$($service.desiredCount), running=$($service.runningCount), pending=$($service.pendingCount)."
-    }
-    if ($null -eq $primary -or $primary.rolloutState -ne "COMPLETED") {
-        $rollout = if ($null -eq $primary) { "sin deployment PRIMARY" } else { "rolloutState=$($primary.rolloutState). $($primary.rolloutStateReason)" }
-        throw "El deployment PRIMARY no terminó correctamente: $($rollout.Trim())"
     }
 
     $taskDefinitionResponse = Get-ExternalJson -Command "aws" -Arguments @(
