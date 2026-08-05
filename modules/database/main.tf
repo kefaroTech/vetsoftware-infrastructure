@@ -9,9 +9,12 @@ resource "aws_db_parameter_group" "this" {
   family      = var.parameter_group_family
   description = "VetSoftware secure MySQL defaults"
 
+  # RDS normaliza este booleano a 1, asi que declararlo como "ON" deja un diff
+  # perpetuo: todo plan pide reescribir el bloque y el guard image-only del
+  # despliegue lo rechaza por tocar un recurso fuera de ECS.
   parameter {
     name  = "require_secure_transport"
-    value = "ON"
+    value = "1"
   }
 
   parameter {
