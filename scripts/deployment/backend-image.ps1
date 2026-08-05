@@ -252,9 +252,15 @@ function Assert-ImageIntegrity {
     # del escaneo basico. El resto de los terminales significan que no va a haber
     # hallazgos utilizables.
     $terminal = @("COMPLETE", "ACTIVE", "FAILED", "UNSUPPORTED_IMAGE", "SCAN_ELIGIBILITY_EXPIRED", "FINDINGS_UNAVAILABLE")
-    $deadline = (Get-Date).AddMinutes(10)
+    # Un escaneo en curso progresa y merece los diez minutos. Uno que nunca se
+    # encolo -estado vacio- no va a aparecer por esperarlo: se corta antes, con el
+    # margen justo para que ECR registre el escaneo de una imagen recien empujada.
+    $missingDeadline = (Get-Date).AddMinutes(3)
+    $progressDeadline = (Get-Date).AddMinutes(10)
     $state = Get-ImageScanState -Digest $platform.Digest
-    while ($state.Status -notin $terminal -and (Get-Date) -lt $deadline) {
+    while ($state.Status -notin $terminal) {
+        $deadline = if ([string]::IsNullOrWhiteSpace($state.Status)) { $missingDeadline } else { $progressDeadline }
+        if ((Get-Date) -ge $deadline) { break }
         Start-Sleep -Seconds 15
         $state = Get-ImageScanState -Digest $platform.Digest
     }
