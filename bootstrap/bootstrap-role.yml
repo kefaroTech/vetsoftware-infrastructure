@@ -144,6 +144,13 @@ Resources:
                     - IsProduction
                     - !Sub "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${ProjectName}-public-front"
                     - !Ref AWS::NoValue
+              - Sid: ManageRegistryScanningConfiguration
+                Effect: Allow
+                Action:
+                  - ecr:PutRegistryScanningConfiguration
+                  - ecr:GetRegistryScanningConfiguration
+                  - ecr:BatchGetRepositoryScanningConfiguration
+                Resource: "*"
               - Sid: ManageEnvironmentAutomationRoles
                 Effect: Allow
                 Action:
