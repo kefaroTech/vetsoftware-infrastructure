@@ -877,6 +877,35 @@ $databaseIdentifier = ""
 
 try {
     try {
+        # La base va antes del apply, no despues. El servicio tiene
+        # wait_for_steady_state, asi que si ya hay tareas corriendo el propio apply
+        # dispara un deployment y espera a que levante: sin base, esas tareas mueren
+        # en Liquibase y el circuit breaker termina cortando el apply con "No
+        # rollback candidate was found". Condicionarlo al desired_count tampoco
+        # servia, porque una corrida anterior puede haber dejado el servicio en uno.
+        $databaseIdentifier = Get-DatabaseIdentifier
+        if ([string]::IsNullOrWhiteSpace($databaseIdentifier)) {
+            throw "No fue posible resolver la instancia RDS desde el output database_endpoint."
+        }
+
+        $databaseStatus = Get-DatabaseStatus -Identifier $databaseIdentifier
+        if ($databaseStatus -eq "stopped") {
+            Write-Warning "La base está apagada por el horario programado; se arranca para poder desplegar y verificar, y se vuelve a apagar al final."
+            Write-Host "[RDS] Arrancando $databaseIdentifier..." -ForegroundColor Cyan
+            Invoke-ExternalCommand -Command "aws" -Arguments @(
+                "rds", "start-db-instance",
+                "--db-instance-identifier", $databaseIdentifier,
+                "--query", "DBInstance.DBInstanceStatus", "--output", "text"
+            )
+            # Solo se apaga lo que este script haya arrancado.
+            $startedDatabase = $true
+            Wait-DatabaseAvailable -Identifier $databaseIdentifier
+        }
+        elseif ($databaseStatus -ne "available") {
+            Write-Host "[RDS] $databaseIdentifier está en estado '$databaseStatus'; se espera a que quede disponible." -ForegroundColor Cyan
+            Wait-DatabaseAvailable -Identifier $databaseIdentifier
+        }
+
         if ($changeCount -gt 0) {
             Write-Host "[Terraform] Aplicando el plan aprobado..." -ForegroundColor Cyan
             Invoke-ExternalCommand -Command "terraform" -Arguments @(
@@ -884,34 +913,10 @@ try {
             )
         }
 
-        # Se levanta despues del apply para que la tarea nazca con la revision
-        # nueva, en vez de arrancar con la vieja y reemplazarla enseguida. Y la
-        # base va primero: sin ella la tarea muere en Liquibase.
+        # Con el servicio en cero el apply no despliega nada, asi que se levanta una
+        # tarea aca: nace con la revision nueva y da algo real que verificar.
         if ($serviceState.DesiredCount -eq 0) {
-            Write-Warning "El ambiente está apagado por el horario programado; se levanta lo mínimo para poder verificar el despliegue."
-
-            $databaseIdentifier = Get-DatabaseIdentifier
-            if ([string]::IsNullOrWhiteSpace($databaseIdentifier)) {
-                throw "No fue posible resolver la instancia RDS desde el output database_endpoint; sin base no tiene sentido verificar."
-            }
-
-            $databaseStatus = Get-DatabaseStatus -Identifier $databaseIdentifier
-            if ($databaseStatus -eq "stopped") {
-                Write-Host "[RDS] Arrancando $databaseIdentifier..." -ForegroundColor Cyan
-                Invoke-ExternalCommand -Command "aws" -Arguments @(
-                    "rds", "start-db-instance",
-                    "--db-instance-identifier", $databaseIdentifier,
-                    "--query", "DBInstance.DBInstanceStatus", "--output", "text"
-                )
-                # Solo se apaga lo que este script haya arrancado.
-                $startedDatabase = $true
-                Wait-DatabaseAvailable -Identifier $databaseIdentifier
-            }
-            elseif ($databaseStatus -ne "available") {
-                Write-Host "[RDS] $databaseIdentifier está en estado '$databaseStatus'; se espera a que quede disponible." -ForegroundColor Cyan
-                Wait-DatabaseAvailable -Identifier $databaseIdentifier
-            }
-
+            Write-Warning "El servicio está en cero tareas; se levanta una para poder verificar el despliegue."
             Set-ServiceDesiredCount -ServiceState $serviceState -DesiredCount 1
             $scaledForVerification = $true
         }
@@ -953,7 +958,11 @@ finally {
     # se esta apagando. Un fallo aca no puede tapar el error original, asi que se
     # reporta y no se relanza; ademas el apagado programado lo corrige en su
     # proxima ejecucion.
-    if ($scaledForVerification) {
+    # Tambien se baja el servicio cuando la base se arranco aca aunque el servicio
+    # ya estuviera en uno: si hubo que arrancar la base, el ambiente estaba fuera
+    # de su horario, y dejar tareas contra una base que se apaga es un crashloop
+    # garantizado hasta el arranque programado.
+    if ($scaledForVerification -or $startedDatabase) {
         try {
             Set-ServiceDesiredCount -ServiceState $serviceState -DesiredCount 0
             Write-Host "[ECS] Servicio devuelto a cero tareas." -ForegroundColor Green
