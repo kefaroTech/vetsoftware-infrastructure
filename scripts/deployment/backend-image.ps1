@@ -166,39 +166,120 @@ function Resolve-DeployableImage {
     }
 }
 
+# El build publica con provenance y SBOM, asi que el tag no apunta a una imagen
+# sino a un OCI index: una lista con el manifiesto de linux/arm64 y sus
+# atestaciones. ECR escanea los manifiestos de plataforma, nunca el index, y los
+# labels tambien viven en el manifiesto. Preguntar por el digest del tag devuelve
+# ScanNotFoundException; hay que bajar un nivel.
+function Resolve-PlatformManifest {
+    param([Parameter(Mandatory)][string]$Digest)
+
+    $manifestDigest = $Digest
+
+    for ($hop = 0; $hop -lt 2; $hop += 1) {
+        $response = Get-ExternalJson -Command "aws" -Arguments @(
+            "ecr", "batch-get-image",
+            "--repository-name", $repositoryName,
+            "--image-ids", "imageDigest=$manifestDigest",
+            "--accepted-media-types",
+            "application/vnd.oci.image.index.v1+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "--output", "json"
+        )
+        $manifest = (@($response.images) | Select-Object -First 1).imageManifest | ConvertFrom-Json
+
+        if ($null -eq $manifest.manifests) {
+            return [PSCustomObject]@{
+                Digest   = $manifestDigest
+                Manifest = $manifest
+                FromIndex = ($manifestDigest -ne $Digest)
+            }
+        }
+
+        $child = @($manifest.manifests | Where-Object {
+            $_.platform.architecture -eq "arm64" -and $_.platform.os -eq "linux"
+        }) | Select-Object -First 1
+        if ($null -eq $child) {
+            throw "El index de la imagen no contiene ningún manifiesto linux/arm64."
+        }
+        $manifestDigest = [string]$child.digest
+    }
+
+    throw "No fue posible resolver el manifiesto de plataforma de $Digest."
+}
+
+# describe-images devuelve el estado del escaneo y el resumen de severidades sin
+# fallar cuando todavia no hay escaneo, asi que evita tener que distinguir un
+# ScanNotFoundException de un error real de permisos.
+function Get-ImageScanState {
+    param([Parameter(Mandatory)][string]$Digest)
+
+    $response = Get-ExternalJson -Command "aws" -Arguments @(
+        "ecr", "describe-images",
+        "--repository-name", $repositoryName,
+        "--image-ids", "imageDigest=$Digest",
+        "--output", "json"
+    )
+    $detail = @($response.imageDetails) | Select-Object -First 1
+    $counts = $detail.imageScanFindingsSummary.findingSeverityCounts
+    $critical = 0
+    $high = 0
+    if ($null -ne $counts.CRITICAL) { $critical = [int]$counts.CRITICAL }
+    if ($null -ne $counts.HIGH) { $high = [int]$counts.HIGH }
+
+    return [PSCustomObject]@{
+        Status      = [string]$detail.imageScanStatus.status
+        Description = [string]$detail.imageScanStatus.description
+        Critical    = $critical
+        High        = $high
+    }
+}
+
 function Assert-ImageIntegrity {
     param(
         [Parameter(Mandatory)][string]$Digest,
         [Parameter(Mandatory)][string]$ExpectedImageUri
     )
 
+    $platform = Resolve-PlatformManifest -Digest $Digest
+    if ($platform.FromIndex) {
+        Write-Host "[ECR] El tag apunta a un index; se evalúa el manifiesto linux/arm64 $($platform.Digest)." -ForegroundColor Cyan
+    }
+
     Write-Host "[ECR] Esperando y evaluando el escaneo..." -ForegroundColor Cyan
-    Invoke-ExternalCommand -Command "aws" -Arguments @(
-        "ecr", "wait", "image-scan-complete",
-        "--repository-name", $repositoryName,
-        "--image-id", "imageDigest=$Digest"
-    )
-
-    $scan = Get-ExternalJson -Command "aws" -Arguments @(
-        "ecr", "describe-image-scan-findings",
-        "--repository-name", $repositoryName,
-        "--image-id", "imageDigest=$Digest",
-        "--output", "json"
-    )
-    $status = [string]$scan.imageScanStatus.status
-    $critical = 0
-    $high = 0
-    if ($null -ne $scan.imageScanFindings.findingSeverityCounts.CRITICAL) {
-        $critical = [int]$scan.imageScanFindings.findingSeverityCounts.CRITICAL
-    }
-    if ($null -ne $scan.imageScanFindings.findingSeverityCounts.HIGH) {
-        $high = [int]$scan.imageScanFindings.findingSeverityCounts.HIGH
-    }
-    if ($status -ne "COMPLETE" -or $critical -ne 0 -or $high -ne 0) {
-        throw "El escaneo ECR rechazó la imagen: status=$status, critical=$critical, high=$high."
+    # ACTIVE es el estado terminal del escaneo mejorado de Inspector; COMPLETE, el
+    # del escaneo basico. El resto de los terminales significan que no va a haber
+    # hallazgos utilizables.
+    $terminal = @("COMPLETE", "ACTIVE", "FAILED", "UNSUPPORTED_IMAGE", "SCAN_ELIGIBILITY_EXPIRED", "FINDINGS_UNAVAILABLE")
+    $deadline = (Get-Date).AddMinutes(10)
+    $state = Get-ImageScanState -Digest $platform.Digest
+    while ($state.Status -notin $terminal -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 15
+        $state = Get-ImageScanState -Digest $platform.Digest
     }
 
-    Write-Host "[ECR] Imagen certificada: $ExpectedImageUri" -ForegroundColor Green
+    if ($state.Status -in @("COMPLETE", "ACTIVE")) {
+        if ($state.Critical -ne 0 -or $state.High -ne 0) {
+            throw "El escaneo ECR rechazó la imagen: critical=$($state.Critical), high=$($state.High)."
+        }
+
+        Write-Host "[ECR] Imagen certificada: $ExpectedImageUri" -ForegroundColor Green
+        return $platform.Digest
+    }
+
+    $reason = if ([string]::IsNullOrWhiteSpace($state.Status)) {
+        "ECR no registró ningún escaneo para ese manifiesto"
+    }
+    else {
+        "el escaneo terminó en $($state.Status). $($state.Description)".Trim()
+    }
+    throw (@(
+            "No hay un escaneo utilizable para la imagen: $reason.",
+            "  Digest del tag:      $Digest",
+            "  Manifiesto evaluado: $($platform.Digest)",
+            "  Verifique que $repositoryName tenga escaneo habilitado -scan on push básico o Amazon Inspector- y que el manifiesto sea de un sistema operativo soportado."
+        ) -join [Environment]::NewLine)
 }
 
 # Trazabilidad sin pedirsela a nadie: la imagen ya trae el commit completo y la
@@ -209,33 +290,7 @@ function Get-ImageTraceability {
     param([Parameter(Mandatory)][string]$Digest)
 
     try {
-        $manifest = $null
-        $manifestDigest = $Digest
-
-        for ($hop = 0; $hop -lt 2; $hop += 1) {
-            $response = Get-ExternalJson -Command "aws" -Arguments @(
-                "ecr", "batch-get-image",
-                "--repository-name", $repositoryName,
-                "--image-ids", "imageDigest=$manifestDigest",
-                "--accepted-media-types",
-                "application/vnd.oci.image.index.v1+json",
-                "application/vnd.oci.image.manifest.v1+json",
-                "application/vnd.docker.distribution.manifest.v2+json",
-                "--output", "json"
-            )
-            $manifest = (@($response.images) | Select-Object -First 1).imageManifest | ConvertFrom-Json
-            if ($null -eq $manifest.manifests) { break }
-
-            # La imagen es un index: el manifiesto de arm64 es el que importa,
-            # el resto son atestaciones de procedencia.
-            $child = @($manifest.manifests | Where-Object {
-                $_.platform.architecture -eq "arm64" -and $_.platform.os -eq "linux"
-            }) | Select-Object -First 1
-            if ($null -eq $child) { return $null }
-            $manifestDigest = [string]$child.digest
-        }
-
-        $configDigest = [string]$manifest.config.digest
+        $configDigest = [string](Resolve-PlatformManifest -Digest $Digest).Manifest.config.digest
         if ([string]::IsNullOrWhiteSpace($configDigest)) { return $null }
 
         $downloadUrl = (& aws ecr get-download-url-for-layer `
@@ -535,7 +590,7 @@ if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
 $image = Resolve-DeployableImage
 $imageUri = "$accountId.dkr.ecr.$env:AWS_REGION.amazonaws.com/$repositoryName@$($image.Digest)"
 
-Assert-ImageIntegrity -Digest $image.Digest -ExpectedImageUri $imageUri
+$scannedDigest = Assert-ImageIntegrity -Digest $image.Digest -ExpectedImageUri $imageUri
 $labels = Get-ImageTraceability -Digest $image.Digest
 $sourceCommit = if ($null -ne $labels) { [string]$labels.'org.opencontainers.image.revision' } else { "" }
 $sourceRunUrl = if ($null -ne $labels) { [string]$labels.'com.vetsoftware.image.run-url' } else { "" }
@@ -545,6 +600,9 @@ $summaryDetails = @(
     "- Digest: ``$($image.Digest)``",
     "- Commit tag: ``$($image.CommitTag)``"
 )
+if ($scannedDigest -ne $image.Digest) {
+    $summaryDetails += "- Scanned manifest: ``$scannedDigest``"
+}
 if (-not [string]::IsNullOrWhiteSpace($sourceCommit)) {
     $summaryDetails += "- Source commit: ``$sourceCommit``"
 }
