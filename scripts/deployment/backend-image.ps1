@@ -526,7 +526,11 @@ function New-GuardedPlan {
     })
     $unexpected = @($changedResources | Where-Object { $_.address -notin $allowedAddresses })
     if ($unexpected.Count -gt 0) {
-        $addresses = ($unexpected.address | Sort-Object -Unique) -join ", "
+        # $unexpected.address no enumera: System.Array tiene su propio miembro
+        # Address y PowerShell lo resuelve antes que la propiedad de cada
+        # elemento, asi que el mensaje salia con la firma del metodo en vez de
+        # los recursos. Justo cuando mas se necesita leerlo.
+        $addresses = ($unexpected | ForEach-Object { $_.address } | Sort-Object -Unique) -join ", "
         throw "Plan rechazado: contiene cambios fuera del despliegue image-only: $addresses"
     }
 
@@ -545,7 +549,7 @@ function New-GuardedPlan {
         "sin cambios"
     }
     else {
-        ($changedResources.address | Sort-Object -Unique) -join ", "
+        ($changedResources | ForEach-Object { $_.address } | Sort-Object -Unique) -join ", "
     }
     Write-Host "[Terraform] Plan permitido: $changeList" -ForegroundColor Green
     Write-WorkflowSummary -Lines (@(
