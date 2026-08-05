@@ -48,8 +48,8 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
 | `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
-| `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. |
-| `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. |
+| `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. |
+| `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. Input unico: la release `X.Y.Z`. |
 
 Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
 
@@ -168,7 +168,9 @@ unos minutos. Si quedo `INACTIVE`, no estorba, porque ECS permite reusar el nomb
 El ciclo general nunca cambia la imagen: `Set-CurrentBackendImage` lee la que el
 servicio ECS tiene en ejecucion y la fija, de modo que un `apply` de infraestructura no
 puede revertir un despliegue. Los cambios de imagen van por `deploy-backend-dev/prod`,
-que recibe el digest como input y valida tags y escaneo.
+que recibe **solo la version** como input —`X.Y.Z-dev.N` en dev, `X.Y.Z` en prod—,
+resuelve el digest desde ese tag y valida tags, escaneo y que la version no retroceda
+respecto de la que esta corriendo (salvo `allow_rollback`).
 
 Ese diseño se atasca cuando la imagen en ejecucion esta rota. El servicio no alcanza
 steady state, el apply falla, y el apply siguiente vuelve a heredar la misma imagen

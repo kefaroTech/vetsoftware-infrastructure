@@ -295,6 +295,10 @@ data "aws_iam_policy_document" "infrastructure_read" {
       "ecr:BatchGetImage",
       "ecr:DescribeImages",
       "ecr:DescribeImageScanFindings",
+      # Lee el blob de configuracion de la imagen para recuperar sus labels OCI
+      # -commit completo y URL del run que la publico- sin pedirselos a quien
+      # despliega. Es solo lectura y esta acotado al repositorio del backend.
+      "ecr:GetDownloadUrlForLayer",
     ]
     resources = [
       "arn:${var.aws_partition}:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.backend_repository_name}"

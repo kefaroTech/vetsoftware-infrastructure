@@ -8,17 +8,15 @@ param(
     [ValidateSet("dev", "prod")]
     [string]$Environment,
 
+    # Unico dato que aporta quien despliega. El digest, el commit y el run de
+    # origen se resuelven desde ECR: pedirlos era pedir cuatro campos que la
+    # maquina puede averiguar sola.
     [Parameter(Mandatory)]
     [string]$Version,
 
-    [Parameter(Mandatory)]
-    [string]$ImageDigest,
-
-    [Parameter(Mandatory)]
-    [string]$SourceCommit,
-
-    [Parameter(Mandatory)]
-    [string]$SourceRunUrl
+    # Desactiva la guarda de no-retroceso. Solo para volver a una version
+    # anterior a proposito.
+    [switch]$AllowRollback
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +30,18 @@ $allowedAddresses = @(
     "module.backend.aws_ecs_service.backend",
     "module.backend.aws_ecs_task_definition.backend"
 )
+
+# La forma de la version dice a que ambiente pertenece, y el pipeline lo exige.
+# Es la guarda que reemplaza a la validacion cruzada de los cuatro campos.
+$versionPattern = if ($Environment -eq "prod") {
+    '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+}
+else {
+    '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.[1-9][0-9]*$'
+}
+# Prueba de que la imagen salio del pipeline: el mismo digest debe llevar el tag
+# del commit que la produjo, con el prefijo propio de cada ciclo.
+$commitTagPattern = if ($Environment -eq "prod") { '^sha-[0-9a-f]{12}$' } else { '^dev-[0-9a-f]{12}$' }
 
 function Invoke-ExternalCommand {
     param(
@@ -82,48 +92,97 @@ function Write-WorkflowSummary {
     }
 }
 
-function Assert-ReleaseImage {
-    param([Parameter(Mandatory)][string]$ExpectedImageUri)
+# Precedencia SemVer acotada a las dos formas que este pipeline acuña. Una
+# release siempre gana a sus propios pre-releases: 1.1.0-dev.9 < 1.1.0.
+function Get-VersionPrecedenceKey {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
 
-    Write-Host "[ECR] Certificando digest, tags y escaneo..." -ForegroundColor Cyan
-    $image = Get-ExternalJson -Command "aws" -Arguments @(
-        "ecr", "describe-images",
-        "--repository-name", $repositoryName,
-        "--image-ids", "imageDigest=$ImageDigest",
-        "--output", "json"
+    if ($Value -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-dev\.([1-9][0-9]*))?$') {
+        return $null
+    }
+
+    $prerelease = if ($Matches[4]) { [int]$Matches[4] } else { [int]::MaxValue }
+    return , @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $prerelease)
+}
+
+function Compare-DeployVersion {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Left,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Right
     )
 
-    $details = @($image.imageDetails)
-    if ($details.Count -ne 1 -or $details[0].imageDigest -ne $ImageDigest) {
-        throw "El digest solicitado no existe de forma única en ECR."
+    $leftKey = Get-VersionPrecedenceKey -Value $Left
+    $rightKey = Get-VersionPrecedenceKey -Value $Right
+    if ($null -eq $leftKey -or $null -eq $rightKey) {
+        return $null
     }
 
-    # Produccion se identifica por su release: el digest debe llevar el tag
-    # SemVer y el tag del commit. Desarrollo no tiene release, asi que su
-    # identidad es el propio commit publicado desde develop.
-    $requiredTags = if ($Environment -eq "prod") {
-        @($Version, "sha-$($SourceCommit.Substring(0, 12))")
-    }
-    else {
-        @("dev-$($SourceCommit.Substring(0, 12))")
-    }
-    $actualTags = @($details[0].imageTags)
-    foreach ($tag in $requiredTags) {
-        if ($tag -notin $actualTags) {
-            throw "El digest no contiene el tag obligatorio '$tag'."
+    for ($index = 0; $index -lt 4; $index += 1) {
+        if ($leftKey[$index] -ne $rightKey[$index]) {
+            return $leftKey[$index] - $rightKey[$index]
         }
     }
 
+    return 0
+}
+
+function Resolve-DeployableImage {
+    Write-Host "[ECR] Resolviendo el digest del tag $Version..." -ForegroundColor Cyan
+
+    $response = $null
+    try {
+        $response = Get-ExternalJson -Command "aws" -Arguments @(
+            "ecr", "describe-images",
+            "--repository-name", $repositoryName,
+            "--image-ids", "imageTag=$Version",
+            "--output", "json"
+        )
+    }
+    catch {
+        throw "El tag '$Version' no existe en $repositoryName. Use la versión que publicó el pipeline del backend."
+    }
+
+    $details = @($response.imageDetails)
+    if ($details.Count -ne 1) {
+        throw "El tag '$Version' no resuelve a una imagen única en $repositoryName."
+    }
+
+    $digest = [string]$details[0].imageDigest
+    if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "ECR no devolvió un digest sha256 válido para '$Version'."
+    }
+
+    $tags = @($details[0].imageTags)
+    $commitTag = @($tags | Where-Object { $_ -match $commitTagPattern }) | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($commitTag)) {
+        throw "El digest de '$Version' no lleva el tag de commit obligatorio ($commitTagPattern); la imagen no salió del pipeline de publicación."
+    }
+
+    Write-Host "[ECR] $Version -> $digest (commit $commitTag)" -ForegroundColor Green
+    return [PSCustomObject]@{
+        Digest    = $digest
+        Tags      = $tags
+        CommitTag = [string]$commitTag
+    }
+}
+
+function Assert-ImageIntegrity {
+    param(
+        [Parameter(Mandatory)][string]$Digest,
+        [Parameter(Mandatory)][string]$ExpectedImageUri
+    )
+
+    Write-Host "[ECR] Esperando y evaluando el escaneo..." -ForegroundColor Cyan
     Invoke-ExternalCommand -Command "aws" -Arguments @(
         "ecr", "wait", "image-scan-complete",
         "--repository-name", $repositoryName,
-        "--image-id", "imageDigest=$ImageDigest"
+        "--image-id", "imageDigest=$Digest"
     )
 
     $scan = Get-ExternalJson -Command "aws" -Arguments @(
         "ecr", "describe-image-scan-findings",
         "--repository-name", $repositoryName,
-        "--image-id", "imageDigest=$ImageDigest",
+        "--image-id", "imageDigest=$Digest",
         "--output", "json"
     )
     $status = [string]$scan.imageScanStatus.status
@@ -140,6 +199,57 @@ function Assert-ReleaseImage {
     }
 
     Write-Host "[ECR] Imagen certificada: $ExpectedImageUri" -ForegroundColor Green
+}
+
+# Trazabilidad sin pedirsela a nadie: la imagen ya trae el commit completo y la
+# URL del run en sus labels OCI. Es informativa, asi que cualquier fallo -por
+# ejemplo un rol sin ecr:GetDownloadUrlForLayer- degrada a un aviso, nunca corta
+# el despliegue.
+function Get-ImageTraceability {
+    param([Parameter(Mandatory)][string]$Digest)
+
+    try {
+        $manifest = $null
+        $manifestDigest = $Digest
+
+        for ($hop = 0; $hop -lt 2; $hop += 1) {
+            $response = Get-ExternalJson -Command "aws" -Arguments @(
+                "ecr", "batch-get-image",
+                "--repository-name", $repositoryName,
+                "--image-ids", "imageDigest=$manifestDigest",
+                "--accepted-media-types",
+                "application/vnd.oci.image.index.v1+json",
+                "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.docker.distribution.manifest.v2+json",
+                "--output", "json"
+            )
+            $manifest = (@($response.images) | Select-Object -First 1).imageManifest | ConvertFrom-Json
+            if ($null -eq $manifest.manifests) { break }
+
+            # La imagen es un index: el manifiesto de arm64 es el que importa,
+            # el resto son atestaciones de procedencia.
+            $child = @($manifest.manifests | Where-Object {
+                $_.platform.architecture -eq "arm64" -and $_.platform.os -eq "linux"
+            }) | Select-Object -First 1
+            if ($null -eq $child) { return $null }
+            $manifestDigest = [string]$child.digest
+        }
+
+        $configDigest = [string]$manifest.config.digest
+        if ([string]::IsNullOrWhiteSpace($configDigest)) { return $null }
+
+        $downloadUrl = (& aws ecr get-download-url-for-layer `
+                --repository-name $repositoryName `
+                --layer-digest $configDigest `
+                --query downloadUrl --output text)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($downloadUrl)) { return $null }
+
+        return (Invoke-RestMethod -Uri $downloadUrl).config.Labels
+    }
+    catch {
+        Write-Warning "No fue posible leer los labels OCI de la imagen: $($_.Exception.Message)"
+        return $null
+    }
 }
 
 function Resolve-StateBackend {
@@ -189,7 +299,8 @@ function Initialize-Terraform {
 function New-GuardedPlan {
     param(
         [Parameter(Mandatory)][string]$ImageUri,
-        [Parameter(Mandatory)][string]$PlanPath
+        [Parameter(Mandatory)][string]$PlanPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SummaryDetails
     )
 
     $env:TF_VAR_backend_image_uri = $ImageUri
@@ -236,17 +347,14 @@ function New-GuardedPlan {
         ($changedResources.address | Sort-Object -Unique) -join ", "
     }
     Write-Host "[Terraform] Plan permitido: $changeList" -ForegroundColor Green
-    Write-WorkflowSummary -Lines @(
-        "## Backend image deployment · $Mode",
-        "",
-        "- Environment: ``$Environment``",
-        "- Version: ``$Version``",
-        "- Digest: ``$ImageDigest``",
-        "- Source commit: ``$SourceCommit``",
-        "- Source run: $SourceRunUrl",
-        "- Terraform changes: $changeList",
-        "- Guard: only ECS task definition/service changes are allowed"
-    )
+    Write-WorkflowSummary -Lines (@(
+            "## Backend image deployment · $Mode",
+            "",
+            "- Environment: ``$Environment``"
+        ) + $SummaryDetails + @(
+            "- Terraform changes: $changeList",
+            "- Guard: only ECS task definition/service changes are allowed"
+        ))
 
     return $changedResources.Count
 }
@@ -285,10 +393,65 @@ function Get-CurrentServiceState {
     }
 
     return [PSCustomObject]@{
-        ClusterName  = [string]$clusterName
-        ServiceName  = [string]$serviceName
-        PreviousImage = [string]$backend[0].image
+        ClusterName     = [string]$clusterName
+        ServiceName     = [string]$serviceName
+        PreviousImage   = [string]$backend[0].image
+        PreviousVersion = (Resolve-DeployedVersion -ImageReference ([string]$backend[0].image))
     }
+}
+
+# La task definition fija la imagen por digest, asi que la version en ejecucion
+# se recupera preguntandole a ECR que tags lleva ese digest.
+function Resolve-DeployedVersion {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$ImageReference)
+
+    if ($ImageReference -notmatch '@(sha256:[0-9a-f]{64})$') { return "" }
+    $digest = $Matches[1]
+
+    try {
+        $response = Get-ExternalJson -Command "aws" -Arguments @(
+            "ecr", "describe-images",
+            "--repository-name", $repositoryName,
+            "--image-ids", "imageDigest=$digest",
+            "--output", "json"
+        )
+        $tags = @(@($response.imageDetails)[0].imageTags)
+        $version = @($tags | Where-Object { $_ -match $versionPattern }) | Select-Object -First 1
+        return [string]$version
+    }
+    catch {
+        return ""
+    }
+}
+
+# Con cuatro campos cruzados un dedazo fallaba ruidosamente. Con un solo campo,
+# escribir 1.1.0-dev.13 en vez de 1.1.0-dev.31 desplegaria una version vieja sin
+# que nadie se entere: esta guarda es lo que hace que simplificar no salga caro.
+function Assert-NoRegression {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$RunningVersion)
+
+    if ([string]::IsNullOrWhiteSpace($RunningVersion)) {
+        Write-Warning "La imagen en ejecución no expone una versión conocida; se omite la guarda de no-retroceso."
+        return
+    }
+
+    $comparison = Compare-DeployVersion -Left $Version -Right $RunningVersion
+    if ($null -eq $comparison) {
+        Write-Warning "No fue posible comparar $Version con $RunningVersion; se omite la guarda de no-retroceso."
+        return
+    }
+
+    if ($comparison -ge 0) {
+        Write-Host "[Guard] $Version no retrocede respecto de $RunningVersion." -ForegroundColor Green
+        return
+    }
+
+    if ($AllowRollback) {
+        Write-Warning "Retroceso autorizado explícitamente: $RunningVersion -> $Version."
+        return
+    }
+
+    throw "La versión solicitada ($Version) es anterior a la desplegada ($RunningVersion). Repita con allow_rollback si el retroceso es intencional."
 }
 
 function Assert-ServiceDeployment {
@@ -341,28 +504,9 @@ function Assert-ServiceDeployment {
     Write-Host "[ECS] Despliegue estable y smoke test correcto." -ForegroundColor Green
 }
 
-if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "ImageDigest debe usar sha256:<64 hex>."
-}
-if ($SourceCommit -notmatch '^[0-9a-f]{40}$') {
-    throw "SourceCommit debe ser un SHA Git completo de 40 caracteres."
-}
-if ($Environment -eq "prod") {
-    if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-        throw "Version debe cumplir SemVer estricto X.Y.Z en produccion."
-    }
-}
-else {
-    if ($Version -ne "dev-$($SourceCommit.Substring(0, 12))") {
-        throw "En desarrollo Version debe ser dev-<12 primeros caracteres de SourceCommit>."
-    }
-}
-$parsedSourceRun = $null
-if (-not [Uri]::TryCreate($SourceRunUrl, [UriKind]::Absolute, [ref]$parsedSourceRun) -or
-    $parsedSourceRun.Scheme -ne "https" -or
-    $parsedSourceRun.Host -ne "github.com" -or
-    $parsedSourceRun.AbsolutePath -notmatch '^/kefaroTech/vetsoftware-backend/actions/runs/[0-9]+/?$') {
-    throw "SourceRunUrl debe identificar un run de publicación de kefaroTech/vetsoftware-backend en GitHub."
+if ($Version -notmatch $versionPattern) {
+    $expected = if ($Environment -eq "prod") { "X.Y.Z" } else { "X.Y.Z-dev.N" }
+    throw "En $Environment la versión debe tener la forma $expected; se recibió '$Version'."
 }
 
 @(
@@ -387,20 +531,61 @@ $accountId = (& aws sts get-caller-identity --query Account --output text)
 if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {
     throw "No fue posible resolver la cuenta AWS activa."
 }
-$imageUri = "$accountId.dkr.ecr.$env:AWS_REGION.amazonaws.com/$repositoryName@$ImageDigest"
 
-Assert-ReleaseImage -ExpectedImageUri $imageUri
+$image = Resolve-DeployableImage
+$imageUri = "$accountId.dkr.ecr.$env:AWS_REGION.amazonaws.com/$repositoryName@$($image.Digest)"
+
+Assert-ImageIntegrity -Digest $image.Digest -ExpectedImageUri $imageUri
+$labels = Get-ImageTraceability -Digest $image.Digest
+$sourceCommit = if ($null -ne $labels) { [string]$labels.'org.opencontainers.image.revision' } else { "" }
+$sourceRunUrl = if ($null -ne $labels) { [string]$labels.'com.vetsoftware.image.run-url' } else { "" }
+
+$summaryDetails = @(
+    "- Version: ``$Version``",
+    "- Digest: ``$($image.Digest)``",
+    "- Commit tag: ``$($image.CommitTag)``"
+)
+if (-not [string]::IsNullOrWhiteSpace($sourceCommit)) {
+    $summaryDetails += "- Source commit: ``$sourceCommit``"
+}
+if (-not [string]::IsNullOrWhiteSpace($sourceRunUrl)) {
+    $summaryDetails += "- Source run: $sourceRunUrl"
+}
+
 Resolve-StateBackend -AccountId $accountId
 Initialize-Terraform
+
+# La guarda de no-retroceso necesita saber que corre hoy. En Plan un baseline
+# ausente es informacion, no un error; en Apply lo sigue siendo porque sin el no
+# hay rollback posible.
+$serviceState = $null
+if ($Mode -eq "Apply") {
+    $serviceState = Get-CurrentServiceState
+}
+else {
+    try {
+        $serviceState = Get-CurrentServiceState
+    }
+    catch {
+        Write-Warning "Sin baseline ECS todavía: $($_.Exception.Message)"
+    }
+}
+
+if ($null -ne $serviceState) {
+    Assert-NoRegression -RunningVersion $serviceState.PreviousVersion
+    if (-not [string]::IsNullOrWhiteSpace($serviceState.PreviousVersion)) {
+        $summaryDetails += "- Currently deployed: ``$($serviceState.PreviousVersion)``"
+    }
+}
+
 $planPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-$Mode.tfplan"
-$changeCount = New-GuardedPlan -ImageUri $imageUri -PlanPath $planPath
+$changeCount = New-GuardedPlan -ImageUri $imageUri -PlanPath $planPath -SummaryDetails $summaryDetails
 
 if ($Mode -eq "Plan") {
     Write-Host "Plan image-only validado; no se aplicaron cambios." -ForegroundColor Green
     exit 0
 }
 
-$serviceState = Get-CurrentServiceState
 try {
     if ($changeCount -gt 0) {
         Write-Host "[Terraform] Aplicando el plan aprobado..." -ForegroundColor Cyan
@@ -419,7 +604,10 @@ catch {
     if ($serviceState.PreviousImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
         Write-Warning "Iniciando rollback Terraform al digest anterior."
         $rollbackPlanPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-rollback.tfplan"
-        $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath
+        $rollbackDetails = @(
+            "- Rollback target: ``$($serviceState.PreviousImage)``"
+        )
+        $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath -SummaryDetails $rollbackDetails
         if ($rollbackChanges -gt 0) {
             Invoke-ExternalCommand -Command "terraform" -Arguments @(
                 "-chdir=$environmentDirectory", "apply", "-input=false", $rollbackPlanPath

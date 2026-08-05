@@ -1,26 +1,20 @@
 name: Deploy backend image prod
 
-# Circuito de imagen productiva. Solo acepta una release SemVer cuyo digest
-# lleve tanto el tag X.Y.Z como sha-<12>, con escaneo ECR sin High ni Critical.
+# Circuito de imagen productiva. Un solo campo: la release SemVer. El digest se
+# resuelve desde ECR y debe llevar tambien el tag sha-<12>, con escaneo sin High
+# ni Critical. La forma X.Y.Z es lo que impide colar aca un build de develop.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Strict SemVer release (X.Y.Z)"
+        description: "Release SemVer estricta ya publicada (X.Y.Z)"
         required: true
         type: string
-      image_digest:
-        description: "Immutable ECR digest (sha256:...)"
-        required: true
-        type: string
-      source_commit:
-        description: "Full backend release commit SHA"
-        required: true
-        type: string
-      source_run_url:
-        description: "Auditable backend publication run URL"
-        required: true
-        type: string
+      allow_rollback:
+        description: "Permitir desplegar una versión anterior a la que está corriendo"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -81,19 +75,15 @@ jobs:
 
       - name: Certify release and guard Terraform plan
         env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+          ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
         shell: pwsh
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Plan `
             -Environment prod `
             -Version $env:RELEASE_VERSION `
-            -ImageDigest $env:IMAGE_DIGEST `
-            -SourceCommit $env:SOURCE_COMMIT `
-            -SourceRunUrl $env:SOURCE_RUN_URL
+            -AllowRollback:($env:ALLOW_ROLLBACK -eq 'true')
 
   apply:
     name: Approve, deploy and verify prod
@@ -142,16 +132,12 @@ jobs:
 
       - name: Deploy immutable image, verify and roll back on failure
         env:
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
           RELEASE_VERSION: ${{ inputs.version }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+          ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
         shell: pwsh
         run: |
           ./scripts/deployment/backend-image.ps1 `
             -Mode Apply `
             -Environment prod `
             -Version $env:RELEASE_VERSION `
-            -ImageDigest $env:IMAGE_DIGEST `
-            -SourceCommit $env:SOURCE_COMMIT `
-            -SourceRunUrl $env:SOURCE_RUN_URL
+            -AllowRollback:($env:ALLOW_ROLLBACK -eq 'true')
