@@ -603,9 +603,38 @@ function Get-CurrentServiceState {
     return [PSCustomObject]@{
         ClusterName     = [string]$clusterName
         ServiceName     = [string]$serviceName
+        DesiredCount    = [int]$service.desiredCount
         PreviousImage   = [string]$backend[0].image
         PreviousVersion = (Resolve-DeployedVersion -ImageReference ([string]$backend[0].image))
     }
+}
+
+# El apagado programado de dev deja el servicio en cero tareas fuera de su franja
+# horaria. Con cero tareas el steady state es trivial y el smoke test no tiene
+# contra que correr, asi que se levanta una tarea solo para verificar. El servicio
+# declara ignore_changes sobre desired_count -lo gobierna el scheduler-, de modo
+# que tocarlo por API no genera drift para Terraform.
+function Set-ServiceDesiredCount {
+    param(
+        [Parameter(Mandatory)][PSCustomObject]$ServiceState,
+        [Parameter(Mandatory)][int]$DesiredCount
+    )
+
+    Write-Host "[ECS] Ajustando el servicio a $DesiredCount tarea(s)..." -ForegroundColor Cyan
+    & aws ecs update-service `
+        --cluster $ServiceState.ClusterName `
+        --service $ServiceState.ServiceName `
+        --desired-count $DesiredCount `
+        --query "service.desiredCount" --output text | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "No fue posible ajustar el servicio a $DesiredCount tarea(s)."
+    }
+
+    Invoke-ExternalCommand -Command "aws" -Arguments @(
+        "ecs", "wait", "services-stable",
+        "--cluster", $ServiceState.ClusterName,
+        "--services", $ServiceState.ServiceName
+    )
 }
 
 # La task definition fija la imagen por digest, asi que la version en ejecucion
@@ -687,7 +716,8 @@ function Assert-ServiceDeployment {
         throw "ECS no está estable: desired=$($service.desiredCount), running=$($service.runningCount), pending=$($service.pendingCount)."
     }
     if ($null -eq $primary -or $primary.rolloutState -ne "COMPLETED") {
-        throw "El deployment PRIMARY no terminó correctamente."
+        $rollout = if ($null -eq $primary) { "sin deployment PRIMARY" } else { "rolloutState=$($primary.rolloutState). $($primary.rolloutStateReason)" }
+        throw "El deployment PRIMARY no terminó correctamente: $($rollout.Trim())"
     }
 
     $taskDefinitionResponse = Get-ExternalJson -Command "aws" -Arguments @(
@@ -787,6 +817,10 @@ if ($null -ne $serviceState) {
     if (-not [string]::IsNullOrWhiteSpace($serviceState.PreviousVersion)) {
         $summaryDetails += "- Currently deployed: ``$($serviceState.PreviousVersion)``"
     }
+    if ($serviceState.DesiredCount -eq 0) {
+        Write-Warning "El servicio está en cero tareas por el apagado programado: el apply levantará una para verificar y la devolverá a cero."
+        $summaryDetails += "- Service is scaled to zero; the apply starts one task to verify and scales back"
+    }
 }
 
 $script:variableFile = New-OptionalVariableFile
@@ -798,39 +832,69 @@ if ($Mode -eq "Plan") {
     exit 0
 }
 
+$scaledForVerification = $false
+
 try {
-    if ($changeCount -gt 0) {
-        Write-Host "[Terraform] Aplicando el plan aprobado..." -ForegroundColor Cyan
-        Invoke-ExternalCommand -Command "terraform" -Arguments @(
-            "-chdir=$environmentDirectory", "apply", "-input=false", $planPath
-        )
-    }
-    Assert-ServiceDeployment -ServiceState $serviceState -ExpectedImageUri $imageUri
-}
-catch {
-    $deploymentError = $_
-    Write-Warning "El despliegue falló: $($deploymentError.Exception.Message)"
-    $escapedRepositoryName = [regex]::Escape($repositoryName)
-    # Comillas dobles en PowerShell no escapan con barra invertida: "\\." exigiria una
-    # barra invertida literal y el rollback nunca se dispararia.
-    if ($serviceState.PreviousImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
-        Write-Warning "Iniciando rollback Terraform al digest anterior."
-        $rollbackPlanPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-rollback.tfplan"
-        $rollbackDetails = @(
-            "- Rollback target: ``$($serviceState.PreviousImage)``"
-        )
-        $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath -SummaryDetails $rollbackDetails
-        if ($rollbackChanges -gt 0) {
+    try {
+        if ($changeCount -gt 0) {
+            Write-Host "[Terraform] Aplicando el plan aprobado..." -ForegroundColor Cyan
             Invoke-ExternalCommand -Command "terraform" -Arguments @(
-                "-chdir=$environmentDirectory", "apply", "-input=false", $rollbackPlanPath
+                "-chdir=$environmentDirectory", "apply", "-input=false", $planPath
             )
         }
-        Assert-ServiceDeployment -ServiceState $serviceState -ExpectedImageUri $serviceState.PreviousImage
-        Write-WorkflowSummary -Lines @("", "- Rollback: completed to ``$($serviceState.PreviousImage)``")
+
+        # Se levanta despues del apply para que la tarea nazca con la revision
+        # nueva, en vez de arrancar con la vieja y reemplazarla enseguida.
+        if ($serviceState.DesiredCount -eq 0) {
+            Write-Warning "El servicio está en cero tareas por el apagado programado; se levanta una para poder verificar el despliegue."
+            Set-ServiceDesiredCount -ServiceState $serviceState -DesiredCount 1
+            $scaledForVerification = $true
+        }
+
+        Assert-ServiceDeployment -ServiceState $serviceState -ExpectedImageUri $imageUri
     }
-    else {
-        Write-Warning "No se automatizó rollback porque la imagen anterior no estaba fijada por digest; el circuit breaker de ECS conserva la última revisión estable."
-        Write-WorkflowSummary -Lines @("", "- Rollback: delegated to ECS circuit breaker; previous state was not digest-pinned")
+    catch {
+        $deploymentError = $_
+        Write-Warning "El despliegue falló: $($deploymentError.Exception.Message)"
+        $escapedRepositoryName = [regex]::Escape($repositoryName)
+        # Comillas dobles en PowerShell no escapan con barra invertida: "\\." exigiria una
+        # barra invertida literal y el rollback nunca se dispararia.
+        if ($serviceState.PreviousImage -match "^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/${escapedRepositoryName}@sha256:[0-9a-f]{64}$") {
+            Write-Warning "Iniciando rollback Terraform al digest anterior."
+            $rollbackPlanPath = Join-Path $env:RUNNER_TEMP "backend-$Environment-rollback.tfplan"
+            $rollbackDetails = @(
+                "- Rollback target: ``$($serviceState.PreviousImage)``"
+            )
+            $rollbackChanges = New-GuardedPlan -ImageUri $serviceState.PreviousImage -PlanPath $rollbackPlanPath -SummaryDetails $rollbackDetails
+            if ($rollbackChanges -gt 0) {
+                Invoke-ExternalCommand -Command "terraform" -Arguments @(
+                    "-chdir=$environmentDirectory", "apply", "-input=false", $rollbackPlanPath
+                )
+            }
+            Assert-ServiceDeployment -ServiceState $serviceState -ExpectedImageUri $serviceState.PreviousImage
+            Write-WorkflowSummary -Lines @("", "- Rollback: completed to ``$($serviceState.PreviousImage)``")
+        }
+        else {
+            Write-Warning "No se automatizó rollback porque la imagen anterior no estaba fijada por digest; el circuit breaker de ECS conserva la última revisión estable."
+            Write-WorkflowSummary -Lines @("", "- Rollback: delegated to ECS circuit breaker; previous state was not digest-pinned")
+        }
+        throw $deploymentError
     }
-    throw $deploymentError
+}
+finally {
+    # Devolver el servicio a cero pase lo que pase: si la verificacion fallo, si el
+    # rollback fallo, o si algo revento en el medio. Un fallo aca no puede tapar el
+    # error original, asi que se reporta y no se relanza; ademas el apagado
+    # programado lo corrige en su proxima ejecucion.
+    if ($scaledForVerification) {
+        try {
+            Set-ServiceDesiredCount -ServiceState $serviceState -DesiredCount 0
+            Write-Host "[ECS] Servicio devuelto a cero tareas." -ForegroundColor Green
+            Write-WorkflowSummary -Lines @("", "- Scaled to one task to verify and back to zero (scheduled shutdown window)")
+        }
+        catch {
+            Write-Warning "No fue posible devolver el servicio a cero tareas: $($_.Exception.Message). El apagado programado lo corregirá en su próxima ejecución."
+            Write-WorkflowSummary -Lines @("", "- WARNING: the service was left running; the scheduled shutdown will scale it back to zero")
+        }
+    }
 }
