@@ -3,6 +3,7 @@ module "kms" {
 
   name                    = local.name
   cost_alerts_sns_enabled = true
+  sns_publisher_role_arns = [local.deployment_notifier_role_arn]
   tags                    = local.common_tags
 }
 
@@ -302,6 +303,7 @@ module "monitoring" {
   cost_anomaly_threshold_usd       = var.cost_anomaly_threshold_usd
   slack_workspace_id               = var.slack_workspace_id
   slack_channel_id                 = var.slack_channel_id
+  deployment_notifier_role_arns    = [local.deployment_notifier_role_arn]
   ecs_cluster_name                 = module.backend.cluster_name
   ecs_service_name                 = module.backend.service_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name

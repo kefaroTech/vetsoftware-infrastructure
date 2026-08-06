@@ -106,6 +106,34 @@ data "aws_iam_policy_document" "this" {
   }
 
   dynamic "statement" {
+    for_each = length(var.sns_publisher_role_arns) > 0 ? [1] : []
+
+    content {
+      sid    = "AllowDeploymentNotificationEncryption"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = var.sns_publisher_role_arns
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+      ]
+      resources = ["*"]
+
+      # Acotado a SNS: la clave cifra tambien datos de la aplicacion, y publicar un
+      # aviso no es motivo para poder descifrarlos.
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["sns.${data.aws_region.current.region}.amazonaws.com"]
+      }
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.cost_alerts_sns_enabled ? [1] : []
 
     content {

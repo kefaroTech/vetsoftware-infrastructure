@@ -10,6 +10,11 @@ locals {
 
   application_bucket_name = var.application_bucket_name != "" ? var.application_bucket_name : "${local.name}-app-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
 
+  # El rol que asume "Deploy backend image dev" para aplicar. Es el mismo que
+  # publica el aviso de despliegue en Slack, y el nombre lo fija el bootstrap:
+  # <proyecto>-iac-<funcion>-<ambiente>.
+  deployment_notifier_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-apply-${var.environment}"
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY = "framework"

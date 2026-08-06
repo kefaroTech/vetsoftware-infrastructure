@@ -77,6 +77,22 @@ El repositorio `vetsoftware-backend` publica el artefacto y ahí termina su resp
 
 Esto mantiene una sola dirección de confianza. El repositorio IaC concede a los repositorios de aplicación permiso para publicar en ECR mediante roles OIDC de mínimo privilegio; ninguno de ellos obtiene la capacidad inversa de iniciar un cambio en la infraestructura.
 
+## Aviso en Slack (solo dev)
+
+Al cerrar el despliegue de dev, el script publica un aviso en el mismo canal de Slack que ya escucha Amazon Q Developer para las alertas de costo. Sale un único mensaje por corrida, con el desenlace real:
+
+| Resultado | Mensaje |
+|---|---|
+| Desplegado | La versión nueva quedó corriendo y pasó el smoke test. |
+| Revertido | El despliegue falló y el rollback devolvió el digest anterior; el mensaje dice qué versión quedó corriendo y por qué falló. |
+| Fallido | No hubo despliegue ni rollback exitoso; el mensaje incluye el motivo. |
+
+El mensaje lleva versión nueva y anterior, digest corto, commit de origen, quién lanzó el run, un enlace a la corrida y una nota cuando el ambiente estaba apagado y se encendió solo para verificar.
+
+No hay webhook ni secreto nuevo: el aviso viaja como *custom notification* al topic `vetsoftware-dev-alarms`. Lo autorizan dos policies de recurso que se aplican con el mismo `Terraform apply dev` -`SNS:Publish` sobre el topic y `kms:GenerateDataKey*` acotado a SNS sobre la CMK del ambiente-, de modo que no hace falta volver a correr el bootstrap ni engordar las inline policies del rol.
+
+Un fallo al notificar nunca tumba el despliegue: queda como advertencia en el log y como línea en el Summary del run. Prod no notifica: su rol de apply no está autorizado a publicar en el topic.
+
 ## Operación manual y auditoría
 
 Ambos workflows se inician manualmente desde Actions con sus cuatro inputs. Cada job escribe en su Summary la versión, el digest, el commit, el run de origen y los recursos incluidos en el plan. La concurrencia se serializa dentro de cada entorno mediante `terraform-<entorno>` y nunca cancela un apply en curso; los dos entornos avanzan sin esperarse.
