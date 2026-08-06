@@ -1,8 +1,9 @@
 name: Stop dev environment
 
-# Apaga a mano lo mismo que detiene el apagado programado: las tareas del servicio
-# ECS y despues la instancia RDS. Sirve para cortar el gasto al terminar el dia sin
-# esperar a las 20:00, o para frenar un servicio que quedo reintentando.
+# Apaga a mano lo mismo que detiene el apagado programado -que si sigue vigente-:
+# las tareas del servicio ECS y despues la instancia RDS. Sirve para cortar el gasto
+# al terminar el dia sin esperar a las 20:00, o para frenar un servicio que quedo
+# reintentando.
 on:
   workflow_dispatch:
 

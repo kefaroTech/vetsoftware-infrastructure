@@ -3,6 +3,7 @@ module "kms" {
 
   name                    = local.name
   cost_alerts_sns_enabled = true
+  sns_publisher_role_arns = [local.deployment_notifier_role_arn]
   tags                    = local.common_tags
 }
 
@@ -302,6 +303,7 @@ module "monitoring" {
   cost_anomaly_threshold_usd       = var.cost_anomaly_threshold_usd
   slack_workspace_id               = var.slack_workspace_id
   slack_channel_id                 = var.slack_channel_id
+  deployment_notifier_role_arns    = [local.deployment_notifier_role_arn]
   ecs_cluster_name                 = module.backend.cluster_name
   ecs_service_name                 = module.backend.service_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name
@@ -313,17 +315,15 @@ module "monitoring" {
 module "scheduled_shutdown" {
   source = "../../modules/scheduled_shutdown"
 
-  name                    = local.name
-  ecs_cluster_arn         = module.backend.cluster_arn
-  ecs_service_arn         = module.backend.service_arn
-  ecs_service_name        = module.backend.service_name
-  database_arn            = module.database.arn
-  database_identifier     = module.database.identifier
-  schedule_timezone       = var.schedule_timezone
-  database_start_schedule = var.database_start_schedule
-  backend_start_schedule  = var.backend_start_schedule
-  backend_stop_schedule   = var.backend_stop_schedule
-  database_stop_schedule  = var.database_stop_schedule
-  enabled                 = var.scheduled_shutdown_enabled
-  tags                    = local.common_tags
+  name                   = local.name
+  ecs_cluster_arn        = module.backend.cluster_arn
+  ecs_service_arn        = module.backend.service_arn
+  ecs_service_name       = module.backend.service_name
+  database_arn           = module.database.arn
+  database_identifier    = module.database.identifier
+  schedule_timezone      = var.schedule_timezone
+  backend_stop_schedule  = var.backend_stop_schedule
+  database_stop_schedule = var.database_stop_schedule
+  enabled                = var.scheduled_shutdown_enabled
+  tags                   = local.common_tags
 }

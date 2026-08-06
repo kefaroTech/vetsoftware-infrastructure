@@ -1,8 +1,8 @@
 name: Start dev environment
 
-# Enciende a mano lo que el apagado programado detiene: la instancia RDS y las
-# tareas del servicio ECS. Util para trabajar fuera de la franja 07:30-20:00, y
-# para desplegar de noche sin que el circuito de imagen tenga que levantar nada.
+# Unica forma de encender el ambiente de desarrollo: la instancia RDS y las tareas
+# del servicio ECS. No hay arranque programado -a proposito, para no pagar dias en
+# que nadie lo usa-, asi que el dia de trabajo empieza corriendo este workflow.
 on:
   workflow_dispatch:
 

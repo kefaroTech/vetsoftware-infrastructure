@@ -94,6 +94,23 @@ data "aws_iam_policy_document" "alarms" {
   }
 
   dynamic "statement" {
+    for_each = length(var.deployment_notifier_role_arns) > 0 ? [1] : []
+
+    content {
+      sid     = "DeploymentNotificationsPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "AWS"
+        identifiers = var.deployment_notifier_role_arns
+      }
+
+      resources = [aws_sns_topic.alarms[0].arn]
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.cost_anomaly_detection_enabled ? [1] : []
 
     content {

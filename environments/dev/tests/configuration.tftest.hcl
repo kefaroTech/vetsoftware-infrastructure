@@ -120,8 +120,8 @@ run "development_cost_profile_plans" {
   }
 
   assert {
-    condition     = length(output.scheduled_shutdown_names) == 4
-    error_message = "El apagado programado debe crear cuatro acciones ordenadas para ECS y RDS."
+    condition     = length(output.scheduled_shutdown_names) == 2
+    error_message = "El apagado programado debe crear dos acciones ordenadas -ECS y despues RDS- y ninguna de encendido."
   }
 
   assert {

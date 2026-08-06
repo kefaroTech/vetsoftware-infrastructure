@@ -34,7 +34,7 @@ Los ocho Interface Endpoints en dos AZ y el ALB fueron eliminados por decisión 
 | Telemetria | Exportacion OTLP directa a Grafana Cloud; sin EC2 Alloy dedicada |
 | Logs | Retención de 3 días para backend y `cloudflared` |
 | KMS | CMK de datos dev + CMK exclusiva del state dev, desde USD 2 al mes mas solicitudes |
-| Horario | RDS 07:30-20:15 y ECS 08:00-20:00, lunes a viernes, `America/Bogota` |
+| Horario | Encendido manual con `Start dev environment`; apagado programado ECS 20:00 y RDS 20:15, lunes a viernes, `America/Bogota` |
 
 Tener VPC propia no agrega costo fijo: la VPC, las subredes, el Internet Gateway y el S3 Gateway Endpoint no se facturan. El aislamiento agrega una CMK de state por ambiente y la ingesta de VPC Flow Logs de una segunda red, acotada por la retencion de tres dias de dev.
 

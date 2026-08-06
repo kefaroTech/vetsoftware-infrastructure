@@ -48,9 +48,9 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
 | `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
-| `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea, lo mismo que el arranque programado. |
+| `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. |
 | `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. |
-| `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. |
+| `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. Avisa el desenlace en Slack. |
 | `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. Input unico: la release `X.Y.Z`. |
 
 Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
