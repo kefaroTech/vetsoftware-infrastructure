@@ -5,10 +5,12 @@ param(
     [string]$Mode
 )
 
-# Enciende y apaga a mano el ambiente de desarrollo, lo mismo que hace el apagado
-# programado pero cuando uno quiere. Toca los dos unicos recursos que se pueden
-# detener: la instancia RDS y el numero de tareas del servicio ECS. Valkey es
-# serverless y la red no cuesta por estar encendida, asi que no entran.
+# Enciende y apaga el ambiente de desarrollo. El encendido solo ocurre por aca:
+# nada lo levanta por hora, asi que el ambiente arranca cuando alguien corre este
+# script. El apagado sigue ademas programado, y este script lo adelanta. Toca los
+# dos unicos recursos que se pueden detener: la instancia RDS y el numero de tareas
+# del servicio ECS. Valkey es serverless y la red no cuesta por estar encendida,
+# asi que no entran.
 #
 # Solo dev, y a proposito: prod no tiene apagado programado y un boton para
 # detenerla seria una herramienta esperando un accidente.
@@ -20,7 +22,7 @@ $environment = "dev"
 $clusterName = "$projectName-$environment-backend"
 $serviceName = "backend"
 $databaseIdentifier = "$projectName-$environment-mysql"
-# El mismo valor que usa el arranque programado.
+# El maximo que admite el escalado de dev: una sola tarea.
 $runningDesiredCount = 1
 
 function Invoke-ExternalCommand {
@@ -218,6 +220,6 @@ else {
         "",
         "- Servicio: ``$serviceName`` en 0 tareas",
         "- Base: ``$databaseIdentifier`` deteniéndose",
-        "- El arranque programado lo encenderá igual a las 07:30 y 08:00."
+        "- No hay arranque programado: para volver a encenderlo, ejecute ``Start dev environment``."
     )
 }

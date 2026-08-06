@@ -361,6 +361,7 @@ variable "slack_channel_id" {
   default     = ""
 }
 
+# Solo apaga. El encendido es manual, con el workflow "Start dev environment".
 variable "scheduled_shutdown_enabled" {
   type    = bool
   default = true
@@ -369,16 +370,6 @@ variable "scheduled_shutdown_enabled" {
 variable "schedule_timezone" {
   type    = string
   default = "America/Bogota"
-}
-
-variable "database_start_schedule" {
-  type    = string
-  default = "cron(30 7 ? * MON-FRI *)"
-}
-
-variable "backend_start_schedule" {
-  type    = string
-  default = "cron(0 8 ? * MON-FRI *)"
 }
 
 variable "backend_stop_schedule" {

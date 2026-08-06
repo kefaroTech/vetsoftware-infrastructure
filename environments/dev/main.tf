@@ -313,17 +313,15 @@ module "monitoring" {
 module "scheduled_shutdown" {
   source = "../../modules/scheduled_shutdown"
 
-  name                    = local.name
-  ecs_cluster_arn         = module.backend.cluster_arn
-  ecs_service_arn         = module.backend.service_arn
-  ecs_service_name        = module.backend.service_name
-  database_arn            = module.database.arn
-  database_identifier     = module.database.identifier
-  schedule_timezone       = var.schedule_timezone
-  database_start_schedule = var.database_start_schedule
-  backend_start_schedule  = var.backend_start_schedule
-  backend_stop_schedule   = var.backend_stop_schedule
-  database_stop_schedule  = var.database_stop_schedule
-  enabled                 = var.scheduled_shutdown_enabled
-  tags                    = local.common_tags
+  name                   = local.name
+  ecs_cluster_arn        = module.backend.cluster_arn
+  ecs_service_arn        = module.backend.service_arn
+  ecs_service_name       = module.backend.service_name
+  database_arn           = module.database.arn
+  database_identifier    = module.database.identifier
+  schedule_timezone      = var.schedule_timezone
+  backend_stop_schedule  = var.backend_stop_schedule
+  database_stop_schedule = var.database_stop_schedule
+  enabled                = var.scheduled_shutdown_enabled
+  tags                   = local.common_tags
 }

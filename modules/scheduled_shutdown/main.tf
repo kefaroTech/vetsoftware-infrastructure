@@ -24,12 +24,11 @@ data "aws_iam_policy_document" "scheduler" {
     resources = [var.ecs_service_arn]
   }
 
+  # Solo detener: el encendido es manual -workflow "Start dev environment"- y el
+  # scheduler no tiene por que poder arrancar la base.
   statement {
-    sid = "StartStopDevelopmentDatabase"
-    actions = [
-      "rds:StartDBInstance",
-      "rds:StopDBInstance",
-    ]
+    sid       = "StopDevelopmentDatabase"
+    actions   = ["rds:StopDBInstance"]
     resources = [var.database_arn]
   }
 }
@@ -41,6 +40,10 @@ resource "aws_iam_role_policy" "scheduler" {
 }
 
 locals {
+  # Solo apagado: el ambiente se enciende a voluntad con el workflow "Start dev
+  # environment", asi que nada lo levanta por hora. El apagado si queda programado,
+  # que es lo que protege el gasto cuando alguien olvida bajarlo.
+  #
   # Los targets universales nombran los campos con la convencion del SDK de Java v2,
   # que no repite mayusculas consecutivas: el campo es DbInstanceIdentifier, no
   # DBInstanceIdentifier como lo llama la API de RDS. Con el nombre equivocado el
@@ -48,22 +51,6 @@ locals {
   # following field(s): DbInstanceIdentifier". Los targets de ECS no lo sufren
   # porque Cluster, Service y DesiredCount ya casan con esa convencion.
   schedules = {
-    database-start = {
-      expression = var.database_start_schedule
-      target_arn = "arn:${data.aws_partition.current.partition}:scheduler:::aws-sdk:rds:startDBInstance"
-      input = {
-        DbInstanceIdentifier = var.database_identifier
-      }
-    }
-    backend-start = {
-      expression = var.backend_start_schedule
-      target_arn = "arn:${data.aws_partition.current.partition}:scheduler:::aws-sdk:ecs:updateService"
-      input = {
-        Cluster      = var.ecs_cluster_arn
-        Service      = var.ecs_service_name
-        DesiredCount = 1
-      }
-    }
     backend-stop = {
       expression = var.backend_stop_schedule
       target_arn = "arn:${data.aws_partition.current.partition}:scheduler:::aws-sdk:ecs:updateService"

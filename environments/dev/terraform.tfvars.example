@@ -38,10 +38,9 @@ cost_anomaly_threshold_usd = 3
 slack_workspace_id        = "T0123456789"
 slack_channel_id          = "C0123456789"
 
-# Horario laboral de Colombia. RDS arranca 30 minutos antes que ECS.
+# Solo apagado, al cierre del horario laboral de Colombia. El encendido es manual,
+# con el workflow "Start dev environment". RDS se detiene 15 minutos despues de ECS.
 scheduled_shutdown_enabled = true
 schedule_timezone          = "America/Bogota"
-database_start_schedule    = "cron(30 7 ? * MON-FRI *)"
-backend_start_schedule     = "cron(0 8 ? * MON-FRI *)"
 backend_stop_schedule      = "cron(0 20 ? * MON-FRI *)"
 database_stop_schedule     = "cron(15 20 ? * MON-FRI *)"

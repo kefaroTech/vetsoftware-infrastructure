@@ -610,9 +610,10 @@ function Get-CurrentServiceState {
 }
 
 # El apagado programado no para solo el servicio: tambien detiene la instancia RDS
-# -arranca 07:30 y para 20:15, hora America/Bogota-. Levantar la tarea sin base
-# solo produce un crashloop en Liquibase, asi que la verificacion fuera de horario
-# necesita el ambiente entero.
+# -20:15, hora America/Bogota- y nada la vuelve a arrancar por hora, asi que el
+# ambiente puede estar apagado a cualquier hora. Levantar la tarea sin base solo
+# produce un crashloop en Liquibase, de modo que la verificacion necesita el
+# ambiente entero.
 function Get-DatabaseIdentifier {
     $endpoint = (& terraform "-chdir=$environmentDirectory" output -raw database_endpoint)
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($endpoint)) {
@@ -857,7 +858,7 @@ if ($null -ne $serviceState) {
         $summaryDetails += "- Currently deployed: ``$($serviceState.PreviousVersion)``"
     }
     if ($serviceState.DesiredCount -eq 0) {
-        Write-Warning "El ambiente está apagado por el horario programado: el apply levantará la base y una tarea para verificar, y volverá a apagarlas. Sumará varios minutos."
+        Write-Warning "El ambiente está apagado: el apply levantará la base y una tarea para verificar, y volverá a apagarlas. Sumará varios minutos."
         $summaryDetails += "- Environment is off: the apply starts the database and one task to verify, then shuts both back down"
     }
 }
@@ -890,7 +891,7 @@ try {
 
         $databaseStatus = Get-DatabaseStatus -Identifier $databaseIdentifier
         if ($databaseStatus -eq "stopped") {
-            Write-Warning "La base está apagada por el horario programado; se arranca para poder desplegar y verificar, y se vuelve a apagar al final."
+            Write-Warning "La base está apagada; se arranca para poder desplegar y verificar, y se vuelve a apagar al final."
             Write-Host "[RDS] Arrancando $databaseIdentifier..." -ForegroundColor Cyan
             Invoke-ExternalCommand -Command "aws" -Arguments @(
                 "rds", "start-db-instance",
@@ -959,9 +960,9 @@ finally {
     # reporta y no se relanza; ademas el apagado programado lo corrige en su
     # proxima ejecucion.
     # Tambien se baja el servicio cuando la base se arranco aca aunque el servicio
-    # ya estuviera en uno: si hubo que arrancar la base, el ambiente estaba fuera
-    # de su horario, y dejar tareas contra una base que se apaga es un crashloop
-    # garantizado hasta el arranque programado.
+    # ya estuviera en uno: si hubo que arrancar la base, el ambiente estaba apagado,
+    # y dejar tareas contra una base que se apaga es un crashloop garantizado hasta
+    # que alguien encienda el ambiente a mano.
     if ($scaledForVerification -or $startedDatabase) {
         try {
             Set-ServiceDesiredCount -ServiceState $serviceState -DesiredCount 0

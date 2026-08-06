@@ -27,20 +27,10 @@ variable "schedule_timezone" {
   default = "America/Bogota"
 }
 
-variable "database_start_schedule" {
-  description = "RDS arranca antes que ECS para estar disponible durante el despliegue de la tarea."
-  type        = string
-  default     = "cron(30 7 ? * MON-FRI *)"
-}
-
-variable "backend_start_schedule" {
-  type    = string
-  default = "cron(0 8 ? * MON-FRI *)"
-}
-
 variable "backend_stop_schedule" {
-  type    = string
-  default = "cron(0 20 ? * MON-FRI *)"
+  description = "ECS se detiene antes que RDS; el encendido no se programa, se hace a mano."
+  type        = string
+  default     = "cron(0 20 ? * MON-FRI *)"
 }
 
 variable "database_stop_schedule" {
