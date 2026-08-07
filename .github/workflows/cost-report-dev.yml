@@ -1,0 +1,65 @@
+name: Daily cost report dev
+
+# Cuenta en Slack cuanto costo el dia anterior, y los lunes tambien la semana que
+# termino. Corre con el rol de plan porque solo lee: consulta Cost Explorer y
+# publica el aviso en el topic que ya escucha Amazon Q.
+#
+# 12:00 UTC son las 07:00 en America/Bogota, que no cambia de huso en todo el ano:
+# el dia anterior ya cerro y Cost Explorer tuvo toda la noche para refrescarlo.
+# GitHub puede demorar los horarios en las horas pico, asi que el aviso llega a las
+# 07:00 o unos minutos despues, nunca antes.
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Opcional. Fecha de referencia UTC (yyyy-MM-dd); el informe cubre el dia anterior. Vacio = hoy."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# Grupo propio: no toca el state ni la infraestructura, asi que no tiene por que
+# hacer cola detras de un apply ni bloquearlo.
+concurrency:
+  group: cost-report-dev
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report yesterday's spend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: iac-plan-dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-plan-dev
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate AWS configuration
+        shell: pwsh
+        run: |
+          if ($env:AWS_ACCOUNT_ID -notmatch '^\d{12}$') {
+            throw "Configure AWS_ACCOUNT_ID con los 12 digitos de la cuenta AWS en iac-plan-dev."
+          }
+
+      - name: Configure read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Publish the cost report
+        shell: pwsh
+        env:
+          AS_OF: ${{ inputs.as_of }}
+        run: ./scripts/operations/cost-report.ps1 -Environment dev -AsOf "$env:AS_OF"

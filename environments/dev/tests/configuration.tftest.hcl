@@ -31,6 +31,19 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
+
+}
+
+# El ARN del monitor de anomalías solo existe después del apply, y el contrato de
+# dev se valida con plan. Un mock no alcanza -se aplica en la fase de apply-, así
+# que el valor se fuerza durante el plan y la aserción puede resolverse.
+override_resource {
+  target          = module.monitoring.aws_ce_anomaly_monitor.services[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:ce::123456789012:anomalymonitor/11111111-2222-3333-4444-555555555555"
+  }
 }
 
 run "development_cost_profile_plans" {
@@ -137,8 +150,8 @@ run "development_cost_profile_plans" {
       output.finops_alerts.anomaly_threshold_usd == 3 &&
       output.finops_alerts.email_enabled &&
       output.finops_alerts.slack_enabled &&
-      output.finops_alerts.anomaly_monitor_arn == null
+      output.finops_alerts.anomaly_monitor_arn != null
     )
-    error_message = "Dev debe alertar por correo y Slack al forecast USD 28 y real USD 35; el monitor de anomalías queda apagado hasta habilitar Cost Explorer en la cuenta."
+    error_message = "Dev debe alertar por correo y Slack al forecast USD 28 y real USD 35, con el monitor de anomalías encendido ahora que Cost Explorer está habilitado."
   }
 }

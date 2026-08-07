@@ -43,6 +43,8 @@ Mantener `db.t4g.micro` es una decision explicita de costo. IAM DB Auth queda ha
 ## Protecciones incluidas
 
 - AWS Budget mensual configurable, con avisos al 80 % y 100 % cuando se define `alarm_email`.
+- Informe diario en Slack del gasto del dia anterior por servicio, y de la semana pasada los lunes. Es la unica proteccion que cuesta: Cost Explorer cobra USD 0.01 por request y el informe hace una consulta al dia, ~USD 0.30 al mes.
+- Deteccion de anomalias de costo con aviso inmediato a Slack sobre el umbral `cost_anomaly_threshold_usd`. Necesita diez dias de historia antes de detectar y tarda hasta 24 horas en avisar.
 - Auto Scaling de Fargate limitado por `backend_min_count` y `backend_max_count`.
 - Valkey limitado por `valkey_maximum_data_storage_gb` y `valkey_maximum_ecpu_per_second`.
 - RDS limitado por `database_max_allocated_storage` y protegido contra borrado.
