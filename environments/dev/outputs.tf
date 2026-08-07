@@ -49,7 +49,7 @@ output "finops_alerts" {
     actual_threshold_usd    = var.monthly_budget_usd
     anomaly_threshold_usd   = var.cost_anomaly_threshold_usd
     email_enabled           = trimspace(var.alarm_email) != ""
-    slack_enabled           = trimspace(var.slack_workspace_id) != "" && trimspace(var.slack_channel_id) != ""
+    slack_enabled           = local.slack_notifications_enabled
     topic_arn               = module.monitoring.alarm_topic_arn
     anomaly_monitor_arn     = module.monitoring.cost_anomaly_monitor_arn
     slack_configuration_arn = module.monitoring.slack_chat_configuration_arn

@@ -10,6 +10,10 @@ locals {
 
   application_bucket_name = var.application_bucket_name != "" ? var.application_bucket_name : "${local.name}-app-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
 
+  # Misma condicion que aplica el modulo de monitoreo: sin los dos IDs no hay
+  # configuracion de Amazon Q, y sin ella el topic de alertas no llega a Slack.
+  slack_notifications_enabled = trimspace(var.slack_workspace_id) != "" && trimspace(var.slack_channel_id) != ""
+
   # El rol que asume "Deploy backend image dev" para aplicar. Es el mismo que
   # publica el aviso de despliegue en Slack, y el nombre lo fija el bootstrap:
   # <proyecto>-iac-<funcion>-<ambiente>.

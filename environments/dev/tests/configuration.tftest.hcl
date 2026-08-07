@@ -120,8 +120,13 @@ run "development_cost_profile_plans" {
   }
 
   assert {
-    condition     = length(output.scheduled_shutdown_names) == 2
-    error_message = "El apagado programado debe crear dos acciones ordenadas -ECS y despues RDS- y ninguna de encendido."
+    condition = (
+      length(output.scheduled_shutdown_names) == 3 &&
+      contains(output.scheduled_shutdown_names, "vetsoftware-dev-backend-stop") &&
+      contains(output.scheduled_shutdown_names, "vetsoftware-dev-database-stop") &&
+      contains(output.scheduled_shutdown_names, "vetsoftware-dev-stop-notice")
+    )
+    error_message = "El apagado programado debe crear dos acciones ordenadas -ECS y despues RDS-, avisar en Slack al detener, y ninguna de encendido."
   }
 
   assert {
