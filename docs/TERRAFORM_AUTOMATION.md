@@ -48,12 +48,26 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
 | `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
+| `Daily cost report dev` | Diario a las 12:00 UTC -07:00 en Bogota- o manual | `iac-plan-dev` | Publica en Slack el gasto del dia anterior por servicio, y los lunes tambien el de la semana pasada. Solo lee. |
 | `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. Avisa el desenlace en Slack. |
 | `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. Avisa el desenlace en Slack. |
 | `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. Avisa el desenlace en Slack. |
 | `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. Input unico: la release `X.Y.Z`. |
 
 Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
+
+## Informe diario de costos
+
+Todos los días a las **07:00 de Bogotá** llega a Slack cuánto costó el día anterior, con los cinco servicios que más pesaron y el resto resumido en una línea. **Los lunes** el mismo mensaje agrega el gasto de la semana que terminó, de lunes a domingo. Sale por el topic `vetsoftware-dev-alarms`, el mismo de las demás notificaciones.
+
+Cuatro cosas que conviene tener presentes:
+
+- **La cifra es de la cuenta AWS completa, no de un ambiente.** Cost Explorer factura por cuenta, así que mientras dev y prod compartan cuenta el total incluye a los dos. Por eso el mensaje nombra la cuenta consultada y no el ambiente. Cuando las cuentas se separen, cada informe cubrirá la suya sin tocar el código: el script recibe el ambiente como parámetro y el workflow de prod sería una copia del de dev.
+- **Corre con el rol de plan, no con el de apply.** El informe solo lee, y un cron sin supervisión no tiene por qué poder aplicar infraestructura. Eso obligó a dos permisos nuevos: `ce:GetCostAndUsage` en el rol de plan -que viaja en el bootstrap- y la autorización del rol de plan para publicar en el topic y usar la CMK -que viaja en el apply de dev-.
+- **Cuesta dinero.** Cost Explorer cobra USD 0.01 por request: una consulta diaria son unos USD 0.30 al mes. El informe hace una sola consulta por corrida, también los lunes: la ventana semanal ya contiene el día, y el script recorta el día de ahí en vez de pedirlo aparte.
+- **Fechas y montos en UTC y costo sin combinar**, igual que la consola. Si Cost Explorer todavía no tiene datos del día anterior -lo normal en las primeras 24 horas tras habilitarlo-, el informe no se envía: publicar `USD 0.00` cuando lo que falta es el dato sería mentir. Queda la advertencia en el log y en el Summary del run.
+
+Para reenviar a mano un día que no salió, ejecute el workflow con el input `as_of` en la fecha UTC de referencia: el informe cubre el día anterior a esa fecha.
 
 ## Avisos del encendido y del apagado (solo dev)
 

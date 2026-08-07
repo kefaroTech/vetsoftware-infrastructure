@@ -37,6 +37,10 @@ locals {
     "budgets:ListTagsForResource",
     "budgets:ViewBudget",
     "ce:GetAnomaly*",
+    # La usa el informe diario de costos, no Terraform. Cost Explorer cobra USD 0.01
+    # por request, asi que el permiso habilita un gasto: una consulta al dia son
+    # ~USD 0.30 al mes. Es de solo lectura y va en el rol de plan a proposito.
+    "ce:GetCostAndUsage",
     "ce:ListTagsForResource",
     "chatbot:DescribeSlackChannelConfigurations",
     "chatbot:ListTagsForResource",

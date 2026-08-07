@@ -159,6 +159,9 @@ run "environment_and_function_roles_are_isolated" {
   assert {
     condition = alltrue([
       strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ce:GetAnomaly*"),
+      # El informe diario de costos corre con el rol de plan: leer el gasto no
+      # puede exigir el rol que aplica infraestructura.
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "ce:GetCostAndUsage"),
       strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "chatbot:DescribeSlackChannelConfigurations"),
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "ce:CreateAnomalyMonitor"),
       strcontains(data.aws_iam_policy_document.apply_global["dev_apply"].json, "chatbot:CreateSlackChannelConfiguration"),

@@ -3,7 +3,7 @@ module "kms" {
 
   name                    = local.name
   cost_alerts_sns_enabled = true
-  sns_publisher_role_arns = [local.deployment_notifier_role_arn]
+  sns_publisher_role_arns = [local.deployment_notifier_role_arn, local.cost_reporter_role_arn]
   tags                    = local.common_tags
 }
 
@@ -297,13 +297,19 @@ module "monitoring" {
   alarm_email                      = var.alarm_email
   monthly_budget_usd               = var.monthly_budget_usd
   budget_sns_notifications_enabled = true
-  # Cost Explorer no esta habilitado en la cuenta (opt-in manual desde Billing);
-  # ce:CreateAnomalyMonitor responde "User not enabled for cost explorer access".
-  cost_anomaly_detection_enabled   = false
-  cost_anomaly_threshold_usd       = var.cost_anomaly_threshold_usd
-  slack_workspace_id               = var.slack_workspace_id
-  slack_channel_id                 = var.slack_channel_id
-  deployment_notifier_role_arns    = [local.deployment_notifier_role_arn]
+  # Cost Explorer quedo habilitado a mano desde Billing -no se puede por API-, que
+  # era lo unico que faltaba: ce:CreateAnomalyMonitor respondia "User not enabled
+  # for cost explorer access". Al habilitarlo, AWS crea por su cuenta un monitor de
+  # servicios y un resumen diario por correo, y la cuota es de uno por cuenta: hay
+  # que importarlo o borrarlo antes del primer apply con esto encendido.
+  cost_anomaly_detection_enabled = true
+  cost_anomaly_threshold_usd     = var.cost_anomaly_threshold_usd
+  slack_workspace_id             = var.slack_workspace_id
+  slack_channel_id               = var.slack_channel_id
+  notification_publisher_role_arns = [
+    local.deployment_notifier_role_arn,
+    local.cost_reporter_role_arn,
+  ]
   ecs_cluster_name                 = module.backend.cluster_name
   ecs_service_name                 = module.backend.service_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name

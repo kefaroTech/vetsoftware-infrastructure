@@ -12,13 +12,13 @@ variable "sns_kms_key_arn" {
   default     = ""
 }
 
-# El circuito de imagen avisa a Slack por el mismo topic que ya escucha Amazon Q.
-# Se autoriza por policy del topic y no en la policy del rol: las inline policies
-# de los roles de GitHub estan cerca del limite de 10.240 caracteres, y una
-# autorizacion nombrada aca se aplica con el mismo `Terraform apply dev` que crea
-# el topic, sin volver a correr el bootstrap.
-variable "deployment_notifier_role_arns" {
-  description = "Roles autorizados a publicar avisos de despliegue en el topic de alertas."
+# El circuito de imagen y el informe diario de costos avisan a Slack por el mismo
+# topic que ya escucha Amazon Q. Se autoriza por policy del topic y no en la policy
+# del rol: las inline policies de los roles de GitHub estan cerca del limite de
+# 10.240 caracteres, y una autorizacion nombrada aca se aplica con el mismo
+# `Terraform apply dev` que crea el topic, sin volver a correr el bootstrap.
+variable "notification_publisher_role_arns" {
+  description = "Roles autorizados a publicar avisos en el topic de alertas."
   type        = list(string)
   default     = []
 }

@@ -94,16 +94,16 @@ data "aws_iam_policy_document" "alarms" {
   }
 
   dynamic "statement" {
-    for_each = length(var.deployment_notifier_role_arns) > 0 ? [1] : []
+    for_each = length(var.notification_publisher_role_arns) > 0 ? [1] : []
 
     content {
-      sid     = "DeploymentNotificationsPublishingPermissions"
+      sid     = "NotificationsPublishingPermissions"
       effect  = "Allow"
       actions = ["SNS:Publish"]
 
       principals {
         type        = "AWS"
-        identifiers = var.deployment_notifier_role_arns
+        identifiers = var.notification_publisher_role_arns
       }
 
       resources = [aws_sns_topic.alarms[0].arn]

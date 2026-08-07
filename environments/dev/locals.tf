@@ -19,6 +19,11 @@ locals {
   # <proyecto>-iac-<funcion>-<ambiente>.
   deployment_notifier_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-apply-${var.environment}"
 
+  # El informe diario de costos no cambia nada: consulta Cost Explorer y publica el
+  # aviso. Por eso corre con el rol de plan y no con el de apply -un cron sin
+  # supervision no tiene por que poder aplicar infraestructura-.
+  cost_reporter_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-plan-${var.environment}"
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY = "framework"
