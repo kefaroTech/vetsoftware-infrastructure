@@ -325,5 +325,10 @@ module "scheduled_shutdown" {
   backend_stop_schedule  = var.backend_stop_schedule
   database_stop_schedule = var.database_stop_schedule
   enabled                = var.scheduled_shutdown_enabled
-  tags                   = local.common_tags
+  # Avisar del apagado solo tiene sentido si hay canal donde avisar: sin Slack
+  # configurado, el topic ni siquiera existe.
+  stop_notice_enabled      = local.slack_notifications_enabled
+  notification_topic_arn   = local.slack_notifications_enabled ? module.monitoring.alarm_topic_arn : ""
+  notification_kms_key_arn = module.kms.key_arn
+  tags                     = local.common_tags
 }

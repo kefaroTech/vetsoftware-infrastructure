@@ -48,12 +48,26 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
 | `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
-| `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. |
-| `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. |
+| `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. Avisa el desenlace en Slack. |
+| `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. Avisa el desenlace en Slack. |
 | `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. Avisa el desenlace en Slack. |
 | `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. Input unico: la release `X.Y.Z`. |
 
 Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
+
+## Avisos del encendido y del apagado (solo dev)
+
+Encender y apagar dev deja rastro en el mismo canal de Slack que ya escucha Amazon Q Developer, el que usa el aviso de despliegue. No hay webhook ni secreto nuevo: los tres mensajes viajan como *custom notification* al topic `vetsoftware-dev-alarms`.
+
+| Aviso | Cuándo | Contenido |
+|---|---|---|
+| Ambiente encendido | Al terminar `Start dev environment` | Base disponible, servicio en una tarea, quién lo lanzó, enlace a la corrida y recordatorio del apagado programado. |
+| Ambiente apagado a mano | Al terminar `Stop dev environment` | Servicio en cero tareas, base deteniéndose y cómo volver a encenderlo. |
+| Apagado programado | A la hora en que EventBridge baja el servicio, 20:00 `America/Bogota` | Que el ambiente se está apagando, a qué hora cae la base y cómo volver a encenderlo. |
+
+Cuando el encendido o el apagado manual fallan también sale un mensaje, con el motivo del fallo y el estado que tenía el ambiente antes de intentarlo. El aviso nunca decide el resultado del workflow: si no se puede publicar, queda como advertencia en el log y como línea en el Summary del run, y el workflow termina como habría terminado igual.
+
+El aviso del apagado programado no lo emite ningún script sino un tercer horario de EventBridge Scheduler, `vetsoftware-dev-stop-notice`, que publica en el topic con el mismo rol y a la misma hora que el horario que baja el servicio. Se apaga junto con el resto cuando `scheduled_shutdown_enabled` es `false`, y no existe si el ambiente no tiene Slack configurado.
 
 ## GitHub Environments operativos
 
