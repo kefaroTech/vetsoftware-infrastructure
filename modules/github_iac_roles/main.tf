@@ -52,6 +52,10 @@ locals {
     "ecs:List*",
     "elasticache:Describe*",
     "elasticache:ListTagsForResource",
+    # El plan tiene que poder leer las reglas de EventBridge y sus targets para
+    # detectar deriva. Sin esto el refresh falla antes de llegar al diff.
+    "events:Describe*",
+    "events:List*",
     "logs:Describe*",
     "kms:DescribeKey",
     "kms:GetKeyPolicy",
@@ -88,6 +92,10 @@ locals {
     "application-autoscaling:TagResource",
     "application-autoscaling:UntagResource",
     "cloudwatch:DeleteAlarms",
+    # Las alarmas compuestas no se crean con PutMetricAlarm: CloudWatch expone una
+    # accion aparte, y sin ella el apply falla con AccessDenied justo despues de
+    # haber creado todas las alarmas de metrica. DeleteAlarms si borra las dos.
+    "cloudwatch:PutCompositeAlarm",
     "cloudwatch:PutMetricAlarm",
     "cloudwatch:TagResource",
     "cloudwatch:UntagResource",
@@ -126,6 +134,14 @@ locals {
     "elasticache:*User",
     "elasticache:*UserGroup",
     "elasticache:RemoveTagsFromResource",
+    # Reglas y targets de EventBridge. Son lo que convierte un evento de ECS o de
+    # RDS en un aviso: sin ellas solo quedan las alarmas de metrica, que llegan
+    # tarde a las fallas que no tienen serie temporal -una base apagada por disco
+    # lleno, una clave KMS inaccesible, un despliegue revertido-.
+    "events:*Rule",
+    "events:*Targets",
+    "events:TagResource",
+    "events:UntagResource",
     "firehose:*DeliveryStream",
     "firehose:*DeliveryStreamEncryption",
     "firehose:TagDeliveryStream",
