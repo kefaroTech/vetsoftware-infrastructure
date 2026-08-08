@@ -171,6 +171,34 @@ registrados: revise el plan siguiente antes de aplicarlo.
 Prod no tiene un workflow equivalente; su desbloqueo se hace a mano y de forma
 deliberada.
 
+## Log groups de RDS sin gestionar
+
+RDS crea `/aws/rds/instance/<id>/<log>` la primera vez que exporta, y lo hace con
+retencion *Never expire* y la clave gestionada por AWS. Desde que el modulo `database`
+los declara, el plan los ve como *create* y CloudWatch responde
+`ResourceAlreadyExistsException`: el apply no avanza hasta que pasen al state.
+
+`terraform-cycle.ps1` los adopta solo, con el mismo criterio que usa para el servicio
+ECS huerfano. Antes de planear lista los grupos bajo el prefijo de la instancia, se
+queda con los que el modulo declara —`error`, `slowquery`, `audit`— y importa los que
+falten del state. El import no toca los eventos ya almacenados; el apply posterior solo
+les fija caducidad y CMK. Igual que con ECS, la adopcion ocurre unicamente en
+`-Mode Apply`: plan y drift se limitan a reportarla en el step summary, porque nunca
+mutan el state.
+
+Un grupo `general` no entra en ese allowlist a proposito. El modulo ya no lo exporta y
+fija `general_log = 0` en el parameter group, asi que no puede volver a llenarse, pero
+adoptarlo solo para que Terraform lo destruya seria borrar registros de forma
+desatendida. Si existe en algun ambiente, se revisa y se borra a mano:
+
+```powershell
+aws logs describe-log-groups --log-group-name-prefix "/aws/rds/instance/vetsoftware-dev-mysql/general"
+aws logs delete-log-group --log-group-name "/aws/rds/instance/vetsoftware-dev-mysql/general"
+```
+
+Mientras el grupo siga existiendo se factura su almacenamiento aunque ya no reciba
+eventos.
+
 ## Servicio ECS huerfano
 
 Liberar el lock no alcanza cuando el apply se corto a mitad de `CreateService`: el

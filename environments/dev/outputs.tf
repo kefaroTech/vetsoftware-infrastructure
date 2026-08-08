@@ -75,6 +75,7 @@ output "cost_profile" {
     database_class         = var.database_instance_class
     database_backup_days   = var.database_backup_retention_days
     database_hardening     = module.database.hardening
+    database_logging       = module.database.logging
     valkey_storage_gb      = var.valkey_maximum_data_storage_gb
     valkey_ecpu_per_second = var.valkey_maximum_ecpu_per_second
     log_retention_days     = var.log_retention_days

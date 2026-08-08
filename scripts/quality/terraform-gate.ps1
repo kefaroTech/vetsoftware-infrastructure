@@ -24,12 +24,14 @@ $terraformRoots = @(
     "bootstrap",
     "environments/prod",
     "environments/dev",
+    "modules/database",
     "modules/ecr",
     "modules/github_iac_roles"
 )
 $terraformTestRoots = @(
     "environments/prod",
     "environments/dev",
+    "modules/database",
     "modules/ecr",
     "modules/github_iac_roles"
 )
@@ -390,7 +392,11 @@ function Get-PreCommitScope {
                     $roots += "environments/prod"
                     $scanTargets += "environments/prod"
                 }
-                { $_ -in @("alb", "cache", "database", "ecs_backend", "kms", "monitoring", "network", "secrets", "security") } {
+                "database" {
+                    $roots += @("environments/prod", "environments/dev", "modules/database")
+                    $scanTargets += @("environments/prod", "environments/dev", "modules/database")
+                }
+                { $_ -in @("alb", "cache", "ecs_backend", "kms", "monitoring", "network", "secrets", "security") } {
                     $roots += @("environments/prod", "environments/dev")
                     $scanTargets += @("environments/prod", "environments/dev")
                 }

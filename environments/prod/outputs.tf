@@ -25,6 +25,10 @@ output "database_hardening" {
   value = module.database.hardening
 }
 
+output "database_logging" {
+  value = module.database.logging
+}
+
 output "valkey_endpoint" {
   description = "Endpoint privado; REDIS_URL permanece en Secrets Manager."
   value       = module.cache.endpoint
