@@ -64,6 +64,11 @@ variables {
   alloy_instance_ids               = []
 }
 
+// La autorizacion de publicacion de los topics se verifica en
+// sns_publish_authorization.tftest.hcl: mock_provider sustituye el JSON de
+// aws_iam_policy_document por un documento vacio, asi que aqui no hay politica
+// real sobre la que afirmar.
+
 run "severity_routing_is_separated" {
   command = plan
 
