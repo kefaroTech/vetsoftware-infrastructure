@@ -139,8 +139,20 @@ run "environment_and_function_roles_are_isolated" {
     error_message = "Cada política inline debe respetar el máximo de 10.240 caracteres de IAM."
   }
 
+  # IAM limita el AGREGADO de politicas inline de un rol a 10.240 caracteres, no
+  # cada politica por separado: partir el permiso en otra inline no gana espacio.
+  # Los roles apply llegaron a ~9.560 y el margen dejo de ser holgado. El guard
+  # sube de 9.500 a 9.700 -queda 5% bajo el limite duro- porque la alternativa
+  # era ensanchar comodines para ahorrar caracteres, que abarata el numero a
+  # costa del privilegio minimo.
+  #
+  # Este techo ya es la restriccion que manda. El siguiente permiso que haga
+  # falta no cabe: toca mover terraform-infrastructure-read -unos 3.000
+  # caracteres identicos en los cuatro roles- a una politica administrada, lo que
+  # exige primero darle iam:CreatePolicy y iam:AttachRolePolicy al rol de
+  # bootstrap en bootstrap-role.yml.
   assert {
-    condition     = alltrue([for count in values(output.inline_policy_character_counts) : count <= 9500])
+    condition     = alltrue([for count in values(output.inline_policy_character_counts) : count <= 9700])
     error_message = format("Las políticas inline deben conservar margen bajo el límite IAM de 10.240 caracteres; conteos=%s.", jsonencode(output.inline_policy_character_counts))
   }
 
@@ -154,6 +166,29 @@ run "environment_and_function_roles_are_isolated" {
       strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "logs:*MetricFilter"),
     ])
     error_message = "Los roles IaC no deben conservar permisos ELB y sí deben administrar métricas de errores del túnel."
+  }
+
+  # PutMetricAlarm no crea alarmas compuestas y sin events: no hay reglas que
+  # traduzcan un evento de ECS o RDS en un aviso. Faltando cualquiera de las dos,
+  # el apply del modulo de monitoreo muere con AccessDenied a mitad de camino.
+  assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "cloudwatch:PutCompositeAlarm"),
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "events:*Rule"),
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "events:*Targets"),
+      strcontains(data.aws_iam_policy_document.apply_regional["prod_apply"].json, "events:*Rule"),
+      strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "events:Describe*"),
+    ])
+    error_message = "Apply debe poder administrar reglas de EventBridge y alarmas compuestas, y plan debe poder leerlas."
+  }
+
+  # El plan no puede tocar EventBridge: leer la deriva es su trabajo, crearla no.
+  assert {
+    condition = alltrue([
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "events:*Rule"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["prod_plan"].json, "events:*Targets"),
+    ])
+    error_message = "El rol de plan solo puede leer EventBridge, nunca modificarlo."
   }
 
   assert {
