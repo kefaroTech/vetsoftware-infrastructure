@@ -814,14 +814,16 @@ function Get-NotificationTopicArn {
     }
 
     try {
-        $alerts = Get-ExternalJson -Command "terraform" -Arguments @(
-            "-chdir=$environmentDirectory", "output", "-json", "finops_alerts"
+        # El aviso de despliegue es un evento, no una alarma: sale por el topic
+        # de eventos, que aterriza en el canal de infra junto a los apagados.
+        $alerting = Get-ExternalJson -Command "terraform" -Arguments @(
+            "-chdir=$environmentDirectory", "output", "-json", "alerting"
         )
-        if (-not $alerts.slack_enabled) {
+        if (-not $alerting.slack_enabled) {
             return ""
         }
 
-        return [string]$alerts.topic_arn
+        return [string]$alerting.events_topic_arn
     }
     catch {
         return ""

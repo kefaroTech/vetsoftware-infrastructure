@@ -160,7 +160,7 @@ function Get-NotificationTopicArn {
         return ""
     }
 
-    $arn = "arn:aws:sns:$(([string]$region).Trim()):$(([string]$accountId).Trim()):$projectName-$environment-alarms"
+    $arn = "arn:aws:sns:$(([string]$region).Trim()):$(([string]$accountId).Trim()):$projectName-$environment-events"
     & aws sns get-topic-attributes --topic-arn $arn --query "Attributes.TopicArn" --output text 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         return ""

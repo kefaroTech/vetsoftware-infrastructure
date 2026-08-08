@@ -307,6 +307,8 @@ module "monitoring" {
   cost_anomaly_threshold_usd     = var.cost_anomaly_threshold_usd
   slack_workspace_id             = var.slack_workspace_id
   slack_channel_id               = var.slack_channel_id
+  slack_alerts_channel_id        = var.slack_alerts_channel_id
+  slack_infra_channel_id         = var.slack_infra_channel_id
   slack_critical_channel_id      = var.slack_critical_channel_id
   runbook_url                    = var.runbook_url
   notification_publisher_role_arns = [
@@ -358,8 +360,10 @@ module "scheduled_shutdown" {
   enabled                = var.scheduled_shutdown_enabled
   # Avisar del apagado solo tiene sentido si hay canal donde avisar: sin Slack
   # configurado, el topic ni siquiera existe.
-  stop_notice_enabled      = local.slack_notifications_enabled
-  notification_topic_arn   = local.slack_notifications_enabled ? module.monitoring.alarm_topic_arn : ""
+  stop_notice_enabled = local.slack_notifications_enabled
+  # El apagado es un evento, no una alarma: nadie tiene que hacer nada cuando
+  # llega. Va al canal de infra junto a los despliegues.
+  notification_topic_arn   = local.slack_notifications_enabled ? module.monitoring.events_topic_arn : ""
   notification_kms_key_arn = module.kms.key_arn
   tags                     = local.common_tags
 }

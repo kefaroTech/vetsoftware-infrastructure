@@ -8,23 +8,51 @@ El inventario en vivo se consulta con `terraform output alerting`.
 
 ---
 
-## 1. Ruteo por severidad
+## 1. Ruteo por tipo de señal
 
-Hay dos topics SNS, no uno:
+Cuatro topics, tres canales. La separación es por **tipo de señal**, no por
+severidad: una alarma dice que algo está mal, un evento dice que algo pasó, y un
+aviso de costo no exige nada hoy. Cada familia tiene su ritmo, y mezclarlas hace
+que la más frecuente entierre a la más importante.
 
-| Topic | Contenido | Destino |
+| Topic | Contenido | Canal |
 | --- | --- | --- |
-| `vetsoftware-dev-alarms` | advertencias, eventos informativos de RDS, presupuesto, anomalías de costo, aviso de apagado programado | canal Slack + correo |
-| `vetsoftware-dev-alarms-critical` | todo lo que puede dejar dev fuera de servicio | canal Slack + correo |
+| `vetsoftware-dev-alarms` | alarmas de advertencia | alertas |
+| `vetsoftware-dev-alarms-critical` | alarmas críticas y compuestas | alertas |
+| `vetsoftware-dev-events` | despliegues, apagados, eventos de ECS y RDS | infra |
+| `vetsoftware-dev-finops` | informe diario, presupuesto, anomalías | costos |
 
-Un canal único obliga a leer un aviso de presupuesto con la misma urgencia que
-una base sin disco, y en la práctica termina ignorándose entero.
+La severidad sigue partida en dos topics aunque ambos vayan al mismo canal. No
+cuesta nada y deja mandar lo crítico a una guardia más adelante con
+`slack_critical_channel_id`, sin volver a repartir nada.
 
-Mientras `slack_critical_channel_id` esté vacío, ambos topics entran por la
-configuración Amazon Q Developer que ya existe y llegan al mismo canal. Dándole
-un canal propio, la separación es física sin tocar nada más. El topic crítico es
-además el punto natural de enganche para PagerDuty u Opsgenie el día que exista
-guardia.
+### Variables de canal
+
+| Variable | Familia | Si está vacía |
+| --- | --- | --- |
+| `slack_channel_id` | costos, y todo lo que no tenga canal propio | deshabilita Slack |
+| `slack_alerts_channel_id` | alarmas | cae al canal base |
+| `slack_infra_channel_id` | eventos | cae al canal base |
+| `slack_critical_channel_id` | alarmas críticas | acompañan a las advertencias |
+
+Configurar de menos nunca deja una señal sin destino: la manda al canal que ya
+se estaba leyendo. Se crea **una configuración de Amazon Q por canal distinto**,
+porque Amazon Q asocia la configuración al canal y dos apuntando al mismo se
+pisan.
+
+### Quién publica en cada topic
+
+Esto es lo que hay que mirar cuando algo "no llegó":
+
+| Topic | Publicadores |
+| --- | --- |
+| `-alarms`, `-alarms-critical` | `cloudwatch.amazonaws.com` |
+| `-events` | `events.amazonaws.com`, los roles `iac-apply-dev` / `iac-plan-dev`, y el rol del scheduler de apagado |
+| `-finops` | `budgets.amazonaws.com`, `costalerts.amazonaws.com`, el rol `iac-plan-dev` |
+
+Los tres scripts derivan el ARN por convención y hay que moverlos si cambian los
+nombres: `cost-report.ps1` usa `-finops`, `dev-environment.ps1` usa `-events`, y
+`backend-image.ps1` lee `events_topic_arn` del output `alerting`.
 
 ## 2. Backend en ECS Fargate
 

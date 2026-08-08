@@ -67,6 +67,24 @@ override_resource {
   }
 }
 
+override_resource {
+  target          = module.monitoring.aws_sns_topic.events[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-events"
+  }
+}
+
+override_resource {
+  target          = module.monitoring.aws_sns_topic.finops[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-finops"
+  }
+}
+
 run "development_cost_profile_plans" {
   command = plan
 
@@ -97,6 +115,8 @@ run "development_cost_profile_plans" {
     alarm_email                   = "finops@example.test"
     slack_workspace_id            = "T0123456789"
     slack_channel_id              = "C0123456789"
+    slack_alerts_channel_id       = "C0ALERTS000"
+    slack_infra_channel_id        = "C0INFRA0000"
   }
 
   assert {
@@ -174,6 +194,28 @@ run "development_cost_profile_plans" {
       !output.alerting.dedicated_critical_channel
     )
     error_message = "Dev debe crear los dos topicos de severidad y enrutarlos a Slack; sin canal critico dedicado ambos entran por el canal existente."
+  }
+
+  # El reparto por tipo de senal: alarmas a su canal, eventos al de infra y
+  # costos al canal base. Si una familia cambia de destino sin querer, la mas
+  # frecuente entierra a la mas importante y nadie lo nota hasta que hace falta.
+  assert {
+    condition = (
+      output.alerting.channel_routing.alerts == "C0ALERTS000" &&
+      output.alerting.channel_routing.critical == "C0ALERTS000" &&
+      output.alerting.channel_routing.infra == "C0INFRA0000" &&
+      output.alerting.channel_routing.finops == "C0123456789"
+    )
+    error_message = "Alarmas, eventos y costos deben repartirse en tres canales; sin canal critico dedicado, lo critico acompana a las advertencias."
+  }
+
+  assert {
+    condition = (
+      output.alerting.events_topic_arn != null &&
+      output.alerting.finops_topic_arn != null &&
+      output.finops_alerts.topic_arn == output.alerting.finops_topic_arn
+    )
+    error_message = "El informe de costos debe publicar en el topic de costos, no en el de alarmas."
   }
 
   assert {

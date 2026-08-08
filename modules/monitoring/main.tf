@@ -44,9 +44,58 @@ locals {
   # contrato. Derivarla la vuelve visible en el plan.
   alarms_topic_name          = "${var.name}-alarms"
   alarms_critical_topic_name = "${var.name}-alarms-critical"
+  events_topic_name          = "${var.name}-events"
+  finops_topic_name          = "${var.name}-finops"
   sns_arn_prefix             = "arn:${data.aws_partition.current.partition}:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}"
   alarms_topic_arn           = "${local.sns_arn_prefix}:${local.alarms_topic_name}"
   alarms_critical_topic_arn  = "${local.sns_arn_prefix}:${local.alarms_critical_topic_name}"
+  events_topic_arn           = "${local.sns_arn_prefix}:${local.events_topic_name}"
+  finops_topic_arn           = "${local.sns_arn_prefix}:${local.finops_topic_name}"
+
+  # Los topics se separan por tipo de senal, no por severidad: una alarma dice
+  # que algo esta mal, un evento dice que algo paso, y un aviso de costo no
+  # exige nada hoy. Cada familia tiene su ritmo y mezclarlas hace que la mas
+  # frecuente entierre a la mas importante.
+  #
+  # La severidad sigue partida en dos topics aunque hoy ambos vayan al mismo
+  # canal: no cuesta nada y deja mandar lo critico a una guardia mas adelante
+  # sin volver a repartir nada.
+  #
+  # Cada canal vacio cae al canal base, asi que configurar de menos nunca deja
+  # una senal sin destino: la manda al canal que ya se estaba leyendo.
+  alerts_channel   = trimspace(var.slack_alerts_channel_id) != "" ? var.slack_alerts_channel_id : var.slack_channel_id
+  critical_channel = trimspace(var.slack_critical_channel_id) != "" ? var.slack_critical_channel_id : local.alerts_channel
+  infra_channel    = trimspace(var.slack_infra_channel_id) != "" ? var.slack_infra_channel_id : var.slack_channel_id
+  finops_channel   = var.slack_channel_id
+
+  # Amazon Q admite una configuracion por canal, no una por topic, asi que los
+  # topics se agrupan por destino antes de crear nada.
+  slack_channels = local.slack_notifications_enabled ? distinct([
+    local.alerts_channel,
+    local.critical_channel,
+    local.infra_channel,
+    local.finops_channel,
+  ]) : []
+
+  channel_topics = {
+    for canal in local.slack_channels : canal => compact([
+      canal == local.alerts_channel ? local.alarms_topic_arn : "",
+      canal == local.critical_channel ? local.alarms_critical_topic_arn : "",
+      canal == local.infra_channel ? local.events_topic_arn : "",
+      canal == local.finops_channel ? local.finops_topic_arn : "",
+    ])
+  }
+
+  # El nombre de la configuracion se arma con las familias que aterrizan en ese
+  # canal, para que en la consola de Amazon Q se lea que hace cada una.
+  channel_labels = {
+    for canal in local.slack_channels : canal => join("-", compact([
+      canal == local.alerts_channel ? "alerts" : "",
+      canal == local.critical_channel && local.critical_channel != local.alerts_channel ? "critical" : "",
+      canal == local.infra_channel ? "infra" : "",
+      canal == local.finops_channel ? "finops" : "",
+    ]))
+  }
 
   runbook_step           = trimspace(var.runbook_url) != "" ? "Runbook: ${var.runbook_url}" : "Registrar el incidente y su causa raiz en el runbook del entorno"
   backend_log_group_hint = trimspace(var.backend_log_group_name) != "" ? var.backend_log_group_name : "/ecs/${var.ecs_cluster_name}/backend"
@@ -146,97 +195,6 @@ data "aws_iam_policy_document" "alarms" {
     }
   }
 
-  dynamic "statement" {
-    for_each = var.budget_sns_notifications_enabled ? [1] : []
-
-    content {
-      sid     = "AWSBudgetsSNSPublishingPermissions"
-      effect  = "Allow"
-      actions = ["SNS:Publish"]
-
-      principals {
-        type        = "Service"
-        identifiers = ["budgets.amazonaws.com"]
-      }
-
-      resources = [local.alarms_topic_arn]
-
-      condition {
-        test     = "StringEquals"
-        variable = "aws:SourceAccount"
-        values   = [data.aws_caller_identity.current.account_id]
-      }
-
-      condition {
-        test     = "ArnLike"
-        variable = "aws:SourceArn"
-        values   = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:*"]
-      }
-    }
-  }
-
-  dynamic "statement" {
-    for_each = length(var.notification_publisher_role_arns) > 0 ? [1] : []
-
-    content {
-      sid     = "NotificationsPublishingPermissions"
-      effect  = "Allow"
-      actions = ["SNS:Publish"]
-
-      principals {
-        type        = "AWS"
-        identifiers = var.notification_publisher_role_arns
-      }
-
-      resources = [local.alarms_topic_arn]
-    }
-  }
-
-  dynamic "statement" {
-    for_each = var.cost_anomaly_detection_enabled ? [1] : []
-
-    content {
-      sid     = "AWSCostAnomalyDetectionSNSPublishingPermissions"
-      effect  = "Allow"
-      actions = ["SNS:Publish"]
-
-      principals {
-        type        = "Service"
-        identifiers = ["costalerts.amazonaws.com"]
-      }
-
-      resources = [local.alarms_topic_arn]
-
-      condition {
-        test     = "StringEquals"
-        variable = "aws:SourceAccount"
-        values   = [data.aws_caller_identity.current.account_id]
-      }
-    }
-  }
-
-  dynamic "statement" {
-    for_each = local.ecs_events_enabled || local.database_events_enabled ? [1] : []
-
-    content {
-      sid     = "EventBridgeSNSPublishingPermissions"
-      effect  = "Allow"
-      actions = ["SNS:Publish"]
-
-      principals {
-        type        = "Service"
-        identifiers = ["events.amazonaws.com"]
-      }
-
-      resources = [local.alarms_topic_arn]
-
-      condition {
-        test     = "StringEquals"
-        variable = "aws:SourceAccount"
-        values   = [data.aws_caller_identity.current.account_id]
-      }
-    }
-  }
 }
 
 resource "aws_sns_topic_policy" "alarms" {
@@ -313,6 +271,53 @@ data "aws_iam_policy_document" "alarms_critical" {
     }
   }
 
+}
+
+resource "aws_sns_topic_policy" "alarms_critical" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  arn    = aws_sns_topic.alarms_critical[0].arn
+  policy = data.aws_iam_policy_document.alarms_critical[0].json
+}
+
+# Eventos: lo que paso, no lo que esta mal. Despliegues, apagados programados y
+# los eventos de ECS y RDS que EventBridge traduce a Slack.
+resource "aws_sns_topic" "events" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  name              = local.events_topic_name
+  kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
+  tags              = merge(var.tags, { Signal = "events" })
+}
+
+data "aws_iam_policy_document" "events" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  statement {
+    sid    = "TopicOwnerFullAccess"
+    effect = "Allow"
+    actions = [
+      "SNS:AddPermission",
+      "SNS:DeleteTopic",
+      "SNS:GetDataProtectionPolicy",
+      "SNS:GetTopicAttributes",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:ListTagsForResource",
+      "SNS:Publish",
+      "SNS:PutDataProtectionPolicy",
+      "SNS:RemovePermission",
+      "SNS:SetTopicAttributes",
+      "SNS:Subscribe",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    resources = [local.events_topic_arn]
+  }
+
   dynamic "statement" {
     for_each = local.ecs_events_enabled || local.database_events_enabled ? [1] : []
 
@@ -326,7 +331,7 @@ data "aws_iam_policy_document" "alarms_critical" {
         identifiers = ["events.amazonaws.com"]
       }
 
-      resources = [local.alarms_critical_topic_arn]
+      resources = [local.events_topic_arn]
 
       condition {
         test     = "StringEquals"
@@ -335,13 +340,158 @@ data "aws_iam_policy_document" "alarms_critical" {
       }
     }
   }
+
+  # Los roles de GitHub publican el aviso de despliegue aca. Se autoriza por
+  # policy del topic y no en la policy del rol porque sus inline policies estan
+  # cerca del limite de 10.240 caracteres.
+  dynamic "statement" {
+    for_each = length(var.notification_publisher_role_arns) > 0 ? [1] : []
+
+    content {
+      sid     = "NotificationsPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "AWS"
+        identifiers = var.notification_publisher_role_arns
+      }
+
+      resources = [local.events_topic_arn]
+    }
+  }
 }
 
-resource "aws_sns_topic_policy" "alarms_critical" {
+resource "aws_sns_topic_policy" "events" {
   count = local.notification_topic_enabled ? 1 : 0
 
-  arn    = aws_sns_topic.alarms_critical[0].arn
-  policy = data.aws_iam_policy_document.alarms_critical[0].json
+  arn    = aws_sns_topic.events[0].arn
+  policy = data.aws_iam_policy_document.events[0].json
+}
+
+# FinOps: el informe diario, el presupuesto y las anomalias de costo. Trafico
+# predecible que no exige nada hoy, y que mezclado con lo operativo se lleva la
+# atencion por delante.
+resource "aws_sns_topic" "finops" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  name              = local.finops_topic_name
+  kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
+  tags              = merge(var.tags, { Signal = "finops" })
+}
+
+resource "aws_sns_topic_subscription" "email_finops" {
+  count = local.email_notifications_enabled ? 1 : 0
+
+  topic_arn = aws_sns_topic.finops[0].arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
+data "aws_iam_policy_document" "finops" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  statement {
+    sid    = "TopicOwnerFullAccess"
+    effect = "Allow"
+    actions = [
+      "SNS:AddPermission",
+      "SNS:DeleteTopic",
+      "SNS:GetDataProtectionPolicy",
+      "SNS:GetTopicAttributes",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:ListTagsForResource",
+      "SNS:Publish",
+      "SNS:PutDataProtectionPolicy",
+      "SNS:RemovePermission",
+      "SNS:SetTopicAttributes",
+      "SNS:Subscribe",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    resources = [local.finops_topic_arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.budget_sns_notifications_enabled ? [1] : []
+
+    content {
+      sid     = "AWSBudgetsSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["budgets.amazonaws.com"]
+      }
+
+      resources = [local.finops_topic_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:SourceArn"
+        values   = ["arn:${data.aws_partition.current.partition}:budgets::${data.aws_caller_identity.current.account_id}:*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.cost_anomaly_detection_enabled ? [1] : []
+
+    content {
+      sid     = "AWSCostAnomalyDetectionSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["costalerts.amazonaws.com"]
+      }
+
+      resources = [local.finops_topic_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
+
+  # El informe diario de costos corre con el rol de plan y publica aca.
+  dynamic "statement" {
+    for_each = length(var.notification_publisher_role_arns) > 0 ? [1] : []
+
+    content {
+      sid     = "NotificationsPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "AWS"
+        identifiers = var.notification_publisher_role_arns
+      }
+
+      resources = [local.finops_topic_arn]
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "finops" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  arn    = aws_sns_topic.finops[0].arn
+  policy = data.aws_iam_policy_document.finops[0].json
 }
 
 data "aws_iam_policy_document" "slack_notifications_assume_role" {
@@ -367,37 +517,21 @@ resource "aws_iam_role" "slack_notifications" {
   tags               = var.tags
 }
 
-resource "aws_chatbot_slack_channel_configuration" "alarms" {
-  count = local.slack_notifications_enabled ? 1 : 0
+# Una configuracion por canal, con los topics que aterrizan ahi. El for_each va
+# sobre canales y no sobre topics porque Amazon Q asocia la configuracion al
+# canal: dos configuraciones apuntando al mismo canal se pisan.
+resource "aws_chatbot_slack_channel_configuration" "channels" {
+  for_each = local.channel_topics
 
-  configuration_name = "${var.name}-cost-alerts"
-  iam_role_arn       = aws_iam_role.slack_notifications[0].arn
-  slack_channel_id   = var.slack_channel_id
-  slack_team_id      = var.slack_workspace_id
-  sns_topic_arns = local.dedicated_critical_channel ? [
-    aws_sns_topic.alarms[0].arn,
-    ] : [
-    aws_sns_topic.alarms[0].arn,
-    aws_sns_topic.alarms_critical[0].arn,
-  ]
-  guardrail_policy_arns       = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"]
-  logging_level               = "NONE"
-  user_authorization_required = true
-  tags                        = var.tags
-}
-
-resource "aws_chatbot_slack_channel_configuration" "alarms_critical" {
-  count = local.dedicated_critical_channel ? 1 : 0
-
-  configuration_name          = "${var.name}-critical-alerts"
+  configuration_name          = "${var.name}-${local.channel_labels[each.key]}"
   iam_role_arn                = aws_iam_role.slack_notifications[0].arn
-  slack_channel_id            = var.slack_critical_channel_id
+  slack_channel_id            = each.key
   slack_team_id               = var.slack_workspace_id
-  sns_topic_arns              = [aws_sns_topic.alarms_critical[0].arn]
+  sns_topic_arns              = each.value
   guardrail_policy_arns       = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"]
   logging_level               = "NONE"
   user_authorization_required = true
-  tags                        = merge(var.tags, { Severity = "critical" })
+  tags                        = merge(var.tags, { Signals = local.channel_labels[each.key] })
 }
 
 resource "aws_cloudwatch_metric_alarm" "alloy_status" {
@@ -459,12 +593,12 @@ resource "aws_budgets_budget" "monthly" {
       notification_type          = notification.value == 80 ? "FORECASTED" : "ACTUAL"
       subscriber_email_addresses = var.budget_sns_notifications_enabled ? [] : [var.alarm_email]
       subscriber_sns_topic_arns = var.budget_sns_notifications_enabled ? [
-        aws_sns_topic.alarms[0].arn,
+        aws_sns_topic.finops[0].arn,
       ] : []
     }
   }
 
-  depends_on = [aws_sns_topic_policy.alarms]
+  depends_on = [aws_sns_topic_policy.finops]
 }
 
 resource "aws_ce_anomaly_monitor" "services" {
@@ -485,7 +619,7 @@ resource "aws_ce_anomaly_subscription" "immediate" {
 
   subscriber {
     type    = "SNS"
-    address = aws_sns_topic.alarms[0].arn
+    address = aws_sns_topic.finops[0].arn
   }
 
   threshold_expression {
@@ -498,5 +632,5 @@ resource "aws_ce_anomaly_subscription" "immediate" {
 
   tags = var.tags
 
-  depends_on = [aws_sns_topic_policy.alarms]
+  depends_on = [aws_sns_topic_policy.finops]
 }

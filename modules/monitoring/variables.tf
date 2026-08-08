@@ -75,18 +75,50 @@ variable "slack_workspace_id" {
   }
 }
 
+# Canal base: recibe todo lo que no tenga canal propio, y es donde aterrizan los
+# avisos de costo. Vacio junto con slack_workspace_id deshabilita Slack.
 variable "slack_channel_id" {
-  description = "ID del canal Slack que recibe alertas; vacío junto con slack_workspace_id deshabilita Slack."
+  description = "Canal Slack base. Recibe los avisos de costo y cualquier familia sin canal propio."
   type        = string
   default     = ""
 }
 
-# El ruteo por severidad es lo que separa un canal que se lee de uno que se
-# silencia. Vacio manda critico y advertencia al mismo canal, que es el
-# comportamiento actual y no rompe nada; con un canal propio, lo critico deja de
-# competir con el informe diario de costos.
+# Los canales se separan por tipo de senal: una alarma dice que algo esta mal,
+# un evento dice que algo paso. Cada uno vacio cae al canal base, asi que
+# configurar de menos nunca deja una senal sin destino.
+variable "slack_alerts_channel_id" {
+  description = "Canal Slack de alarmas -criticas y advertencias-. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.slack_alerts_channel_id) == "" ||
+      can(regex("^[CG][A-Z0-9]+$", var.slack_alerts_channel_id))
+    )
+    error_message = "slack_alerts_channel_id debe ser un ID de canal Slack valido."
+  }
+}
+
+variable "slack_infra_channel_id" {
+  description = "Canal Slack de eventos: despliegues, apagados y eventos de ECS y RDS. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.slack_infra_channel_id) == "" ||
+      can(regex("^[CG][A-Z0-9]+$", var.slack_infra_channel_id))
+    )
+    error_message = "slack_infra_channel_id debe ser un ID de canal Slack valido."
+  }
+}
+
+# Solo hace falta el dia que exista guardia. Vacio deja lo critico junto a las
+# advertencias en el canal de alarmas, que es donde tiene sentido mientras las
+# dos las atienda la misma persona en el mismo horario.
 variable "slack_critical_channel_id" {
-  description = "Canal Slack dedicado a alertas criticas. Vacio reutiliza slack_channel_id."
+  description = "Canal Slack dedicado a alarmas criticas. Vacio las deja en el canal de alarmas."
   type        = string
   default     = ""
 

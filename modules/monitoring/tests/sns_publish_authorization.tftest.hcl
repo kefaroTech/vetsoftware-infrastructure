@@ -70,6 +70,7 @@ variables {
   database_arn                     = "arn:aws:rds:us-east-1:123456789012:db:vetsoftware-dev-mysql"
   database_events_enabled          = true
   budget_sns_notifications_enabled = true
+  notification_publisher_role_arns = ["arn:aws:iam::123456789012:role/vetsoftware-iac-apply-dev"]
   cost_anomaly_detection_enabled   = true
   alloy_instance_ids               = []
 }
@@ -123,15 +124,49 @@ run "alarms_are_authorized_to_publish" {
     error_message = "El permiso de CloudWatch debe acotarse con aws:SourceAccount a las alarmas de esta cuenta."
   }
 
-  # Los otros publicadores no pueden perderse por el camino: el informe de costos
-  # y los avisos de despliegue dependen de ellos.
+  # Cada publicador tiene que quedar en el topic de su familia. Si Budgets sigue
+  # autorizado en el topic de alarmas, el informe de costos vuelve a caer en el
+  # canal de alertas, que es justo lo que la separacion viene a evitar.
   assert {
     condition = alltrue([
-      for servicio in ["budgets.amazonaws.com", "costalerts.amazonaws.com", "events.amazonaws.com"] : anytrue([
-        for statement in jsondecode(data.aws_iam_policy_document.alarms[0].json).Statement :
+      for servicio in ["budgets.amazonaws.com", "costalerts.amazonaws.com"] : anytrue([
+        for statement in jsondecode(data.aws_iam_policy_document.finops[0].json).Statement :
         try(statement.Principal.Service, "") == servicio
       ])
     ])
-    error_message = "El topic de advertencia debe seguir autorizando a Budgets, Cost Anomaly Detection y EventBridge."
+    error_message = "El topic de costos debe autorizar a Budgets y a Cost Anomaly Detection."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(data.aws_iam_policy_document.events[0].json).Statement :
+      try(statement.Principal.Service, "") == "events.amazonaws.com"
+    ])
+    error_message = "El topic de eventos debe autorizar a EventBridge."
+  }
+
+  # Los roles de GitHub publican el aviso de despliegue y el informe diario. Sin
+  # su statement en el topic correcto, ambos vuelven a fallar con AccessDenied.
+  assert {
+    condition = alltrue([
+      for policy in [
+        data.aws_iam_policy_document.events[0].json,
+        data.aws_iam_policy_document.finops[0].json,
+        ] : anytrue([
+          for statement in jsondecode(policy).Statement :
+          try(contains(flatten([statement.Principal.AWS]), "arn:aws:iam::123456789012:role/vetsoftware-iac-apply-dev"), false)
+      ])
+    ])
+    error_message = "Los roles publicadores deben estar autorizados en los topics de eventos y de costos."
+  }
+
+  # Las alarmas no publican avisos de costo ni de despliegue: su topic solo debe
+  # aceptar a CloudWatch y a la cuenta.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(data.aws_iam_policy_document.alarms[0].json).Statement :
+      try(statement.Principal.Service, "cloudwatch.amazonaws.com") == "cloudwatch.amazonaws.com"
+    ])
+    error_message = "El topic de alarmas no debe autorizar publicadores de otras familias."
   }
 }
