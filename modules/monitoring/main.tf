@@ -15,7 +15,43 @@ locals {
     var.monthly_budget_usd > 0 &&
     (local.email_notifications_enabled || var.budget_sns_notifications_enabled)
   )
-  alarm_actions = local.notification_topic_enabled ? [aws_sns_topic.alarms[0].arn] : []
+
+  # Dos topicos, no uno. Un canal unico obliga a leer el aviso de presupuesto con
+  # la misma urgencia que una base que se esta quedando sin disco, y en la
+  # practica termina ignorandose entero. `alarm_actions` conserva el nombre
+  # anterior porque lo usan las alertas de costo y las advertencias.
+  alarm_actions    = local.notification_topic_enabled ? [aws_sns_topic.alarms[0].arn] : []
+  critical_actions = local.notification_topic_enabled ? [aws_sns_topic.alarms_critical[0].arn] : []
+
+  # Canal propio para lo critico solo si se pidio uno; si no, ambos topicos
+  # entran por la configuracion Slack que ya existe.
+  dedicated_critical_channel = local.slack_notifications_enabled && trimspace(var.slack_critical_channel_id) != ""
+
+  # Los interruptores son banderas y no "el ARN viene lleno". Un count que
+  # depende del ARN de un cluster que todavia no existe es indecidible en plan:
+  # Terraform no puede saber cuantas instancias crear y aborta pidiendo -target.
+  # La bandera la fija quien llama, se conoce siempre, y el ARN queda solo como
+  # dato del patron de eventos.
+  ecs_events_enabled      = var.ecs_events_enabled && local.notification_topic_enabled
+  database_events_enabled = var.database_events_enabled && local.notification_topic_enabled
+  cache_alarms_enabled    = var.cache_alarms_enabled
+
+  runbook_step           = trimspace(var.runbook_url) != "" ? "Runbook: ${var.runbook_url}" : "Registrar el incidente y su causa raiz en el runbook del entorno"
+  backend_log_group_hint = trimspace(var.backend_log_group_name) != "" ? var.backend_log_group_name : "/ecs/${var.ecs_cluster_name}/backend"
+
+  # Los umbrales absolutos se derivan una sola vez para que la alarma, el output
+  # y la documentacion no puedan discrepar.
+  database_connections_warning_threshold  = floor(var.database_max_connections * var.database_connections_warning_percent / 100)
+  database_connections_critical_threshold = floor(var.database_max_connections * var.database_connections_critical_percent / 100)
+  database_allocated_storage_bytes        = var.database_allocated_storage_gib * 1024 * 1024 * 1024
+  database_free_storage_warning_bytes     = floor(local.database_allocated_storage_bytes * var.database_free_storage_warning_percent / 100)
+  database_free_storage_critical_bytes    = floor(local.database_allocated_storage_bytes * var.database_free_storage_critical_percent / 100)
+
+  cache_data_storage_warning_bytes = floor(var.cache_maximum_data_storage_gb * 1024 * 1024 * 1024 * var.cache_utilization_warning_percent / 100)
+  # ElastiCacheProcessingUnits se acumula por periodo, mientras que el limite del
+  # cache se expresa por segundo: el umbral tiene que multiplicarse por el periodo.
+  cache_ecpu_period_seconds     = 300
+  cache_ecpu_warning_per_period = floor(var.cache_maximum_ecpu_per_second * local.cache_ecpu_period_seconds * var.cache_utilization_warning_percent / 100)
 }
 
 resource "aws_sns_topic" "alarms" {
@@ -132,6 +168,29 @@ data "aws_iam_policy_document" "alarms" {
       }
     }
   }
+
+  dynamic "statement" {
+    for_each = local.ecs_events_enabled || local.database_events_enabled ? [1] : []
+
+    content {
+      sid     = "EventBridgeSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["events.amazonaws.com"]
+      }
+
+      resources = [aws_sns_topic.alarms[0].arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
 }
 
 resource "aws_sns_topic_policy" "alarms" {
@@ -139,6 +198,83 @@ resource "aws_sns_topic_policy" "alarms" {
 
   arn    = aws_sns_topic.alarms[0].arn
   policy = data.aws_iam_policy_document.alarms[0].json
+}
+
+resource "aws_sns_topic" "alarms_critical" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  name              = "${var.name}-alarms-critical"
+  kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
+  tags              = merge(var.tags, { Severity = "critical" })
+}
+
+# El correo se suscribe a los dos topicos: quien confirmo la suscripcion espera
+# recibir lo urgente, no solo lo informativo.
+resource "aws_sns_topic_subscription" "email_critical" {
+  count = local.email_notifications_enabled ? 1 : 0
+
+  topic_arn = aws_sns_topic.alarms_critical[0].arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
+data "aws_iam_policy_document" "alarms_critical" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  statement {
+    sid    = "TopicOwnerFullAccess"
+    effect = "Allow"
+    actions = [
+      "SNS:AddPermission",
+      "SNS:DeleteTopic",
+      "SNS:GetDataProtectionPolicy",
+      "SNS:GetTopicAttributes",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:ListTagsForResource",
+      "SNS:Publish",
+      "SNS:PutDataProtectionPolicy",
+      "SNS:RemovePermission",
+      "SNS:SetTopicAttributes",
+      "SNS:Subscribe",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    resources = [aws_sns_topic.alarms_critical[0].arn]
+  }
+
+  dynamic "statement" {
+    for_each = local.ecs_events_enabled || local.database_events_enabled ? [1] : []
+
+    content {
+      sid     = "EventBridgeSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["events.amazonaws.com"]
+      }
+
+      resources = [aws_sns_topic.alarms_critical[0].arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "alarms_critical" {
+  count = local.notification_topic_enabled ? 1 : 0
+
+  arn    = aws_sns_topic.alarms_critical[0].arn
+  policy = data.aws_iam_policy_document.alarms_critical[0].json
 }
 
 data "aws_iam_policy_document" "slack_notifications_assume_role" {
@@ -167,152 +303,34 @@ resource "aws_iam_role" "slack_notifications" {
 resource "aws_chatbot_slack_channel_configuration" "alarms" {
   count = local.slack_notifications_enabled ? 1 : 0
 
-  configuration_name          = "${var.name}-cost-alerts"
-  iam_role_arn                = aws_iam_role.slack_notifications[0].arn
-  slack_channel_id            = var.slack_channel_id
-  slack_team_id               = var.slack_workspace_id
-  sns_topic_arns              = [aws_sns_topic.alarms[0].arn]
+  configuration_name = "${var.name}-cost-alerts"
+  iam_role_arn       = aws_iam_role.slack_notifications[0].arn
+  slack_channel_id   = var.slack_channel_id
+  slack_team_id      = var.slack_workspace_id
+  sns_topic_arns = local.dedicated_critical_channel ? [
+    aws_sns_topic.alarms[0].arn,
+    ] : [
+    aws_sns_topic.alarms[0].arn,
+    aws_sns_topic.alarms_critical[0].arn,
+  ]
   guardrail_policy_arns       = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"]
   logging_level               = "NONE"
   user_authorization_required = true
   tags                        = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "backend_cpu" {
-  alarm_name          = "${var.name}-backend-high-cpu"
-  alarm_description   = "Backend CPU above 85% for 10 minutes"
-  namespace           = "AWS/ECS"
-  metric_name         = "CPUUtilization"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 2
-  threshold           = 85
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
+resource "aws_chatbot_slack_channel_configuration" "alarms_critical" {
+  count = local.dedicated_critical_channel ? 1 : 0
 
-  dimensions = {
-    ClusterName = var.ecs_cluster_name
-    ServiceName = var.ecs_service_name
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "backend_memory" {
-  alarm_name          = "${var.name}-backend-high-memory"
-  alarm_description   = "Backend memory above 85% for 10 minutes"
-  namespace           = "AWS/ECS"
-  metric_name         = "MemoryUtilization"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 2
-  threshold           = 85
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
-
-  dimensions = {
-    ClusterName = var.ecs_cluster_name
-    ServiceName = var.ecs_service_name
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_log_metric_filter" "cloudflare_tunnel_errors" {
-  name           = "${var.name}-cloudflare-tunnel-errors"
-  pattern        = "{ $.level = \"error\" }"
-  log_group_name = var.cloudflare_tunnel_log_group_name
-
-  metric_transformation {
-    name          = "ConnectorErrors"
-    namespace     = "VetSoftware/CloudflareTunnel"
-    value         = "1"
-    default_value = "0"
-    unit          = "Count"
-  }
-}
-
-resource "aws_cloudwatch_metric_alarm" "cloudflare_tunnel_errors" {
-  alarm_name          = "${var.name}-cloudflare-tunnel-errors"
-  alarm_description   = "Cloudflare Tunnel connector emitted one or more errors"
-  namespace           = "VetSoftware/CloudflareTunnel"
-  metric_name         = "ConnectorErrors"
-  statistic           = "Sum"
-  period              = 300
-  evaluation_periods  = 1
-  threshold           = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "database_cpu" {
-  alarm_name          = "${var.name}-database-high-cpu"
-  alarm_description   = "RDS CPU above 80%"
-  namespace           = "AWS/RDS"
-  metric_name         = "CPUUtilization"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 3
-  threshold           = 80
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-
-  dimensions = {
-    DBInstanceIdentifier = var.database_identifier
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "database_storage" {
-  alarm_name          = "${var.name}-database-low-storage"
-  alarm_description   = "RDS free storage below 5 GiB"
-  namespace           = "AWS/RDS"
-  metric_name         = "FreeStorageSpace"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 1
-  threshold           = 5368709120
-  comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-
-  dimensions = {
-    DBInstanceIdentifier = var.database_identifier
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "database_memory" {
-  alarm_name          = "${var.name}-database-low-memory"
-  alarm_description   = "RDS free memory is below the safe threshold"
-  namespace           = "AWS/RDS"
-  metric_name         = "FreeableMemory"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 2
-  datapoints_to_alarm = 2
-  threshold           = var.database_freeable_memory_threshold_bytes
-  comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "breaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
-
-  dimensions = {
-    DBInstanceIdentifier = var.database_identifier
-  }
-
-  tags = var.tags
+  configuration_name          = "${var.name}-critical-alerts"
+  iam_role_arn                = aws_iam_role.slack_notifications[0].arn
+  slack_channel_id            = var.slack_critical_channel_id
+  slack_team_id               = var.slack_workspace_id
+  sns_topic_arns              = [aws_sns_topic.alarms_critical[0].arn]
+  guardrail_policy_arns       = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"]
+  logging_level               = "NONE"
+  user_authorization_required = true
+  tags                        = merge(var.tags, { Severity = "critical" })
 }
 
 resource "aws_cloudwatch_metric_alarm" "alloy_status" {

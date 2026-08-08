@@ -46,6 +46,27 @@ override_resource {
   }
 }
 
+# Mismo motivo que el monitor de anomalías: el ARN de un topic SNS no existe
+# hasta el apply, y lo que se quiere verificar -que el ruteo por severidad esté
+# cableado- se decide en plan.
+override_resource {
+  target          = module.monitoring.aws_sns_topic.alarms[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-alarms"
+  }
+}
+
+override_resource {
+  target          = module.monitoring.aws_sns_topic.alarms_critical[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-alarms-critical"
+  }
+}
+
 run "development_cost_profile_plans" {
   command = plan
 
@@ -140,6 +161,68 @@ run "development_cost_profile_plans" {
       contains(output.scheduled_shutdown_names, "vetsoftware-dev-stop-notice")
     )
     error_message = "El apagado programado debe crear dos acciones ordenadas -ECS y despues RDS-, avisar en Slack al detener, y ninguna de encendido."
+  }
+
+  # El ruteo por severidad tiene que existir aunque nadie configure un canal
+  # aparte: sin topico critico, una tarea muerta y un aviso de presupuesto
+  # llegan con el mismo peso.
+  assert {
+    condition = (
+      output.alerting.critical_topic_arn != null &&
+      output.alerting.warning_topic_arn != null &&
+      output.alerting.slack_enabled &&
+      !output.alerting.dedicated_critical_channel
+    )
+    error_message = "Dev debe crear los dos topicos de severidad y enrutarlos a Slack; sin canal critico dedicado ambos entran por el canal existente."
+  }
+
+  assert {
+    condition = (
+      output.alerting.ecs_events_enabled &&
+      output.alerting.database_events_enabled &&
+      output.alerting.cache_alarms_enabled &&
+      !output.alerting.container_insights_alarms
+    )
+    error_message = "Dev debe observar eventos de ECS y RDS y alarmas de cache, y omitir las que dependen de Container Insights mientras siga apagado."
+  }
+
+  # Los umbrales se derivan de max_connections y del volumen: si alguien cambia
+  # la clase de instancia sin actualizar database_max_connections, esta asercion
+  # es la que lo detiene antes de que las alarmas avisen tarde.
+  assert {
+    condition = (
+      output.alerting.database.max_connections == 60 &&
+      output.alerting.database.connections_warning == 42 &&
+      output.alerting.database.connections_critical == 54
+    )
+    error_message = "Los umbrales de conexiones deben derivarse de max_connections: 70% advertencia y 90% critico sobre 60 conexiones."
+  }
+
+  assert {
+    condition = (
+      output.alerting.database.free_storage_warning_bytes == 5368709120 &&
+      output.alerting.database.free_storage_critical_bytes == 2147483648
+    )
+    error_message = "El disco libre debe alertar al 25% y escalar al 10% de los 20 GiB asignados, que es donde RDS apaga la instancia."
+  }
+
+  assert {
+    condition = (
+      output.alerting.backend.memory_warning_percent == 85 &&
+      output.alerting.backend.memory_critical_percent == 92 &&
+      output.alerting.backend.crash_loop_threshold == 3 &&
+      output.alerting.backend.crash_loop_window_min == 15
+    )
+    error_message = "El backend debe advertir memoria al 85%, escalar al 92% -antes del OOM de la JVM- y declarar crash loop con 3 paradas en 15 minutos."
+  }
+
+  assert {
+    condition = (
+      length(output.alerting.composite_alarm_names) == 2 &&
+      contains(output.alerting.composite_alarm_names, "vetsoftware-dev-database-saturated") &&
+      contains(output.alerting.composite_alarm_names, "vetsoftware-dev-backend-degraded")
+    )
+    error_message = "Deben existir las dos alarmas compuestas que correlacionan señales sueltas en un incidente."
   }
 
   assert {
