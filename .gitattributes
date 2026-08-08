@@ -1,0 +1,6 @@
+# Los workflows y los scripts se ejecutan en Linux. Un CRLF rompe el
+# terminador de un heredoc y el shebang de un script, y en Windows eso pasa
+# inadvertido hasta que falla en CI.
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf

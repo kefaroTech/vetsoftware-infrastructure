@@ -1,0 +1,144 @@
+name: GitFlow guard
+
+# INF-26. El plan Free con repositorios privados no permite branch protection ni
+# rulesets: la API responde 403 "Upgrade to GitHub Pro or make this repository
+# public". Sin ese control, nada impide empujar directamente a develop o a main,
+# ni abrir un PR desde una rama que no sigue GitFlow.
+#
+# Este workflow es el sustituto disponible. No PUEDE impedir el push -para eso
+# hace falta el plan de pago-, pero lo detecta y deja el commit en rojo, que es
+# la diferencia entre una convencion y un control. Cuando se contrate GitHub
+# Team, esto pasa a ser un required status check y ya no hay que tocarlo.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Nadie escribe en develop ni en main si no es a traves de un merge de PR.
+  # ---------------------------------------------------------------------------
+  no-direct-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verificar que la punta es un merge de pull request
+        env:
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          CREATED: ${{ github.event.created }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # El versionado automatico (chore(version): X.Y.Z-dev.N) commitea sobre
+          # develop con el token de Actions. Es un commit de un solo padre y es
+          # legitimo: se exceptua por actor, no por mensaje, que es falsificable.
+          if [ "$ACTOR" = "github-actions[bot]" ]; then
+            echo "::notice::Push de la automatizacion de versionado; exento."
+            exit 0
+          fi
+
+          if [ "$CREATED" = "true" ]; then
+            echo "::notice::Creacion de la rama; nada que verificar."
+            exit 0
+          fi
+
+          PARENTS=$(git rev-list --parents -n 1 "$SHA" | wc -w)
+          # 1 palabra = commit raiz; 2 = un padre; 3+ = merge.
+          if [ "$PARENTS" -ge 3 ]; then
+            echo "Merge commit en $BRANCH. Correcto."
+            exit 0
+          fi
+
+          echo "::error title=Push directo a $BRANCH::El commit $SHA no es un merge de pull request."
+          cat <<'TXT'
+
+          GitFlow: a develop y a main solo se llega por pull request.
+
+          Para deshacerlo sin perder el trabajo:
+
+              git checkout -b fix/<descripcion> $SHA
+              git push -u origin fix/<descripcion>
+              git checkout BRANCH_ACTUAL
+              git reset --hard origin/BRANCH_ACTUAL~1   # revisar antes de ejecutar
+              git push --force-with-lease
+
+          Y abrir el pull request desde la rama nueva.
+          TXT
+          exit 1
+
+  # ---------------------------------------------------------------------------
+  # Las ramas se llaman como manda GitFlow y apuntan a donde deben.
+  # ---------------------------------------------------------------------------
+  branch-naming:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validar nombre de rama y rama destino
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          echo "PR: $HEAD_REF -> $BASE_REF"
+
+          fallo=0
+
+          case "$HEAD_REF" in
+            release/*|hotfix/*)
+              # Una release o un hotfix cierran contra main. La reintegracion a
+              # develop es un PR aparte, y por eso develop tambien es valido.
+              if [ "$BASE_REF" != "main" ] && [ "$BASE_REF" != "develop" ]; then
+                echo "::error::'$HEAD_REF' debe apuntar a main (y reintegrarse a develop), no a '$BASE_REF'."
+                fallo=1
+              fi
+              ;;
+            feature/*|fix/*|perf/*|refactor/*|docs/*|test/*|chore/*|build/*|ci/*|sec/*|style/*)
+              if [ "$BASE_REF" != "develop" ]; then
+                echo "::error::'$HEAD_REF' debe integrarse en develop, no en '$BASE_REF'."
+                echo "::error::Si es un arreglo urgente de produccion, la rama es hotfix/<version>."
+                fallo=1
+              fi
+              ;;
+            develop)
+              if [ "$BASE_REF" != "main" ]; then
+                echo "::error::develop solo se promueve a main."
+                fallo=1
+              fi
+              ;;
+            *)
+              echo "::error title=Nombre de rama fuera de GitFlow::'$HEAD_REF' no usa ningun prefijo valido."
+              cat <<'TXT'
+
+          Prefijos admitidos:
+
+              feature/  fix/  perf/  refactor/  docs/  test/
+              chore/    build/ ci/   sec/       style/     -> integran en develop
+              release/  hotfix/                            -> cierran contra main
+
+          Renombrar la rama:
+
+              git branch -m <nombre-nuevo>
+              git push origin -u <nombre-nuevo>
+              git push origin --delete <nombre-viejo>
+
+          TXT
+              fallo=1
+              ;;
+          esac
+
+          [ "$fallo" -eq 0 ] && echo "Rama y destino conformes a GitFlow."
+          exit $fallo
