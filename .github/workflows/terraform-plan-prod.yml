@@ -22,26 +22,36 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: iac-plan-prod
+    # Mismo motivo que en dev: iac-plan-prod esta atado a main y release/**, y la
+    # referencia de un PR no es una rama, asi que el job moria antes del primer
+    # paso. Un PR corre sin environment -el rol de plan admite ese sujeto- y
+    # workflow_dispatch lo conserva, porque su referencia si es una rama.
+    # Condicion invertida a proposito: la cadena vacia es falsy en las
+    # expresiones de GitHub, asi que el valor no vacio debe ir en el lado
+    # verdadero o el environment no se suelta nunca.
+    environment: ${{ github.event_name != 'pull_request' && 'iac-plan-prod' || '' }}
     concurrency:
       group: terraform-prod
       cancel-in-progress: false
+    # Prefijadas y a nivel de repositorio: sin environment no se leen las de
+    # iac-plan-prod, y el scope de repositorio es plano, asi que sin el prefijo
+    # prod pisaria los valores de dev.
     env:
       DEPLOY_ENVIRONMENT: prod
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/vetsoftware-iac-plan-prod
-      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
-      TF_VARS_JSON: ${{ vars.TF_VARS_JSON }}
-      TF_VAR_api_domain_name: ${{ vars.API_DOMAIN_NAME }}
-      TF_VAR_backend_image_uri: ${{ vars.BACKEND_IMAGE_URI }}
-      TF_VAR_cors_allowed_origins: ${{ vars.CORS_ALLOWED_ORIGINS }}
-      TF_VAR_email_from: ${{ vars.EMAIL_FROM }}
-      TF_VAR_grafana_otlp_endpoint: ${{ vars.GRAFANA_OTLP_ENDPOINT }}
-      TF_VAR_login_url: ${{ vars.LOGIN_URL }}
-      TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
-      TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      AWS_REGION: ${{ vars.PROD_AWS_REGION || 'us-east-1' }}
+      AWS_ACCOUNT_ID: ${{ vars.PROD_AWS_ACCOUNT_ID }}
+      AWS_ROLE_TO_ASSUME: arn:aws:iam::${{ vars.PROD_AWS_ACCOUNT_ID }}:role/vetsoftware-iac-plan-prod
+      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
+      TF_STATE_KMS_KEY_ARN: ${{ vars.PROD_TF_STATE_KMS_KEY_ARN }}
+      TF_VARS_JSON: ${{ vars.PROD_TF_VARS_JSON }}
+      TF_VAR_api_domain_name: ${{ vars.PROD_API_DOMAIN_NAME }}
+      TF_VAR_backend_image_uri: ${{ vars.PROD_BACKEND_IMAGE_URI }}
+      TF_VAR_cors_allowed_origins: ${{ vars.PROD_CORS_ALLOWED_ORIGINS }}
+      TF_VAR_email_from: ${{ vars.PROD_EMAIL_FROM }}
+      TF_VAR_grafana_otlp_endpoint: ${{ vars.PROD_GRAFANA_OTLP_ENDPOINT }}
+      TF_VAR_login_url: ${{ vars.PROD_LOGIN_URL }}
+      TF_VAR_password_reset_url: ${{ vars.PROD_PASSWORD_RESET_URL }}
+      TF_VAR_registration_verification_url: ${{ vars.PROD_REGISTRATION_VERIFICATION_URL }}
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 

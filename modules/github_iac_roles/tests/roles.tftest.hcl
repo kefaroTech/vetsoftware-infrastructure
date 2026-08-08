@@ -67,6 +67,32 @@ run "environment_and_function_roles_are_isolated" {
     error_message = "Cada trust policy debe exigir el subject inmutable y su GitHub Environment exclusivo."
   }
 
+  # El job de plan corre sin environment en un pull_request, porque la deployment
+  # branch policy no puede casar con refs/pull/N/merge. Apply no recibe ese sujeto:
+  # es donde vive la aprobacion manual y abrirlo a un PR la eliminaria.
+  assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.assume["dev_plan"].json, "repo:kefaroTech@12345678/VetSoftwareIaC@100000004:pull_request"),
+      strcontains(data.aws_iam_policy_document.assume["prod_plan"].json, "repo:kefaroTech@12345678/VetSoftwareIaC@100000004:pull_request"),
+      !strcontains(data.aws_iam_policy_document.assume["dev_apply"].json, ":pull_request"),
+      !strcontains(data.aws_iam_policy_document.assume["prod_apply"].json, ":pull_request"),
+    ])
+    error_message = "Solo los roles de plan admiten el sujeto pull_request; apply se limita a su GitHub Environment."
+  }
+
+  # Dos sujetos exactos y ninguno mas: si alguien cambiara el StringEquals por un
+  # comodin, cualquier workflow del repositorio podria asumir el rol de plan.
+  assert {
+    condition = alltrue([
+      for key in ["dev_plan", "prod_plan"] :
+      length([
+        for statement in jsondecode(data.aws_iam_policy_document.assume[key].json).Statement :
+        statement if length(statement.Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == 2
+      ]) == 1
+    ])
+    error_message = "El rol de plan debe enumerar exactamente dos sujetos y seguir siendo StringEquals."
+  }
+
   assert {
     condition = alltrue([
       length([for statement in jsondecode(data.aws_iam_policy_document.state["dev_plan"].json).Statement : statement if statement.Sid == "WriteEnvironmentState"]) == 0,
