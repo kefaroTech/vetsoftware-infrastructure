@@ -166,6 +166,30 @@ run "development_cost_profile_plans" {
     error_message = "Los logs de RDS dev deben excluir general, caducar a tres dias y cifrarse con la CMK del entorno."
   }
 
+  # INF-49: la cuenta tiene que registrar quien hizo que. Dev tambien, porque su
+  # base lleva datos de prueba con forma de datos reales.
+  assert {
+    condition = (
+      output.traceability.multi_region &&
+      output.traceability.global_service_events &&
+      output.traceability.log_file_validation &&
+      output.traceability.encrypted_with_cmk &&
+      output.traceability.evidence_object_lock == "COMPLIANCE" &&
+      output.traceability.access_analyzer_enabled
+    )
+    error_message = "Dev debe tener el rastro multi-region, con digests firmados, cifrado con la CMK y su evidencia bajo Object Lock COMPLIANCE."
+  }
+
+  # La restriccion de coste es parte del contrato, no una intencion: si alguien
+  # enciende GuardDuty o los data events, el gate lo dice antes del apply.
+  assert {
+    condition = (
+      !output.traceability.guardduty_enabled &&
+      !output.traceability.s3_data_events
+    )
+    error_message = "Ni GuardDuty ni los data events pueden encenderse sin decidirlo: los dos se facturan."
+  }
+
   assert {
     condition     = output.cost_profile.valkey_storage_gb == 1 && output.cost_profile.valkey_ecpu_per_second == 1000
     error_message = "Valkey dev debe mantener los límites mínimos."

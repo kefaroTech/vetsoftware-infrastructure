@@ -205,6 +205,49 @@ registrados: revise el plan siguiente antes de aplicarlo.
 Prod no tiene un workflow equivalente; su desbloqueo se hace a mano y de forma
 deliberada.
 
+## Trazabilidad de la cuenta y su coste
+
+`modules/account_baseline` responde a quien hizo que en la cuenta. Va instanciado
+en los dos roots de ambiente y no en el bootstrap, porque necesita la CMK y el
+topic de alertas del entorno. Cada cuenta lleva el suyo: CloudTrail, GuardDuty y
+Access Analyzer son singletons de cuenta, y dev y prod viven en cuentas
+separadas.
+
+Lo que queda activo **no genera cargo**:
+
+| Control | Que responde | Coste |
+|---|---|---|
+| CloudTrail, primer trail, *management events* | Quien cambio que en la cuenta | Sin cargo |
+| S3 server access logging | Quien descargo que documento | Sin cargo por evento |
+| IAM Access Analyzer | Que recurso quedo accesible desde fuera | Sin cargo |
+
+El unico gasto real es el almacenamiento en S3 de lo que se escribe: megabytes
+al mes para esta cuenta. Los access logs caducan segun `access_log_retention_days`;
+el rastro no caduca, porque su Object Lock es COMPLIANCE y cubre el termino de
+firmeza fiscal de cinco anios.
+
+Dos controles quedan **apagados a proposito, y el contrato de cada ambiente lo
+fija**, de modo que encenderlos sea una decision y no una deriva:
+
+- `enable_s3_data_events` — data events de CloudTrail sobre los buckets
+  regulados. USD 0,10 por cada 100.000 eventos. Responde la misma pregunta que
+  el access logging con mas detalle y en minutos en lugar de horas.
+- `enable_guardduty` — es la unica pieza de **deteccion**: el resto del modulo
+  registra, pero no avisa. Se factura por volumen analizado.
+
+Con los dos apagados el hallazgo de trazabilidad queda cubierto y el de
+deteccion de comportamiento anomalo sigue abierto. Es un intercambio explicito,
+no un olvido.
+
+### ECS Exec
+
+Apagado en produccion (`enable_execute_command = false`). Una shell en el
+contenedor lee `DB_PASSWORD`, `JWT_SECRET` y `DIAN_ENC_KEY`. Activarlo con un
+apply enciende a la vez el registro de las sesiones en
+`/ecs/<nombre>/exec`, cifrado con la CMK: CloudTrail anota que alguien invoco
+`ExecuteCommand`, pero no lo que se tecleo dentro. Se apaga despues del
+diagnostico.
+
 ## Log groups de RDS sin gestionar
 
 RDS crea `/aws/rds/instance/<id>/<log>` la primera vez que exporta, y lo hace con

@@ -70,3 +70,7 @@ output "network_egress_profile" {
     s3_gateway_endpoint = true
   })
 }
+
+output "traceability" {
+  value = module.account_baseline.traceability
+}

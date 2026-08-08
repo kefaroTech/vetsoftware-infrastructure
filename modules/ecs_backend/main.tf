@@ -1,11 +1,41 @@
 data "aws_region" "current" {}
 
+# Una shell en el contenedor da acceso al filesystem, a la red de la tarea y a
+# las variables inyectadas desde Secrets Manager -DB_PASSWORD, JWT_SECRET,
+# DIAN_ENC_KEY-. Sin este log group la sesion no queda registrada en ningun
+# sitio: CloudTrail anota que alguien invoco ExecuteCommand, pero no lo que se
+# tecleo dentro. Solo existe cuando la capacidad esta activa.
+resource "aws_cloudwatch_log_group" "exec" {
+  count = var.enable_execute_command ? 1 : 0
+
+  name              = "/ecs/${var.name}/exec"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+  tags              = var.tags
+}
+
 resource "aws_ecs_cluster" "this" {
   name = var.name
 
   setting {
     name  = "containerInsights"
     value = var.enable_container_insights ? "enhanced" : "disabled"
+  }
+
+  dynamic "configuration" {
+    for_each = var.enable_execute_command ? [1] : []
+
+    content {
+      execute_command_configuration {
+        kms_key_id = var.kms_key_arn
+        logging    = "OVERRIDE"
+
+        log_configuration {
+          cloud_watch_encryption_enabled = true
+          cloud_watch_log_group_name     = aws_cloudwatch_log_group.exec[0].name
+        }
+      }
+    }
   }
 
   tags = var.tags

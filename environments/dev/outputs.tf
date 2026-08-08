@@ -88,3 +88,7 @@ output "cost_profile" {
     interface_endpoints    = 0
   }
 }
+
+output "traceability" {
+  value = module.account_baseline.traceability
+}

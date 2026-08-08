@@ -151,6 +151,11 @@ module "backend" {
   fargate_spot_weight   = var.backend_fargate_spot_weight
   environment_variables = local.backend_environment
   secrets               = local.backend_secrets
+
+  # Apagado en produccion. Una shell aqui da acceso a DB_PASSWORD, JWT_SECRET y
+  # DIAN_ENC_KEY. Cuando haya que diagnosticar se activa con un apply, que deja
+  # el registro de sesiones encendido a la vez, y se vuelve a apagar despues.
+  enable_execute_command = var.enable_execute_command
   runtime_secret_arns = [
     module.database.master_secret_arn,
     module.cache.connection_secret_arn,
@@ -186,4 +191,45 @@ module "monitoring" {
   database_identifier              = module.database.identifier
   alloy_instance_ids               = module.alloy.instance_ids
   tags                             = local.common_tags
+}
+
+# Linea base de trazabilidad de la cuenta. Prod tiene la suya: dev y prod viven
+# en cuentas separadas, y CloudTrail, GuardDuty y Access Analyzer son singletons
+# de cuenta.
+#
+# Todo lo que queda activo es gratuito. GuardDuty y los data events de
+# CloudTrail se facturan; el contrato fija que siguen apagados, de modo que
+# encenderlos sea una decision explicita y no una deriva.
+module "account_baseline" {
+  source = "../../modules/account_baseline"
+
+  name           = local.name
+  aws_account_id = data.aws_caller_identity.current.account_id
+  aws_region     = var.aws_region
+  kms_key_arn    = module.kms.key_arn
+
+  # Los dos buckets con datos personales: el de documentos generados y el de
+  # evidencia de auditoria. Leer el WORM tambien es un acceso que hay que poder
+  # reconstruir: escribir de forma inmutable no registra las lecturas.
+  regulated_bucket_arns = [
+    "${module.storage_audit.application_bucket_arn}/",
+    "${module.storage_audit.audit_bucket_arn}/",
+  ]
+
+  alarm_topic_arn = module.monitoring.alarm_topic_arn
+  tags            = local.common_tags
+}
+
+resource "aws_s3_bucket_logging" "application" {
+  bucket = module.storage_audit.application_bucket_name
+
+  target_bucket = module.account_baseline.access_logs_bucket_name
+  target_prefix = "s3/${module.storage_audit.application_bucket_name}/"
+}
+
+resource "aws_s3_bucket_logging" "audit" {
+  bucket = module.storage_audit.audit_bucket_name
+
+  target_bucket = module.account_baseline.access_logs_bucket_name
+  target_prefix = "s3/${module.storage_audit.audit_bucket_name}/"
 }
