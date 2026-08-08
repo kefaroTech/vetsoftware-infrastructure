@@ -56,6 +56,11 @@ output "finops_alerts" {
   }
 }
 
+output "alerting" {
+  description = "Contrato de alertas operativas de dev: severidades, umbrales derivados y circuitos de eventos activos."
+  value       = module.monitoring.alerting
+}
+
 output "cost_profile" {
   value = {
     backend_cpu_mib    = var.backend_cpu

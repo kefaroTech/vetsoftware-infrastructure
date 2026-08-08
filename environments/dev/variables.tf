@@ -361,6 +361,37 @@ variable "slack_channel_id" {
   default     = ""
 }
 
+# Vacio deja lo critico en el mismo canal que el informe de costos, que es como
+# esta hoy. Con un canal propio, una tarea que muere deja de competir por
+# atencion con un aviso de presupuesto.
+variable "slack_critical_channel_id" {
+  description = "Canal Slack dedicado a alertas criticas de dev. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+variable "runbook_url" {
+  description = "URL del runbook citada en cada notificacion enviada a Slack."
+  type        = string
+  default     = ""
+}
+
+# RDS calcula max_connections como {DBInstanceClassMemory/12582880}. AWS
+# documenta que en clases micro la memoria reservada deja el resultado alrededor
+# de 60. Reconfirmar con SHOW GLOBAL VARIABLES LIKE 'max_connections' al cambiar
+# database_instance_class: si este valor miente, las alarmas de conexiones
+# avisan tarde o no avisan.
+variable "database_max_connections" {
+  description = "max_connections efectivo de la instancia dev; los umbrales de conexiones se derivan de aqui."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.database_max_connections > 0
+    error_message = "database_max_connections debe ser mayor que cero."
+  }
+}
+
 # Solo apaga. El encendido es manual, con el workflow "Start dev environment".
 variable "scheduled_shutdown_enabled" {
   type    = bool

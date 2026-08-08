@@ -18,6 +18,12 @@ variable "cost_alerts_sns_enabled" {
   default     = false
 }
 
+variable "event_notifications_sns_enabled" {
+  description = "Autoriza a EventBridge a cifrar con esta CMK los eventos de ECS y RDS que publica en SNS."
+  type        = bool
+  default     = false
+}
+
 # Publicar en un topic cifrado no es solo SNS:Publish: SNS pide la data key con la
 # identidad de quien publica, asi que sin permiso sobre esta CMK el aviso muere con
 # un AccessDenied de KMS.

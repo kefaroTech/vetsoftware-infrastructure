@@ -1,10 +1,11 @@
 module "kms" {
   source = "../../modules/kms"
 
-  name                    = local.name
-  cost_alerts_sns_enabled = true
-  sns_publisher_role_arns = [local.deployment_notifier_role_arn, local.cost_reporter_role_arn]
-  tags                    = local.common_tags
+  name                            = local.name
+  cost_alerts_sns_enabled         = true
+  event_notifications_sns_enabled = true
+  sns_publisher_role_arns         = [local.deployment_notifier_role_arn, local.cost_reporter_role_arn]
+  tags                            = local.common_tags
 }
 
 module "network" {
@@ -306,16 +307,40 @@ module "monitoring" {
   cost_anomaly_threshold_usd     = var.cost_anomaly_threshold_usd
   slack_workspace_id             = var.slack_workspace_id
   slack_channel_id               = var.slack_channel_id
+  slack_critical_channel_id      = var.slack_critical_channel_id
+  runbook_url                    = var.runbook_url
   notification_publisher_role_arns = [
     local.deployment_notifier_role_arn,
     local.cost_reporter_role_arn,
   ]
+
+  ecs_events_enabled               = true
   ecs_cluster_name                 = module.backend.cluster_name
+  ecs_cluster_arn                  = module.backend.cluster_arn
   ecs_service_name                 = module.backend.service_name
+  ecs_service_arn                  = module.backend.service_arn
+  backend_log_group_name           = module.backend.log_group_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name
-  database_identifier              = module.database.identifier
-  alloy_instance_ids               = []
-  tags                             = local.common_tags
+  container_insights_enabled       = var.backend_container_insights
+
+  database_events_enabled = true
+  database_identifier     = module.database.identifier
+  database_arn            = module.database.arn
+  # Los umbrales de conexiones y disco se derivan de estos dos valores en vez de
+  # escribirse a mano: cambiar la clase de instancia o ampliar el volumen mueve
+  # las alarmas con ellos. max_connections lo calcula RDS como
+  # {DBInstanceClassMemory/12582880} y hay que reconfirmarlo con
+  # SHOW GLOBAL VARIABLES LIKE 'max_connections' al cambiar de clase.
+  database_max_connections       = var.database_max_connections
+  database_allocated_storage_gib = var.database_allocated_storage
+
+  cache_alarms_enabled          = true
+  cache_name                    = module.cache.name
+  cache_maximum_data_storage_gb = var.valkey_maximum_data_storage_gb
+  cache_maximum_ecpu_per_second = var.valkey_maximum_ecpu_per_second
+
+  alloy_instance_ids = []
+  tags               = local.common_tags
 }
 
 module "scheduled_shutdown" {

@@ -133,6 +133,42 @@ data "aws_iam_policy_document" "this" {
     }
   }
 
+  # EventBridge publica los eventos de ECS y RDS en un topic cifrado con esta
+  # clave. Sin permiso de GenerateDataKey la regla coincide, el target se ejecuta
+  # y la publicacion falla en silencio: el evento se pierde sin dejar error
+  # visible en ningun lado salvo la metrica FailedInvocations de la regla.
+  dynamic "statement" {
+    for_each = var.event_notifications_sns_enabled ? [1] : []
+
+    content {
+      sid    = "AllowEventBridgeAlertEncryption"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["events.amazonaws.com"]
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+      ]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["sns.${data.aws_region.current.region}.amazonaws.com"]
+      }
+    }
+  }
+
   dynamic "statement" {
     for_each = var.cost_alerts_sns_enabled ? [1] : []
 
