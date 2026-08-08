@@ -25,7 +25,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $projectName = "vetsoftware"
-$topicName = "$projectName-$Environment-alarms"
+$topicName = "$projectName-$Environment-finops"
 # Cost Explorer atiende en un solo endpoint, us-east-1, sin importar donde vivan
 # los recursos. Se fija aca para que el informe no dependa de la region del runner.
 $costExplorerRegion = "us-east-1"

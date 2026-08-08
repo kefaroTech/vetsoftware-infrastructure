@@ -151,8 +151,8 @@ resource "aws_cloudwatch_event_target" "ecs_task_failed_notification" {
   count = local.ecs_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.ecs_task_failed[0].name
-  target_id = "notify-critical"
-  arn       = aws_sns_topic.alarms_critical[0].arn
+  target_id = "notify-events"
+  arn       = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {
@@ -211,8 +211,8 @@ resource "aws_cloudwatch_event_target" "ecs_deployment_failed_notification" {
   count = local.ecs_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.ecs_deployment_failed[0].name
-  target_id = "notify-critical"
-  arn       = aws_sns_topic.alarms_critical[0].arn
+  target_id = "notify-events"
+  arn       = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {
@@ -273,8 +273,8 @@ resource "aws_cloudwatch_event_target" "ecs_service_impaired_notification" {
   count = local.ecs_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.ecs_service_impaired[0].name
-  target_id = "notify-critical"
-  arn       = aws_sns_topic.alarms_critical[0].arn
+  target_id = "notify-events"
+  arn       = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {

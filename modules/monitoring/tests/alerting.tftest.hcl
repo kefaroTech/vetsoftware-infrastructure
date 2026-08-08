@@ -42,12 +42,32 @@ override_resource {
   }
 }
 
+override_resource {
+  target          = aws_sns_topic.events[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-events"
+  }
+}
+
+override_resource {
+  target          = aws_sns_topic.finops[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-dev-finops"
+  }
+}
+
 variables {
   name                             = "vetsoftware-dev"
   aws_region                       = "us-east-1"
   alarm_email                      = "sre@example.test"
   slack_workspace_id               = "T0123456789"
   slack_channel_id                 = "C0123456789"
+  slack_alerts_channel_id          = "C0ALERTS000"
+  slack_infra_channel_id           = "C0INFRA0000"
   ecs_cluster_name                 = "vetsoftware-dev-backend"
   ecs_cluster_arn                  = "arn:aws:ecs:us-east-1:123456789012:cluster/vetsoftware-dev-backend"
   ecs_service_name                 = "backend"
@@ -77,16 +97,28 @@ run "severity_routing_is_separated" {
     error_message = "Lo critico debe tener su propio topic para poder enrutarse aparte cuando exista guardia."
   }
 
-  # Sin canal critico dedicado los dos topics entran por la configuracion Slack
-  # existente. Si esto se rompe, lo critico deja de llegar a ningun lado.
+  # Con canales separados debe haber una configuracion por canal, nunca dos
+  # apuntando al mismo: Amazon Q asocia la configuracion al canal y se pisarian.
   assert {
-    condition     = length(aws_chatbot_slack_channel_configuration.alarms[0].sns_topic_arns) == 2
-    error_message = "Sin canal critico dedicado, la configuracion Slack debe suscribir los dos topics."
+    condition = (
+      length(aws_chatbot_slack_channel_configuration.channels) == 3 &&
+      length(distinct([for c in aws_chatbot_slack_channel_configuration.channels : c.slack_channel_id])) == 3
+    )
+    error_message = "Debe crearse exactamente una configuracion de Amazon Q por canal distinto."
   }
 
+  # El reparto por tipo de senal es el contrato: alarmas a un canal, eventos a
+  # otro, costos al tercero. Si un topic se cuela en el canal equivocado, la
+  # familia mas frecuente entierra a la mas importante.
   assert {
-    condition     = length(aws_chatbot_slack_channel_configuration.alarms_critical) == 0
-    error_message = "No debe crearse una segunda configuracion Slack mientras no se pida un canal critico."
+    condition = alltrue([
+      length(aws_chatbot_slack_channel_configuration.channels["C0ALERTS000"].sns_topic_arns) == 2,
+      contains(aws_chatbot_slack_channel_configuration.channels["C0ALERTS000"].sns_topic_arns, aws_sns_topic.alarms[0].arn),
+      contains(aws_chatbot_slack_channel_configuration.channels["C0ALERTS000"].sns_topic_arns, aws_sns_topic.alarms_critical[0].arn),
+      aws_chatbot_slack_channel_configuration.channels["C0INFRA0000"].sns_topic_arns == toset([aws_sns_topic.events[0].arn]),
+      aws_chatbot_slack_channel_configuration.channels["C0123456789"].sns_topic_arns == toset([aws_sns_topic.finops[0].arn]),
+    ])
+    error_message = "Cada canal debe recibir solo los topics de su familia: alarmas, eventos y costos por separado."
   }
 
   assert {
@@ -245,9 +277,19 @@ run "notifications_render_in_slack_instead_of_dumping_json" {
     error_message = "Las notificaciones de eventos deben usar el esquema de notificacion personalizada de Amazon Q Developer."
   }
 
+  # Todo evento sale por el topic de eventos, sin importar su gravedad: un
+  # evento cuenta lo que paso y va al canal de infra. Si uno se cuela en el
+  # topic de alarmas, aterriza en el canal que debe estar reservado a lo que
+  # exige accion.
   assert {
-    condition     = aws_cloudwatch_event_target.database_warning_notification[0].arn == aws_sns_topic.alarms[0].arn
-    error_message = "Los eventos informativos de RDS no pueden entrar por el topic critico."
+    condition = alltrue([
+      aws_cloudwatch_event_target.database_warning_notification[0].arn == aws_sns_topic.events[0].arn,
+      aws_cloudwatch_event_target.database_critical_notification[0].arn == aws_sns_topic.events[0].arn,
+      aws_cloudwatch_event_target.ecs_task_failed_notification[0].arn == aws_sns_topic.events[0].arn,
+      aws_cloudwatch_event_target.ecs_deployment_failed_notification[0].arn == aws_sns_topic.events[0].arn,
+      aws_cloudwatch_event_target.ecs_service_impaired_notification[0].arn == aws_sns_topic.events[0].arn,
+    ])
+    error_message = "Los eventos de ECS y RDS deben publicarse en el topic de eventos, no en los de alarmas."
   }
 }
 

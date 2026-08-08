@@ -7,6 +7,16 @@ output "critical_alarm_topic_arn" {
   value       = length(aws_sns_topic.alarms_critical) > 0 ? aws_sns_topic.alarms_critical[0].arn : null
 }
 
+output "events_topic_arn" {
+  description = "Topic de eventos: despliegues, apagados y eventos de ECS y RDS."
+  value       = length(aws_sns_topic.events) > 0 ? aws_sns_topic.events[0].arn : null
+}
+
+output "finops_topic_arn" {
+  description = "Topic de costos: informe diario, presupuesto y anomalias."
+  value       = length(aws_sns_topic.finops) > 0 ? aws_sns_topic.finops[0].arn : null
+}
+
 # Inventario declarativo del contrato de alertas. Sirve para dos cosas: que las
 # pruebas afirmen sobre umbrales concretos sin leer cada recurso, y que la
 # documentacion se pueda regenerar desde el estado en vez de escribirse a mano y
@@ -16,12 +26,24 @@ output "alerting" {
   value = {
     warning_topic_arn          = length(aws_sns_topic.alarms) > 0 ? aws_sns_topic.alarms[0].arn : null
     critical_topic_arn         = length(aws_sns_topic.alarms_critical) > 0 ? aws_sns_topic.alarms_critical[0].arn : null
+    events_topic_arn           = length(aws_sns_topic.events) > 0 ? aws_sns_topic.events[0].arn : null
+    finops_topic_arn           = length(aws_sns_topic.finops) > 0 ? aws_sns_topic.finops[0].arn : null
     slack_enabled              = local.slack_notifications_enabled
     dedicated_critical_channel = local.dedicated_critical_channel
     ecs_events_enabled         = local.ecs_events_enabled
     database_events_enabled    = local.database_events_enabled
     cache_alarms_enabled       = local.cache_alarms_enabled
     container_insights_alarms  = var.container_insights_enabled
+
+    # Que familia de senal llega a que canal. Es el contrato que hay que revisar
+    # cuando alguien dice "esto no me llego": dice si el problema es de ruteo o
+    # de entrega.
+    channel_routing = local.slack_notifications_enabled ? {
+      alerts   = local.alerts_channel
+      critical = local.critical_channel
+      infra    = local.infra_channel
+      finops   = local.finops_channel
+    } : {}
 
     backend = {
       cpu_warning_percent     = var.backend_cpu_warning_percent
@@ -58,7 +80,7 @@ output "cost_anomaly_monitor_arn" {
   value       = length(aws_ce_anomaly_monitor.services) > 0 ? aws_ce_anomaly_monitor.services[0].arn : null
 }
 
-output "slack_chat_configuration_arn" {
-  description = "ARN de la configuración Amazon Q Developer/Slack cuando está habilitada."
-  value       = length(aws_chatbot_slack_channel_configuration.alarms) > 0 ? aws_chatbot_slack_channel_configuration.alarms[0].chat_configuration_arn : null
+output "slack_chat_configuration_arns" {
+  description = "ARN de cada configuración Amazon Q Developer/Slack, una por canal."
+  value       = [for config in aws_chatbot_slack_channel_configuration.channels : config.chat_configuration_arn]
 }

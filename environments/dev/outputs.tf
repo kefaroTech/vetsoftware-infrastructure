@@ -44,15 +44,15 @@ output "scheduled_shutdown_names" {
 output "finops_alerts" {
   description = "Configuración multicanal de alertas de costo del entorno dev."
   value = {
-    monthly_budget_usd      = var.monthly_budget_usd
-    forecast_threshold_usd  = var.monthly_budget_usd * 0.8
-    actual_threshold_usd    = var.monthly_budget_usd
-    anomaly_threshold_usd   = var.cost_anomaly_threshold_usd
-    email_enabled           = trimspace(var.alarm_email) != ""
-    slack_enabled           = local.slack_notifications_enabled
-    topic_arn               = module.monitoring.alarm_topic_arn
-    anomaly_monitor_arn     = module.monitoring.cost_anomaly_monitor_arn
-    slack_configuration_arn = module.monitoring.slack_chat_configuration_arn
+    monthly_budget_usd       = var.monthly_budget_usd
+    forecast_threshold_usd   = var.monthly_budget_usd * 0.8
+    actual_threshold_usd     = var.monthly_budget_usd
+    anomaly_threshold_usd    = var.cost_anomaly_threshold_usd
+    email_enabled            = trimspace(var.alarm_email) != ""
+    slack_enabled            = local.slack_notifications_enabled
+    topic_arn                = module.monitoring.finops_topic_arn
+    anomaly_monitor_arn      = module.monitoring.cost_anomaly_monitor_arn
+    slack_configuration_arns = module.monitoring.slack_chat_configuration_arns
   }
 }
 

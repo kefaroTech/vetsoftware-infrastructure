@@ -361,11 +361,22 @@ variable "slack_channel_id" {
   default     = ""
 }
 
-# Vacio deja lo critico en el mismo canal que el informe de costos, que es como
-# esta hoy. Con un canal propio, una tarea que muere deja de competir por
-# atencion con un aviso de presupuesto.
+variable "slack_alerts_channel_id" {
+  description = "Canal Slack de alarmas de dev -criticas y advertencias-. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+variable "slack_infra_channel_id" {
+  description = "Canal Slack de despliegues, apagados y eventos de ECS y RDS. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+# Solo hace falta el dia que exista guardia: separa lo critico de las
+# advertencias dentro del canal de alarmas.
 variable "slack_critical_channel_id" {
-  description = "Canal Slack dedicado a alertas criticas de dev. Vacio reutiliza slack_channel_id."
+  description = "Canal Slack dedicado a alarmas criticas de dev. Vacio las deja en el canal de alarmas."
   type        = string
   default     = ""
 }

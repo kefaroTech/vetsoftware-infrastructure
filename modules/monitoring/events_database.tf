@@ -37,8 +37,8 @@ resource "aws_cloudwatch_event_target" "database_critical_notification" {
   count = local.database_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.database_critical[0].name
-  target_id = "notify-critical"
-  arn       = aws_sns_topic.alarms_critical[0].arn
+  target_id = "notify-events"
+  arn       = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {
@@ -92,8 +92,8 @@ resource "aws_cloudwatch_event_target" "database_warning_notification" {
   count = local.database_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.database_warning[0].name
-  target_id = "notify-warning"
-  arn       = aws_sns_topic.alarms[0].arn
+  target_id = "notify-events"
+  arn       = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {
