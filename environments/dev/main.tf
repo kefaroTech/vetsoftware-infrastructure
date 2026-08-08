@@ -234,6 +234,8 @@ module "database" {
   backup_retention_period      = var.database_backup_retention_days
   performance_insights_enabled = false
   apply_immediately            = true
+  log_retention_days           = var.log_retention_days
+  kms_key_arn                  = module.kms.key_arn
   tags                         = local.common_tags
 }
 

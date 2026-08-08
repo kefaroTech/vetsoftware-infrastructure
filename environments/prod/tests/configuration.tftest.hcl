@@ -33,6 +33,17 @@ mock_provider "aws" {
   }
 }
 
+# El ARN de la CMK no existe hasta el apply, y sin el no se puede comprobar en
+# plan que los log groups de RDS la usen en lugar de la clave de AWS.
+override_resource {
+  target          = module.kms.aws_kms_key.this
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+}
+
 run "production_configuration_plans" {
   command = plan
 
@@ -76,6 +87,18 @@ run "production_configuration_plans" {
       !output.database_hardening.skip_final_snapshot
     )
     error_message = "RDS prod debe conservar backup, IAM DB Auth, deletion protection y snapshot final."
+  }
+
+  # El log general expone el texto de cada consulta y sus log groups, si los crea
+  # RDS, nacen sin caducidad y con la clave de AWS. Prod no puede desplegarse asi.
+  assert {
+    condition = (
+      !contains(output.database_logging.exports, "general") &&
+      output.database_logging.retention_in_days == 30 &&
+      output.database_logging.all_encrypted_with_cmk &&
+      length(output.database_logging.log_group_names) == 2
+    )
+    error_message = "Los logs de RDS prod deben excluir general, caducar a 30 dias y cifrarse con la CMK del entorno."
   }
 
   assert {

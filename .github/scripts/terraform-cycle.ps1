@@ -375,6 +375,118 @@ function Restore-OrphanedEcsService {
     return $true
 }
 
+# RDS crea /aws/rds/instance/<id>/<log> por su cuenta la primera vez que exporta,
+# con retencion infinita y la clave gestionada por AWS. Al pasar esos grupos a
+# Terraform el plan los ve como create y CloudWatch responde
+# ResourceAlreadyExistsException, de modo que el apply no avanza hasta adoptarlos.
+# Importar no toca los eventos ya almacenados: el apply siguiente solo les fija
+# caducidad y CMK.
+function Restore-UnmanagedRdsLogGroups {
+    param([Parameter()][string]$VariableFile)
+
+    # Mismo allowlist que modules/database/variables.tf. Cualquier otro grupo bajo
+    # el prefijo -"general" entre ellos- no lo declara el modulo, asi que no hay
+    # direccion a la que importarlo y no es este paso quien debe borrarlo.
+    $managedExports = @("error", "slowquery", "audit")
+    $instanceName = "$projectName-$Environment-mysql"
+    $prefix = "/aws/rds/instance/$instanceName/"
+
+    $stateEntries = & terraform "-chdir=$environmentDirectory" state list 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "No fue posible listar el state para buscar log groups de RDS sin gestionar; el ciclo continua sin reconciliar."
+        return $false
+    }
+    $stateEntries = @($stateEntries)
+
+    # Un ambiente recien creado no tiene ningun grupo y la llamada devuelve vacio:
+    # no hay nada que adoptar y el create normal es el camino correcto.
+    $describeArguments = @(
+        "logs", "describe-log-groups",
+        "--log-group-name-prefix", $prefix,
+        "--query", "logGroups[].logGroupName",
+        "--output", "json"
+    )
+    $describeOutput = & aws @describeArguments 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "No fue posible listar los log groups de $instanceName; el ciclo continua sin reconciliar."
+        return $false
+    }
+
+    $existing = @(($describeOutput -join [Environment]::NewLine) | ConvertFrom-Json)
+    $pending = @()
+    foreach ($logGroupName in $existing) {
+        $export = ([string]$logGroupName -split "/")[-1]
+        if ($managedExports -notcontains $export) {
+            continue
+        }
+
+        $address = "module.database.aws_cloudwatch_log_group.database[`"$export`"]"
+        if ($stateEntries -contains $address) {
+            continue
+        }
+
+        $pending += [PSCustomObject]@{ Address = $address; Name = [string]$logGroupName }
+    }
+
+    if ($pending.Count -eq 0) {
+        return $false
+    }
+
+    $names = ($pending | ForEach-Object { $_.Name }) -join ", "
+    $summaryPath = $env:GITHUB_STEP_SUMMARY
+    if ($Mode -ne "Apply") {
+        # Plan y drift jamas mutan el state: solo avisan para que la adopcion se vea
+        # antes de aprobar el apply, que es quien la ejecuta.
+        Write-Warning "Los log groups $names existen en CloudWatch pero no en el state: los creo RDS. Este plan los muestra como create; el apply los adoptara con terraform import."
+        if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+            Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+                "",
+                "### Log groups de RDS sin gestionar",
+                "",
+                "``$names`` existen en CloudWatch pero no en el state: los creo RDS con retencion infinita y la clave de AWS.",
+                "",
+                "Este plan los muestra como *create* y CloudWatch lo rechazaria con ``ResourceAlreadyExistsException``.",
+                "El apply los adopta con ``terraform import`` antes de planear, asi que el plan definitivo sera un *update* que les fija caducidad y CMK."
+            )
+        }
+
+        return $false
+    }
+
+    foreach ($group in $pending) {
+        Write-Host "[Terraform] Adoptando el log group $($group.Name) al state..." -ForegroundColor Yellow
+        $importArguments = @(
+            "-chdir=$environmentDirectory",
+            "import",
+            "-input=false",
+            "-lock-timeout=5m",
+            "-no-color"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($VariableFile)) {
+            $importArguments += "-var-file=$VariableFile"
+        }
+        $importArguments += @($group.Address, $group.Name)
+
+        # El pipe a Write-Host evita que la salida de terraform contamine el valor de
+        # retorno de la funcion, que es el booleano que consulta el cuerpo del script.
+        Invoke-ExternalCommand -Command "terraform" -Arguments $importArguments |
+            ForEach-Object { Write-Host $_ }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+        Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+            "",
+            "### Log groups de RDS adoptados",
+            "",
+            "``$names`` existian en CloudWatch fuera del state porque los creo RDS.",
+            "",
+            "Se importaron antes de generar el plan, de modo que el apply les fija retencion y CMK en lugar de intentar recrearlos."
+        )
+    }
+
+    return $true
+}
+
 function Write-PlanReport {
     param(
         [Parameter(Mandatory)][int]$ExitCode,
@@ -509,6 +621,10 @@ if (Restore-OrphanedEcsService -VariableFile $variableFile) {
     # BACKEND_IMAGE_URI que se uso como respaldo mientras el servicio faltaba.
     Set-CurrentBackendImage
 }
+
+# No depende del bloque anterior: son dos reconciliaciones independientes que solo
+# comparten el momento, antes de planear.
+Restore-UnmanagedRdsLogGroups -VariableFile $variableFile | Out-Null
 
 $temporaryDirectory = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     [IO.Path]::GetTempPath()

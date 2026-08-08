@@ -38,3 +38,18 @@ output "hardening" {
     skip_final_snapshot                 = aws_db_instance.this.skip_final_snapshot
   }
 }
+
+output "logging" {
+  description = "Superficie de logs de la instancia, para que los contratos de entorno la fijen."
+  value = {
+    exports           = aws_db_instance.this.enabled_cloudwatch_logs_exports
+    retention_in_days = var.log_retention_days
+    log_group_names   = sort([for group in aws_cloudwatch_log_group.database : group.name])
+
+    # Los grupos que Terraform no gestiona quedan con la clave de AWS; si alguno
+    # aparece sin CMK es que se colo uno fuera de este modulo.
+    all_encrypted_with_cmk = alltrue([
+      for group in aws_cloudwatch_log_group.database : group.kms_key_id == var.kms_key_arn
+    ])
+  }
+}

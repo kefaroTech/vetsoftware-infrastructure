@@ -67,6 +67,8 @@ module "database" {
   max_allocated_storage   = var.database_max_allocated_storage
   multi_az                = var.database_multi_az
   backup_retention_period = var.database_backup_retention_days
+  log_retention_days      = var.log_retention_days
+  kms_key_arn             = module.kms.key_arn
   tags                    = local.common_tags
 }
 

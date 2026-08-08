@@ -85,6 +85,17 @@ override_resource {
   }
 }
 
+# El ARN de la CMK tampoco existe hasta el apply, y sin el no se puede comprobar
+# en plan que los log groups de RDS la usen en lugar de la clave de AWS.
+override_resource {
+  target          = module.kms.aws_kms_key.this
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+  }
+}
+
 run "development_cost_profile_plans" {
   command = plan
 
@@ -141,6 +152,18 @@ run "development_cost_profile_plans" {
       !output.cost_profile.database_hardening.skip_final_snapshot
     )
     error_message = "RDS dev debe conservar IAM DB Auth, deletion protection y snapshot final."
+  }
+
+  # Dev comparte la base con datos reales de pruebas, asi que el log general esta
+  # igual de prohibido que en prod; la retencion sigue la del entorno, tres dias.
+  assert {
+    condition = (
+      !contains(output.cost_profile.database_logging.exports, "general") &&
+      output.cost_profile.database_logging.retention_in_days == 3 &&
+      output.cost_profile.database_logging.all_encrypted_with_cmk &&
+      length(output.cost_profile.database_logging.log_group_names) == 2
+    )
+    error_message = "Los logs de RDS dev deben excluir general, caducar a tres dias y cifrarse con la CMK del entorno."
   }
 
   assert {

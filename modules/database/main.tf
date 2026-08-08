@@ -17,6 +17,18 @@ resource "aws_db_parameter_group" "this" {
     value = "1"
   }
 
+  # El log general escribe el texto de CADA sentencia al almacenamiento de la
+  # instancia: identificaciones, correos, montos de facturacion. RDS lo trae
+  # apagado, pero el parametro es dinamico y cualquiera lo enciende desde la
+  # consola sin reinicio. Fijarlo aqui hace a Terraform su dueno, de modo que
+  # el drift detection lo detecte y el apply siguiente lo revierta. Quitar la
+  # exportacion a CloudWatch (var.enabled_log_exports) no basta: sin esto el
+  # dato se genera igual, solo que se queda en el disco de la instancia.
+  parameter {
+    name  = "general_log"
+    value = "0"
+  }
+
   parameter {
     name  = "slow_query_log"
     value = "1"
@@ -32,6 +44,22 @@ resource "aws_db_parameter_group" "this" {
   }
 
   tags = var.tags
+}
+
+# RDS crea estos grupos por su cuenta la primera vez que exporta, con retencion
+# "Never expire" y la clave gestionada por AWS. Declararlos es la unica forma de
+# fijarles caducidad y CMK: no hay ajuste equivalente en la instancia.
+#
+# Tienen que existir ANTES que ella. Si RDS llega primero, el grupo ya creado no
+# es de Terraform y adoptarlo exige un import manual.
+resource "aws_cloudwatch_log_group" "database" {
+  for_each = toset(var.enabled_log_exports)
+
+  name              = "/aws/rds/instance/${var.name}/${each.value}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+
+  tags = merge(var.tags, { Name = "${var.name}-${each.value}" })
 }
 
 resource "aws_db_instance" "this" {
@@ -73,9 +101,11 @@ resource "aws_db_instance" "this" {
   skip_final_snapshot        = false
   final_snapshot_identifier  = "${var.name}-final"
 
-  enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
+  enabled_cloudwatch_logs_exports = var.enabled_log_exports
 
   tags = merge(var.tags, { Name = var.name })
+
+  depends_on = [aws_cloudwatch_log_group.database]
 
   lifecycle {
     precondition {
