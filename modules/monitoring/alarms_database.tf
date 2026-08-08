@@ -265,7 +265,8 @@ resource "aws_cloudwatch_metric_alarm" "database_disk_queue" {
 # Creditos de rafaga. Son especificos de la familia t y son la causa mas comun de
 # una base que "de repente esta lenta" sin que ninguna metrica clasica lo
 # explique: al agotarse, el throughput cae a la linea base sin emitir un error.
-# notBreaching cubre el caso de mover el entorno a una clase que no las publica.
+# En estas dos, notBreaching cubre el caso de mover el entorno a una clase que no
+# las publica. La de creditos de CPU usa "ignore" por el motivo explicado abajo.
 resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
   for_each = toset(["EBSIOBalance%", "EBSByteBalance%"])
 
@@ -290,6 +291,25 @@ resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
   tags = merge(var.tags, { Severity = "warning" })
 }
 
+# Unica alarma con "ignore" en vez de "notBreaching", y es deliberado.
+#
+# Parar una instancia RDS de clase t borra el saldo de creditos acumulado: al
+# encender arranca en 0. Como el ambiente se apaga cada noche (schedules
+# vetsoftware-dev-*-stop) y solo vive encendido unas horas, el saldo casi nunca
+# alcanza el umbral antes del siguiente apagado. Con "notBreaching" pasaba esto:
+# la instancia se apagaba, faltaba UN datapoint -bastan 1 de los 3 que exige
+# datapoints_to_alarm-, y la alarma anunciaba OK en Slack como si se hubiera
+# recuperado. Verificado el 2026-08-08: apagado a las 05:38 UTC con el saldo real
+# en ~5 creditos, y transicion a OK a las 05:46 UTC.
+#
+# "ignore" mantiene el ultimo estado conocido mientras no hay datos: la alarma se
+# queda como estaba en vez de fingir recuperacion. No genera ruido extra porque
+# sin cambio de estado no hay notificacion.
+#
+# Contrapartida: si el entorno se mueve a una clase que no publica
+# CPUCreditBalance estando en ALARM, la alarma queda colgada en ese estado. Ese
+# es el caso que "notBreaching" cubre en las demas de esta familia; aqui se
+# acepta a cambio de no recibir un OK falso cada noche.
 resource "aws_cloudwatch_metric_alarm" "database_cpu_credits" {
   alarm_name          = "${var.name}-database-cpu-credits-low"
   alarm_description   = "ADVERTENCIA · Creditos de CPU de la instancia burstable por debajo de ${var.database_cpu_credit_warning_balance}. Sin creditos, la clase t cae a su linea base o factura sobrecosto."
@@ -301,7 +321,7 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_credits" {
   datapoints_to_alarm = 3
   threshold           = var.database_cpu_credit_warning_balance
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = "ignore"
   alarm_actions       = local.alarm_actions
   ok_actions          = local.alarm_actions
 

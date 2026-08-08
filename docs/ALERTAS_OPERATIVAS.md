@@ -167,8 +167,18 @@ correlación, no la repetición.
 `EBSIOBalance%`, `EBSByteBalance%` y `CPUCreditBalance` solo se publican en la
 familia `t`. Agotarlos no produce ningún error: el throughput cae a la línea
 base y la base «de repente está lenta» sin que ninguna métrica clásica lo
-explique. Todas usan `notBreaching` para que mover el entorno a otra clase no
-deje alarmas colgadas.
+explique. Las dos de EBS usan `notBreaching` para que mover el entorno a otra
+clase no deje alarmas colgadas.
+
+`CPUCreditBalance` es la excepción: usa `ignore`. Parar una instancia de clase
+`t` **borra el saldo acumulado** —al encender arranca en 0—, y como el ambiente
+se apaga cada noche el saldo rara vez llega al umbral antes del siguiente
+apagado. Con `notBreaching`, el apagado producía un datapoint faltante y la
+alarma anunciaba OK en Slack como si se hubiera recuperado, estando el saldo
+real cerca de cero. `ignore` conserva el último estado conocido mientras no hay
+datos, así que deja de fingir recuperación; y como no hay cambio de estado,
+tampoco genera notificaciones extra. A cambio, si el entorno pasa a una clase
+que no publica la métrica estando en ALARM, esa alarma queda colgada.
 
 ## 4. Cache Valkey
 

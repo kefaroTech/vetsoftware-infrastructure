@@ -148,6 +148,15 @@ run "scheduled_shutdown_does_not_page" {
     ])
     error_message = "Ninguna alarma puede tratar la falta de datos como falla: el entorno se apaga cada noche a proposito."
   }
+
+  # La de creditos de CPU es la excepcion deliberada. Parar la instancia borra el
+  # saldo, asi que con notBreaching el apagado nocturno producia el efecto
+  # contrario al de arriba: un OK falso en Slack -bastaba un datapoint faltante
+  # de los 3 que exige datapoints_to_alarm- con el saldo real cerca de cero.
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.database_cpu_credits.treat_missing_data == "ignore"
+    error_message = "La alarma de creditos de CPU debe usar ignore: con notBreaching el apagado nocturno la resuelve en falso."
+  }
 }
 
 run "thresholds_match_the_failure_they_predict" {
