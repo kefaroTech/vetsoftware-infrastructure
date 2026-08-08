@@ -26,7 +26,10 @@ jobs:
     # referencia de un PR no es una rama, asi que el job moria antes del primer
     # paso. Un PR corre sin environment -el rol de plan admite ese sujeto- y
     # workflow_dispatch lo conserva, porque su referencia si es una rama.
-    environment: ${{ github.event_name == 'pull_request' && '' || 'iac-plan-prod' }}
+    # Condicion invertida a proposito: la cadena vacia es falsy en las
+    # expresiones de GitHub, asi que el valor no vacio debe ir en el lado
+    # verdadero o el environment no se suelta nunca.
+    environment: ${{ github.event_name != 'pull_request' && 'iac-plan-prod' || '' }}
     concurrency:
       group: terraform-prod
       cancel-in-progress: false

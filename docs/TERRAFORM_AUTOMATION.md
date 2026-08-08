@@ -107,8 +107,13 @@ existe el workflow.
 Por eso `terraform-plan-dev/prod` declara el Environment de forma condicional:
 
 ```yaml
-environment: ${{ github.event_name == 'pull_request' && '' || 'iac-plan-dev' }}
+environment: ${{ github.event_name != 'pull_request' && 'iac-plan-dev' || '' }}
 ```
+
+La condicion va invertida a proposito. En las expresiones de GitHub la cadena
+vacia es *falsy*, de modo que `== 'pull_request' && '' || 'iac-plan-dev'` cae
+siempre en la ultima rama y el environment no se suelta nunca: el valor no vacio
+tiene que ocupar el lado verdadero.
 
 Un PR corre sin Environment y su token OIDC llega como `...:pull_request`, sujeto
 que la trust policy del rol de **plan** acepta ademas del suyo propio. Los roles de

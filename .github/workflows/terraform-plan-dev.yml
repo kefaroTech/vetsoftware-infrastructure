@@ -30,7 +30,12 @@ jobs:
     #
     # workflow_dispatch si conserva el environment, porque su referencia es una
     # rama y la politica la acepta.
-    environment: ${{ github.event_name == 'pull_request' && '' || 'iac-plan-dev' }}
+    #
+    # La condicion va invertida a proposito: en las expresiones de GitHub la
+    # cadena vacia es falsy, asi que "== 'pull_request' && '' || 'iac-plan-dev'"
+    # cae siempre en la ultima rama y el environment nunca se soltaria. El valor
+    # no vacio tiene que ir en el lado verdadero.
+    environment: ${{ github.event_name != 'pull_request' && 'iac-plan-dev' || '' }}
     concurrency:
       group: terraform-dev
       cancel-in-progress: false
