@@ -89,10 +89,39 @@ Cada bootstrap emite solamente los roles de su ambiente:
 
 | Environment | Rama autorizada | Rol |
 |---|---|---|
-| `iac-plan-dev` | PR/manual de dev | `dev.plan` |
+| `iac-plan-dev` | `develop` (solo manual, drift, costos y despliegue) | `dev.plan` |
 | `iac-apply-dev` | `develop` | `dev.apply` |
-| `iac-plan-prod` | PR/manual de prod | `prod.plan` |
+| `iac-plan-prod` | `main` (idem) | `prod.plan` |
 | `iac-apply-prod` | `main` | `prod.apply` |
+
+### El plan de un PR corre sin Environment
+
+Las deployment branch policies son la unica proteccion que permite el plan Free
+(ver el limite en la nota de GitFlow), y solo saben casar nombres de rama. La
+referencia de un pull request es `refs/pull/N/merge`, que no es una rama: con
+`iac-plan-dev` atado a `develop`, el job moria en dos segundos con
+`Branch "refs/pull/N/merge" is not allowed to deploy to iac-plan-dev`, antes de
+ejecutar un solo paso. El plan no llegaba nunca al PR, que es justo para lo que
+existe el workflow.
+
+Por eso `terraform-plan-dev/prod` declara el Environment de forma condicional:
+
+```yaml
+environment: ${{ github.event_name == 'pull_request' && '' || 'iac-plan-dev' }}
+```
+
+Un PR corre sin Environment y su token OIDC llega como `...:pull_request`, sujeto
+que la trust policy del rol de **plan** acepta ademas del suyo propio. Los roles de
+**apply** no lo aceptan: ahi vive la aprobacion manual y abrirlos a un PR la
+eliminaria. `workflow_dispatch` conserva el Environment, porque su referencia si es
+una rama.
+
+La contrapartida es que un job sin Environment tampoco lee las variables del
+Environment. Las que necesita el plan viven a nivel de repositorio y **van
+prefijadas**, porque ese scope es plano y `dev` y `prod` usan los mismos nombres con
+valores distintos: `DEV_AWS_ACCOUNT_ID`, `PROD_AWS_ACCOUNT_ID`, y asi con el resto.
+Son una copia de las del Environment, que siguen sirviendo a drift, costos y
+despliegue de imagen: **al cambiar un valor hay que actualizar los dos sitios**.
 
 Configure en plan y apply del ambiente correspondiente:
 

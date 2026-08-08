@@ -1,4 +1,9 @@
 locals {
+  # El repositorio personaliza el sujeto OIDC con los IDs inmutables de la
+  # organizacion y del repo, de modo que renombrar cualquiera de los dos no
+  # reabre la confianza a un tercero que reclame el nombre libre.
+  github_subject_prefix = "repo:${var.github_organization}@${var.github_organization_id}/${var.github_repository}@${var.github_repository_id}"
+
   role_definitions = merge([
     for environment, config in var.environments : {
       "${environment}_plan" = {
@@ -203,10 +208,23 @@ data "aws_iam_policy_document" "assume" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # El rol de plan admite un segundo sujeto: el de un job sin environment en un
+    # pull_request. Es lo que necesita "Terraform plan dev/prod" para publicar el
+    # plan como comentario del PR, porque el environment lleva una deployment
+    # branch policy atada a develop y la referencia de un PR -refs/pull/N/merge-
+    # no es una rama: nunca puede coincidir, asi que el job muere antes del
+    # primer paso.
+    #
+    # Se concede solo a plan, que es de lectura. Los roles de apply conservan
+    # exclusivamente el sujeto del environment, que es donde vive la aprobacion
+    # manual; abrirlos a un PR eliminaria esa puerta.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_organization}@${var.github_organization_id}/${var.github_repository}@${var.github_repository_id}:environment:${each.value.github_environment}"]
+      values = concat(
+        ["${local.github_subject_prefix}:environment:${each.value.github_environment}"],
+        each.value.function == "plan" ? ["${local.github_subject_prefix}:pull_request"] : [],
+      )
     }
   }
 }
