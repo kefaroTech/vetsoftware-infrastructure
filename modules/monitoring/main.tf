@@ -36,6 +36,18 @@ locals {
   database_events_enabled = var.database_events_enabled && local.notification_topic_enabled
   cache_alarms_enabled    = var.cache_alarms_enabled
 
+  # Los nombres se declaran una sola vez y el ARN se deriva de ellos en vez de
+  # leerse del recurso. Referenciar aws_sns_topic.alarms[0].arn dentro de la
+  # policy obliga a Terraform a diferir la lectura del policy document hasta el
+  # apply -el ARN no existe antes-, y eso deja la politica como "known after
+  # apply" en cada plan: no se puede revisar en el PR ni afirmar sobre ella en un
+  # contrato. Derivarla la vuelve visible en el plan.
+  alarms_topic_name          = "${var.name}-alarms"
+  alarms_critical_topic_name = "${var.name}-alarms-critical"
+  sns_arn_prefix             = "arn:${data.aws_partition.current.partition}:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}"
+  alarms_topic_arn           = "${local.sns_arn_prefix}:${local.alarms_topic_name}"
+  alarms_critical_topic_arn  = "${local.sns_arn_prefix}:${local.alarms_critical_topic_name}"
+
   runbook_step           = trimspace(var.runbook_url) != "" ? "Runbook: ${var.runbook_url}" : "Registrar el incidente y su causa raiz en el runbook del entorno"
   backend_log_group_hint = trimspace(var.backend_log_group_name) != "" ? var.backend_log_group_name : "/ecs/${var.ecs_cluster_name}/backend"
 
@@ -57,7 +69,7 @@ locals {
 resource "aws_sns_topic" "alarms" {
   count = local.notification_topic_enabled ? 1 : 0
 
-  name              = "${var.name}-alarms"
+  name              = local.alarms_topic_name
   kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
   tags              = var.tags
 }
@@ -97,7 +109,41 @@ data "aws_iam_policy_document" "alarms" {
       identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
     }
 
-    resources = [aws_sns_topic.alarms[0].arn]
+    resources = [local.alarms_topic_arn]
+  }
+
+  # Sin esto ninguna alarma avisa. TopicOwnerFullAccess autoriza a la cuenta
+  # -principal :root-, pero cuando una alarma se dispara quien publica no es la
+  # cuenta: es el service principal cloudwatch.amazonaws.com, que ese statement
+  # no cubre. El resultado es una alarma que cambia de estado correctamente y
+  # falla en silencio al notificar, con "CloudWatch Alarms is not authorized to
+  # perform: SNS:Publish" enterrado en el historial de acciones.
+  #
+  # Paso exactamente eso en dev: database-low-memory estuvo cuatro dias en ALARM
+  # sin que llegara un solo mensaje, mientras el informe de costos y los avisos de
+  # despliegue si llegaban -esos publican con roles IAM, que tienen su statement-.
+  #
+  # Se acota con aws:SourceAccount y no con aws:SourceArn a proposito: una
+  # condicion que el servicio no popule reproduce el mismo fallo silencioso que
+  # este statement viene a arreglar. La cuenta ya es el limite que importa,
+  # porque todas las alarmas de la cuenta son nuestras.
+  statement {
+    sid     = "CloudWatchAlarmsSNSPublishingPermissions"
+    effect  = "Allow"
+    actions = ["SNS:Publish"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+
+    resources = [local.alarms_topic_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 
   dynamic "statement" {
@@ -113,7 +159,7 @@ data "aws_iam_policy_document" "alarms" {
         identifiers = ["budgets.amazonaws.com"]
       }
 
-      resources = [aws_sns_topic.alarms[0].arn]
+      resources = [local.alarms_topic_arn]
 
       condition {
         test     = "StringEquals"
@@ -142,7 +188,7 @@ data "aws_iam_policy_document" "alarms" {
         identifiers = var.notification_publisher_role_arns
       }
 
-      resources = [aws_sns_topic.alarms[0].arn]
+      resources = [local.alarms_topic_arn]
     }
   }
 
@@ -159,7 +205,7 @@ data "aws_iam_policy_document" "alarms" {
         identifiers = ["costalerts.amazonaws.com"]
       }
 
-      resources = [aws_sns_topic.alarms[0].arn]
+      resources = [local.alarms_topic_arn]
 
       condition {
         test     = "StringEquals"
@@ -182,7 +228,7 @@ data "aws_iam_policy_document" "alarms" {
         identifiers = ["events.amazonaws.com"]
       }
 
-      resources = [aws_sns_topic.alarms[0].arn]
+      resources = [local.alarms_topic_arn]
 
       condition {
         test     = "StringEquals"
@@ -203,7 +249,7 @@ resource "aws_sns_topic_policy" "alarms" {
 resource "aws_sns_topic" "alarms_critical" {
   count = local.notification_topic_enabled ? 1 : 0
 
-  name              = "${var.name}-alarms-critical"
+  name              = local.alarms_critical_topic_name
   kms_master_key_id = trimspace(var.sns_kms_key_arn) != "" ? var.sns_kms_key_arn : null
   tags              = merge(var.tags, { Severity = "critical" })
 }
@@ -243,7 +289,28 @@ data "aws_iam_policy_document" "alarms_critical" {
       identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
     }
 
-    resources = [aws_sns_topic.alarms_critical[0].arn]
+    resources = [local.alarms_critical_topic_arn]
+  }
+
+  # Mismo motivo que en el topic de advertencia: las alarmas criticas y las
+  # compuestas publican como cloudwatch.amazonaws.com, no como la cuenta.
+  statement {
+    sid     = "CloudWatchAlarmsSNSPublishingPermissions"
+    effect  = "Allow"
+    actions = ["SNS:Publish"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+
+    resources = [local.alarms_critical_topic_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 
   dynamic "statement" {
@@ -259,7 +326,7 @@ data "aws_iam_policy_document" "alarms_critical" {
         identifiers = ["events.amazonaws.com"]
       }
 
-      resources = [aws_sns_topic.alarms_critical[0].arn]
+      resources = [local.alarms_critical_topic_arn]
 
       condition {
         test     = "StringEquals"
