@@ -8,6 +8,13 @@ resource "aws_s3_bucket" "application" {
   bucket        = local.application_bucket
   force_destroy = false
 
+  # Guarda los documentos generados: PDF de facturacion con validez fiscal e
+  # historias clinicas. El bucket de auditoria de al lado ya lo lleva; este no
+  # lo llevaba pese a contener el dato del que responde la empresa.
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = merge(var.tags, { DataClassification = "confidential" })
 }
 

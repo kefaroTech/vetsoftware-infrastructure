@@ -205,6 +205,44 @@ registrados: revise el plan siguiente antes de aplicarlo.
 Prod no tiene un workflow equivalente; su desbloqueo se hace a mano y de forma
 deliberada.
 
+## Recursos irrecuperables
+
+Nueve recursos llevan `prevent_destroy = true`. Son aquellos cuyo borrado no se
+deshace con otro apply: la instancia RDS, la CMK del entorno, los tres secretos,
+el bucket de aplicacion, el de auditoria, el del rastro de CloudTrail y los
+repositorios ECR.
+
+`deletion_protection` en RDS y `force_destroy = false` en los buckets ya
+protegian por el lado de AWS, pero **los dos se apagan con un apply**: un plan que
+ponga la bandera en false y borre el recurso es un unico cambio. `prevent_destroy`
+no se apaga desde una variable —Terraform exige un literal— y aborta el plan
+antes de tocar nada.
+
+La CMK es el caso extremo. Cifra el bucket de aplicacion, los log groups, los
+topics y el rastro de CloudTrail: perderla no degrada un servicio, los inutiliza
+todos a la vez, y ademas deja ilegible lo ya escrito. Ningun backup lo recupera.
+
+El gate lo verifica en cada commit. `prevent_destroy` no es un atributo del
+recurso —no aparece en el plan— asi que `terraform test` no puede afirmarlo: el
+paso de politica de seguridad comprueba el texto de cada bloque y falla si la
+linea desaparece. Sin eso, quitarla seria una linea borrada que ningun control ve,
+justo la clase de atajo que se toma cuando un apply se atasca y hay prisa.
+
+**Dev tambien va protegido**, a diferencia de lo que sugeria la auditoria. Los
+tres modulos son compartidos y `prevent_destroy` no admite condicionales, pero
+sobre todo: no existe ningun workflow ni procedimiento de destruccion de dev en
+este repositorio, y su base lleva catalogos maestros sembrados a mano —DIVIPOLA
+completo, catalogos clinicos— que no son gratis de reconstruir. La exencion no
+costaba nada renunciar a ella.
+
+### Destruir uno a proposito
+
+No hay bandera. Hay que quitar el bloque `lifecycle` en un PR, que el gate
+rechaza hasta que tambien se quite el recurso de la lista de
+`scripts/quality/terraform-gate.ps1`. Son dos cambios visibles y revisados en el
+mismo diff, que es exactamente la friccion que se busca: si el borrado es
+deliberado, cuesta un PR; si es accidental, no ocurre.
+
 ## Trazabilidad de la cuenta y su coste
 
 `modules/account_baseline` responde a quien hizo que en la cuenta. Va instanciado

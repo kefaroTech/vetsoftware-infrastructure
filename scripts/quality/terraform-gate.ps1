@@ -317,7 +317,63 @@ function Assert-NoSecuritySuppressions {
         throw "No fue posible verificar la ausencia de balanceadores en Terraform."
     }
 
-    Write-Host "Sin exclusiones globales; AWS-0104 autorizado solo para tres reglas HTTPS publicas y arquitectura sin ALB verificada." -ForegroundColor Green
+    # prevent_destroy no se puede afirmar desde terraform test: no es un atributo
+    # del recurso, es un meta-argumento que solo existe en la configuracion y no
+    # aparece en el plan. Sin esta comprobacion, quitarlo es una linea borrada
+    # que ningun control ve. Es tambien la parte facil de deshacer cuando un
+    # apply se atasca, que es justo cuando hay prisa.
+    $irrecoverable = @(
+        "modules/database/main.tf|aws_db_instance|this",
+        "modules/kms/main.tf|aws_kms_key|this",
+        "modules/secrets/main.tf|aws_secretsmanager_secret|application",
+        "modules/secrets/main.tf|aws_secretsmanager_secret|grafana",
+        "modules/secrets/main.tf|aws_secretsmanager_secret|cloudflare_tunnel",
+        "modules/storage_audit/main.tf|aws_s3_bucket|application",
+        "modules/storage_audit/main.tf|aws_s3_bucket|audit",
+        "modules/account_baseline/main.tf|aws_s3_bucket|trail",
+        "modules/ecr/main.tf|aws_ecr_repository|this"
+    )
+
+    foreach ($entry in $irrecoverable) {
+        $parts = $entry -split '\|'
+        $relativePath = $parts[0]
+        $resourceType = $parts[1]
+        $resourceName = $parts[2]
+        $absolutePath = Join-Path $repositoryRoot $relativePath
+
+        if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
+            throw "El recurso irrecuperable $resourceType.$resourceName deberia vivir en '$relativePath', que no existe. Actualice la lista si el modulo se movio."
+        }
+
+        $lines = @(Get-Content -LiteralPath $absolutePath)
+        $startIndex = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^resource\s+`"$([regex]::Escape($resourceType))`"\s+`"$([regex]::Escape($resourceName))`"\s*\{") {
+                $startIndex = $i
+                break
+            }
+        }
+        if ($startIndex -lt 0) {
+            throw "No se encontro el recurso $resourceType.$resourceName en '$relativePath'. Actualice la lista si se renombro."
+        }
+
+        # terraform fmt garantiza que el bloque de nivel superior cierra con una
+        # llave sola en la columna cero, asi que ese es el final del recurso.
+        $endIndex = $lines.Count - 1
+        for ($i = $startIndex + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -eq "}") {
+                $endIndex = $i
+                break
+            }
+        }
+
+        $body = $lines[$startIndex..$endIndex] -join "`n"
+        if ($body -notmatch 'prevent_destroy\s*=\s*true') {
+            throw "$resourceType.$resourceName en '$relativePath' perdio prevent_destroy. Es un recurso irrecuperable: su borrado no se deshace con un apply."
+        }
+    }
+
+    Write-Host "Sin exclusiones globales; AWS-0104 autorizado solo para tres reglas HTTPS publicas, arquitectura sin ALB verificada y $($irrecoverable.Count) recursos irrecuperables con prevent_destroy." -ForegroundColor Green
 }
 
 function Get-PreCommitScope {

@@ -202,6 +202,14 @@ resource "aws_kms_key" "this" {
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.this.json
 
+  # Es el recurso cuyo borrado hace mas dano por unidad de esfuerzo: esta clave
+  # cifra el bucket de aplicacion, los log groups, los topics y el rastro de
+  # CloudTrail. Perderla no degrada un servicio, los inutiliza todos a la vez y
+  # ademas convierte en ilegible lo ya escrito, que ningun backup recupera.
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = merge(var.tags, { Name = "${var.name}-data" })
 }
 

@@ -108,6 +108,12 @@ resource "aws_db_instance" "this" {
   depends_on = [aws_cloudwatch_log_group.database]
 
   lifecycle {
+    # deletion_protection ya impide el borrado desde AWS, pero se apaga con un
+    # apply: un plan que lo ponga en false y borre la instancia es un solo
+    # cambio. prevent_destroy no se apaga, aborta el plan, y para levantarlo hay
+    # que editar este archivo en un PR que alguien revisa.
+    prevent_destroy = true
+
     precondition {
       condition     = var.backup_retention_period >= 7
       error_message = "RDS debe conservar al menos siete dias de backups."
