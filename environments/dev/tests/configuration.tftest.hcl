@@ -190,6 +190,18 @@ run "development_cost_profile_plans" {
     error_message = "Ni GuardDuty ni los data events pueden encenderse sin decidirlo: los dos se facturan."
   }
 
+  # El informe salio del cron de GitHub porque llegaba entre dos y seis horas
+  # tarde. Si el reloj vuelve a aflojarse -zona equivocada o ventana flexible- el
+  # cambio pierde su unico motivo.
+  assert {
+    condition = (
+      output.cost_reporting.timezone == "America/Bogota" &&
+      output.cost_reporting.flexible_window == "OFF" &&
+      output.cost_reporting.enabled
+    )
+    error_message = "El informe de costos debe dispararse a hora exacta de Bogota; una ventana flexible devuelve el retraso que se venia a eliminar."
+  }
+
   // Que la CMK autorice a cloudtrail.amazonaws.com no se puede afirmar aqui:
   // mock_provider sustituye todo aws_iam_policy_document por un documento vacio,
   // igual que en sns_publish_authorization del modulo de monitoreo. El output

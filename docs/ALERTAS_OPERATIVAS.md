@@ -71,11 +71,12 @@ Esto es lo que hay que mirar cuando algo "no llegó":
 | --- | --- |
 | `-alarms`, `-alarms-critical` | `cloudwatch.amazonaws.com` |
 | `-events` | `events.amazonaws.com`, los roles `iac-apply-dev` / `iac-plan-dev`, y el rol del scheduler de apagado |
-| `-finops` | `budgets.amazonaws.com`, `costalerts.amazonaws.com`, el rol `iac-plan-dev` |
+| `-finops` | `budgets.amazonaws.com`, `costalerts.amazonaws.com`, la Lambda del informe de costos |
 
-Los tres scripts derivan el ARN por convención y hay que moverlos si cambian los
-nombres: `cost-report.ps1` usa `-finops`, `dev-environment.ps1` usa `-events`, y
-`backend-image.ps1` lee `events_topic_arn` del output `alerting`.
+`dev-environment.ps1` deriva el ARN de `-events` por convención y hay que moverlo
+si cambia el nombre; `backend-image.ps1` lee `events_topic_arn` del output
+`alerting`. La Lambda del informe **recibe el ARN por variable de entorno** desde
+Terraform, así que no depende de ninguna convención de nombres.
 
 ## 2. Backend en ECS Fargate
 

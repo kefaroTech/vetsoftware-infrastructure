@@ -48,7 +48,6 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
 | `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
 | `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
-| `Daily cost report dev` | Diario a las 12:00 UTC -07:00 en Bogota- o manual | `iac-plan-dev` | Publica en Slack el gasto del dia anterior por servicio, y los lunes tambien el de la semana pasada. Solo lee. |
 | `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. Avisa el desenlace en Slack. |
 | `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. Avisa el desenlace en Slack. |
 | `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. Avisa el desenlace en Slack. |
@@ -58,16 +57,32 @@ Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev
 
 ## Informe diario de costos
 
-Todos los días a las **07:00 de Bogotá** llega a Slack cuánto costó el día anterior, con los cinco servicios que más pesaron y el resto resumido en una línea. **Los lunes** el mismo mensaje agrega el gasto de la semana que terminó, de lunes a domingo. Sale por el topic `vetsoftware-dev-alarms`, el mismo de las demás notificaciones.
+Todos los días a las **07:00 de Bogotá** llega a Slack cuánto costó el día anterior, con los cinco servicios que más pesaron y el resto resumido en una línea. **Los lunes** el mismo mensaje agrega el gasto de la semana que terminó, de lunes a domingo. Sale por el topic `vetsoftware-dev-finops`.
 
-Cuatro cosas que conviene tener presentes:
+### Por qué el reloj es de AWS y no de GitHub
 
-- **La cifra es de la cuenta AWS completa, no de un ambiente.** Cost Explorer factura por cuenta, así que mientras dev y prod compartan cuenta el total incluye a los dos. Por eso el mensaje nombra la cuenta consultada y no el ambiente. Cuando las cuentas se separen, cada informe cubrirá la suya sin tocar el código: el script recibe el ambiente como parámetro y el workflow de prod sería una copia del de dev.
-- **Corre con el rol de plan, no con el de apply.** El informe solo lee, y un cron sin supervisión no tiene por qué poder aplicar infraestructura. Eso obligó a dos permisos nuevos: `ce:GetCostAndUsage` en el rol de plan -que viaja en el bootstrap- y la autorización del rol de plan para publicar en el topic y usar la CMK -que viaja en el apply de dev-.
-- **Cuesta dinero.** Cost Explorer cobra USD 0.01 por request: una consulta diaria son unos USD 0.30 al mes. El informe hace una sola consulta por corrida, también los lunes: la ventana semanal ya contiene el día, y el script recorta el día de ahí en vez de pedirlo aparte.
-- **Fechas y montos en UTC y costo sin combinar**, igual que la consola. Si Cost Explorer todavía no tiene datos del día anterior -lo normal en las primeras 24 horas tras habilitarlo-, el informe no se envía: publicar `USD 0.00` cuando lo que falta es el dato sería mentir. Queda la advertencia en el log y en el Summary del run.
+Corría por `cron` de GitHub Actions y **llegaba tarde todos los días**. Los eventos `schedule` de GitHub no están garantizados: se encolan en un pool compartido y se retrasan bajo carga. Medido en este repositorio, el drift —programado a las 11:17 UTC— disparó a las 13:54, 14:40, 17:24, 17:05, 17:23 y 17:30 en seis días seguidos. Entre dos y seis horas de desviación.
 
-Para reenviar a mano un día que no salió, ejecute el workflow con el input `as_of` en la fecha UTC de referencia: el informe cubre el día anterior a esa fecha.
+Ahora lo dispara **EventBridge Scheduler**, el mismo mecanismo del apagado programado, que sí cumple el horario. Y la lógica vive en una Lambda: mover solo el reloj habría exigido guardar en AWS un token de GitHub con permiso de escritura, es decir, una credencial de larga vida en un proyecto que montó todo el OIDC para no tener ninguna.
+
+`modules/cost_report` contiene la función, su rol, el log group y el schedule.
+
+### Cuatro cosas que conviene tener presentes
+
+- **La cifra es de la cuenta AWS completa, no de un ambiente.** Cost Explorer factura por cuenta, así que mientras dev y prod compartan cuenta el total incluye a los dos. Por eso el mensaje nombra la cuenta consultada y no el ambiente. Cuando las cuentas se separen, basta instanciar el módulo en el root de prod.
+- **La función solo lee.** Su rol tiene `ce:GetCostAndUsage`, publicar en el topic de finops y escribir sus propios logs. Nada más: no puede crear su log group, para que borrarlo se note en lugar de recrearse uno sin caducidad ni cifrado.
+- **Cuesta dinero.** Cost Explorer cobra USD 0.01 por request: una consulta diaria son unos USD 0.30 al mes. Se hace **una sola consulta por corrida**, también los lunes: la ventana semanal ya contiene el día y la función lo recorta de ahí en vez de pedirlo aparte. La Lambda en sí cabe en el free tier.
+- **Fechas y montos en UTC y costo sin combinar**, igual que la consola. Si Cost Explorer todavía no tiene datos del día anterior, el informe **no se envía**: publicar `USD 0.00` cuando lo que falta es el dato sería mentir. Queda la advertencia en el log de la función.
+
+### Reenviar un día a mano
+
+```bash
+aws lambda invoke --function-name vetsoftware-dev-cost-report \
+  --payload '{"as_of":"2026-08-09"}' --cli-binary-format raw-in-base64-out \
+  respuesta.json
+```
+
+`as_of` es la fecha UTC de referencia: el informe cubre **el día anterior** a esa fecha. Sin payload, la referencia es hoy.
 
 ## Avisos del encendido y del apagado (solo dev)
 
