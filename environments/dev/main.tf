@@ -369,3 +369,40 @@ module "scheduled_shutdown" {
   notification_kms_key_arn = module.kms.key_arn
   tags                     = local.common_tags
 }
+
+# Linea base de trazabilidad de la cuenta. Va aqui y no en el bootstrap porque
+# necesita la CMK y el topic de alertas del entorno; dev y prod tienen cada uno
+# la suya porque viven en cuentas separadas y CloudTrail, GuardDuty y Access
+# Analyzer son singletons de cuenta.
+#
+# Todo lo que queda activo es gratuito. GuardDuty y los data events de
+# CloudTrail se facturan, asi que se dejan apagados y el contrato lo fija.
+module "account_baseline" {
+  source = "../../modules/account_baseline"
+
+  name           = local.name
+  aws_account_id = data.aws_caller_identity.current.account_id
+  aws_region     = var.aws_region
+  kms_key_arn    = module.kms.key_arn
+
+  regulated_bucket_arns = ["${aws_s3_bucket.application.arn}/"]
+  alarm_topic_arn       = module.monitoring.alarm_topic_arn
+
+  # Los access logs siguen la retencion del entorno: dev se recrea a proposito y
+  # sus registros no tienen valor probatorio. El rastro de CloudTrail no la
+  # sigue -se queda en el default de cinco anios- porque su Object Lock es
+  # COMPLIANCE y lo que se escriba corto no se puede alargar despues.
+  access_log_retention_days = var.log_retention_days
+
+  tags = local.common_tags
+}
+
+# El bucket de aplicacion guarda documentos generados -PDF de facturacion,
+# historias clinicas-. Esto es lo que responde "quien descargo este documento y
+# cuando", que es la pregunta que hace un titular al ejercer sus derechos.
+resource "aws_s3_bucket_logging" "application" {
+  bucket = aws_s3_bucket.application.id
+
+  target_bucket = module.account_baseline.access_logs_bucket_name
+  target_prefix = "s3/${local.application_bucket_name}/"
+}

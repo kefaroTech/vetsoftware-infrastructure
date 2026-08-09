@@ -355,3 +355,9 @@ variable "log_retention_days" {
   type    = number
   default = 30
 }
+
+variable "enable_execute_command" {
+  description = "ECS Exec en produccion. Da shell interactiva en el contenedor, con acceso a los secretos de runtime; activarlo enciende tambien el registro de las sesiones."
+  type        = bool
+  default     = false
+}

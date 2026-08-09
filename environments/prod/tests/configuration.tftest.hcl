@@ -101,6 +101,36 @@ run "production_configuration_plans" {
     error_message = "Los logs de RDS prod deben excluir general, caducar a 30 dias y cifrarse con la CMK del entorno."
   }
 
+  # INF-49. La evidencia de prod tiene que cubrir el termino de firmeza fiscal, y
+  # el Object Lock COMPLIANCE no permite alargar despues lo que se escriba corto.
+  assert {
+    condition = (
+      output.traceability.multi_region &&
+      output.traceability.global_service_events &&
+      output.traceability.log_file_validation &&
+      output.traceability.encrypted_with_cmk &&
+      output.traceability.evidence_object_lock == "COMPLIANCE" &&
+      output.traceability.evidence_retention >= 1825 &&
+      output.traceability.access_analyzer_enabled
+    )
+    error_message = "Prod debe conservar el rastro cinco anios bajo Object Lock COMPLIANCE, multi-region y con digests firmados."
+  }
+
+  assert {
+    condition = (
+      !output.traceability.guardduty_enabled &&
+      !output.traceability.s3_data_events
+    )
+    error_message = "Ni GuardDuty ni los data events pueden encenderse sin decidirlo: los dos se facturan."
+  }
+
+  # Una shell en el contenedor de produccion lee DB_PASSWORD, JWT_SECRET y
+  # DIAN_ENC_KEY. Que este apagada es parte del hallazgo, no un detalle aparte.
+  assert {
+    condition     = !var.enable_execute_command
+    error_message = "ECS Exec debe venir apagado en produccion; se activa con un apply deliberado cuando haya que diagnosticar."
+  }
+
   assert {
     condition = (
       output.network_egress_profile.assign_public_ip &&
