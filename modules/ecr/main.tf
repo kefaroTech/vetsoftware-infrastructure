@@ -103,24 +103,19 @@ resource "aws_ecr_lifecycle_policy" "this" {
           type = "expire"
         }
       },
-      # Tope de coste, no de higiene. ECR expira una imagen si CUALQUIER regla la
-      # selecciona, asi que sobrevive lo que sea a la vez reciente y este dentro
-      # del tope. Solo muerde en una racha de compilaciones fuera de lo normal.
+      # Sin tope por cantidad, y no por descuido: ECR rechaza dos reglas que
+      # apunten al mismo conjunto de tags -"Rules must contain unique sets of
+      # tags per storage class"- asi que la ventana y un tope sobre el mismo
+      # prefijo no pueden convivir. Hay que elegir una, y la ventana es la que
+      # protege de lo que de verdad rompe.
+      #
+      # El riesgo que queda es una racha anomala de compilaciones inflando el
+      # almacenamiento. Sale barato: cada imagen comparte siete de sus ocho capas
+      # y solo la del aplicativo es exclusiva, asi que son ~0,01 al mes cada una.
+      # Mil imagenes serian ~10 al mes, un problema visible y reversible; perder
+      # la imagen desplegada es un ambiente que no levanta.
       {
         rulePriority = 3
-        description  = "Cap development images at ${var.development_images_to_keep}"
-        selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = [var.development_tag_prefix]
-          countType     = "imageCountMoreThan"
-          countNumber   = var.development_images_to_keep
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 4
         description  = "Keep the ${var.images_to_keep} newest production release images"
         selection = {
           tagStatus     = "tagged"
