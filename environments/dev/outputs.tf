@@ -96,3 +96,7 @@ output "traceability" {
 output "cmk_authorized_services" {
   value = module.kms.authorized_services
 }
+
+output "cost_reporting" {
+  value = module.cost_report.reporting
+}

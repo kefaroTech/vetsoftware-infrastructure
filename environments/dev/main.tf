@@ -406,3 +406,22 @@ resource "aws_s3_bucket_logging" "application" {
   target_bucket = module.account_baseline.access_logs_bucket_name
   target_prefix = "s3/${local.application_bucket_name}/"
 }
+
+# El informe diario de costos, con reloj de AWS. Antes lo disparaba un cron de
+# GitHub Actions que llegaba entre dos y seis horas tarde todos los dias, porque
+# los eventos programados de GitHub no estan garantizados.
+module "cost_report" {
+  source = "../../modules/cost_report"
+
+  name           = "${local.name}-cost-report"
+  aws_account_id = data.aws_caller_identity.current.account_id
+  aws_region     = var.aws_region
+
+  # El mismo topic de finops que ya escuchaba el informe anterior, asi que el
+  # mensaje sigue llegando al canal de siempre sin tocar Amazon Q.
+  topic_arn   = module.monitoring.finops_topic_arn
+  kms_key_arn = module.kms.key_arn
+
+  log_retention_days = var.log_retention_days
+  tags               = local.common_tags
+}
