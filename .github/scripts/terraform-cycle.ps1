@@ -217,6 +217,121 @@ function Set-CurrentBackendImage {
     }
 }
 
+# Hasta aqui el ciclo solo comprueba la FORMA de la imagen: que apunte al
+# repositorio correcto y este fijada por digest. Nunca comprueba que ese digest
+# siga existiendo.
+#
+# El ciclo de vida de ECR conserva las diez imagenes dev- mas recientes, y diez
+# publicaciones caben en una jornada de merges: la que el servicio tiene fijada
+# se cae del registro sin que nada avise. Mientras la tarea siga viva no pasa
+# nada, porque la imagen ya esta descargada en el host de Fargate. El fallo
+# aparece cuando hay que colocar una tarea nueva -es decir, en el siguiente
+# encendido- y llega como un CannotPullContainerError dentro de un crash loop, a
+# varias capas de distancia de su causa. Paso el 9 de agosto de 2026 y costo una
+# noche de diagnostico.
+#
+# Apply falla: fijar un digest muerto en la task definition deja el servicio sin
+# poder arrancar y el ciclo siguiente hereda el mismo digest. Plan y drift solo
+# avisan, como el resto de comprobaciones que no mutan. El drift diario corre con
+# dev apagado, asi que resuelve el respaldo BACKEND_IMAGE_URI: es justo el sitio
+# donde un respaldo podrido se detecta antes de necesitarlo.
+function Assert-BackendImageIsPullable {
+    $image = $env:TF_VAR_backend_image_uri
+    if ([string]::IsNullOrWhiteSpace($image)) {
+        return
+    }
+
+    $digest = ($image -split "@")[-1]
+    $repositoryName = (($image -split "/")[-1] -split "@")[0]
+
+    # El marcador de todo ceros lo pone este mismo script cuando no hay baseline
+    # ni respaldo. No es una imagen, y apply nunca llega hasta aca con el.
+    if ($digest -eq "sha256:$([string]::new('0', 64))") {
+        return
+    }
+
+    $describeArguments = @(
+        "ecr", "describe-images",
+        "--repository-name", $repositoryName,
+        "--image-ids", "imageDigest=$digest",
+        "--output", "json"
+    )
+    $describeOutput = & aws @describeArguments 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[Terraform] La imagen del backend sigue en ECR: $digest" -ForegroundColor Green
+        return
+    }
+
+    # Falla abierto ante cualquier otro error -permisos, throttling, red-. Bloquear
+    # un apply por una llamada intermitente a ECR seria peor que el problema que
+    # esta comprobacion viene a evitar; solo el "no existe" confirmado detiene.
+    $detail = ($describeOutput | Out-String).Trim()
+    if ($detail -notmatch "ImageNotFoundException") {
+        Write-Warning "No fue posible verificar en ECR el digest de la imagen del backend; el ciclo continua sin comprobarlo. Detalle: $detail"
+        return
+    }
+
+    # La version mas reciente disponible, para que el mensaje diga que desplegar y
+    # no solo que algo esta mal.
+    $newestVersion = ""
+    $newestOutput = & aws "ecr" "describe-images" "--repository-name" $repositoryName "--query" "sort_by(imageDetails,&imagePushedAt)[-1].imageTags" "--output" "json" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        try {
+            $tags = @(($newestOutput -join [Environment]::NewLine) | ConvertFrom-Json)
+            # Se prefiere la etiqueta de version sobre la dev-<sha>, porque es la
+            # que reciben como input los workflows de despliegue.
+            $newestVersion = @($tags | Where-Object { $_ -notlike "dev-*" }) | Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($newestVersion)) {
+                $newestVersion = @($tags) | Select-Object -First 1
+            }
+        }
+        catch {
+            $newestVersion = ""
+        }
+    }
+
+    $advice = if ([string]::IsNullOrWhiteSpace($newestVersion)) {
+        "Publique una imagen y despliegela con 'Deploy backend image $Environment' antes de volver a lanzar el ciclo."
+    }
+    else {
+        "Despliegue una imagen viva con 'Deploy backend image $Environment' usando la version $newestVersion, y vuelva a lanzar el ciclo."
+    }
+
+    $message = "La imagen del backend ya no existe en ECR: $image. La expiro el ciclo de vida del registro."
+    $summaryPath = $env:GITHUB_STEP_SUMMARY
+
+    if ($Mode -eq "Apply") {
+        if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+            Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+                "",
+                "### Imagen del backend inexistente",
+                "",
+                "``$image`` ya no esta en ECR.",
+                "",
+                "El apply se detuvo antes de fijarla en la task definition: hacerlo dejaria el servicio sin poder arrancar.",
+                "",
+                $advice
+            )
+        }
+
+        throw "$message Aplicar ahora la volveria a fijar en la task definition y el servicio no podria arrancar. $advice"
+    }
+
+    Write-Warning "$message El $($Mode.ToLowerInvariant()) continua, pero un encendido con esta imagen fallaria. $advice"
+    if (-not [string]::IsNullOrWhiteSpace($summaryPath)) {
+        Add-Content -LiteralPath $summaryPath -Encoding utf8 -Value @(
+            "",
+            "### Imagen del backend inexistente",
+            "",
+            "``$image`` ya no esta en ECR: la expiro el ciclo de vida del registro.",
+            "",
+            "Este $($Mode.ToLowerInvariant()) no falla, pero el proximo encendido si: la tarea no podria bajar la imagen.",
+            "",
+            $advice
+        )
+    }
+}
+
 function New-OptionalVariableFile {
     if ([string]::IsNullOrWhiteSpace($env:TF_VARS_JSON)) {
         return $null
@@ -621,6 +736,10 @@ if (Restore-OrphanedEcsService -VariableFile $variableFile) {
     # BACKEND_IMAGE_URI que se uso como respaldo mientras el servicio faltaba.
     Set-CurrentBackendImage
 }
+
+# Va despues de la adopcion porque esta puede cambiar la imagen resuelta: lo que
+# se comprueba tiene que ser el valor definitivo, el que acabara en el plan.
+Assert-BackendImageIsPullable
 
 # No depende del bloque anterior: son dos reconciliaciones independientes que solo
 # comparten el momento, antes de planear.
