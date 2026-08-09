@@ -49,6 +49,17 @@ locals {
     "ce:ListTagsForResource",
     "chatbot:DescribeSlackChannelConfigurations",
     "chatbot:ListTagsForResource",
+    # El rastro de la cuenta. Van en las lecturas comunes y no solo en apply
+    # porque el plan y el drift refrescan el estado del trail: sin ellas, el
+    # ciclo diario falla al leer un recurso que el apply si puede crear.
+    "access-analyzer:GetAnalyzer",
+    "access-analyzer:ListAnalyzers",
+    "access-analyzer:ListTagsForResource",
+    "cloudtrail:DescribeTrails",
+    "cloudtrail:GetEventSelectors",
+    "cloudtrail:GetTrail",
+    "cloudtrail:GetTrailStatus",
+    "cloudtrail:ListTags",
     "cloudwatch:Describe*",
     "cloudwatch:GetMetricData",
     "cloudwatch:ListTagsForResource",
@@ -92,10 +103,29 @@ locals {
   ]
 
   regional_apply_actions = [
+    # Linea base de trazabilidad de la cuenta (modules/account_baseline). El
+    # analizador se etiqueta al crearlo, y sin TagResource la creacion falla
+    # entera aunque CreateAnalyzer este concedido: el AccessDenied llega por el
+    # tag, no por el recurso.
+    "access-analyzer:CreateAnalyzer",
+    "access-analyzer:DeleteAnalyzer",
+    "access-analyzer:TagResource",
+    "access-analyzer:UntagResource",
     "application-autoscaling:*ScalableTarget",
     "application-autoscaling:*ScalingPolicy",
     "application-autoscaling:TagResource",
     "application-autoscaling:UntagResource",
+    # El trail se crea, se le activa el logging y se le fijan los selectores de
+    # eventos en tres llamadas distintas: conceder solo CreateTrail deja el
+    # rastro creado y apagado.
+    "cloudtrail:AddTags",
+    "cloudtrail:CreateTrail",
+    "cloudtrail:DeleteTrail",
+    "cloudtrail:PutEventSelectors",
+    "cloudtrail:RemoveTags",
+    "cloudtrail:StartLogging",
+    "cloudtrail:StopLogging",
+    "cloudtrail:UpdateTrail",
     "cloudwatch:DeleteAlarms",
     # Las alarmas compuestas no se crean con PutMetricAlarm: CloudWatch expone una
     # accion aparte, y sin ella el apply falla con AccessDenied justo despues de
@@ -414,12 +444,34 @@ data "aws_iam_policy_document" "infrastructure_read" {
   }
 }
 
-resource "aws_iam_role_policy" "infrastructure_read" {
+# Administrada y no inline. IAM limita el AGREGADO de politicas inline de un rol
+# a 10.240 caracteres, y las lecturas son ~4.000 identicos en los cuatro roles:
+# inline consumian casi la mitad del presupuesto de cada rol de apply y dejaron
+# de caber en cuanto la linea base de trazabilidad necesito sus permisos.
+#
+# Una politica administrada tiene su propio limite -6.144 caracteres- que no
+# cuenta contra el agregado inline. Es el movimiento que el contrato de tamano ya
+# anticipaba, y evita la alternativa de ensanchar comodines, que abarata el
+# numero a costa del privilegio minimo.
+resource "aws_iam_policy" "infrastructure_read" {
   for_each = local.role_definitions
 
-  name   = "terraform-infrastructure-read"
-  role   = aws_iam_role.this[each.key].id
-  policy = data.aws_iam_policy_document.infrastructure_read[each.key].json
+  name        = "${var.project_name}-iac-read-${each.value.function}-${each.value.environment}"
+  description = "Lecturas de infraestructura para ${each.key}"
+  policy      = data.aws_iam_policy_document.infrastructure_read[each.key].json
+
+  tags = merge(var.tags, {
+    Component   = "github-iac"
+    Environment = each.value.environment
+    Function    = each.value.function
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "infrastructure_read" {
+  for_each = local.role_definitions
+
+  role       = aws_iam_role.this[each.key].name
+  policy_arn = aws_iam_policy.infrastructure_read[each.key].arn
 
   depends_on = [aws_iam_role_policy.apply_regional]
 }
@@ -575,6 +627,9 @@ data "aws_iam_policy_document" "apply_storage" {
       "s3:CreateBucket",
       "s3:DeleteBucket",
       "s3:DeleteBucketPolicy",
+      # El server access logging de los buckets regulados: es la via gratuita
+      # para reconstruir quien accedio a un documento con datos personales.
+      "s3:PutBucketLogging",
       "s3:PutLifecycleConfiguration",
       "s3:PutBucketObjectLockConfiguration",
       "s3:PutBucketOwnershipControls",

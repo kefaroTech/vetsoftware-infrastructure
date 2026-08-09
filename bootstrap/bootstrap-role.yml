@@ -168,6 +168,13 @@ Resources:
                   - iam:UntagRole
                   - iam:UpdateAssumeRolePolicy
                   - iam:UpdateRoleDescription
+                  # IAM limita el agregado de politicas inline de un rol a 10.240
+                  # caracteres, y los roles de apply ya viven cerca del techo.
+                  # Las politicas administradas tienen su propio limite, asi que
+                  # mover ahi las lecturas -identicas en los cuatro roles- es lo
+                  # que devuelve margen sin ensanchar comodines.
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
                 Resource:
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-iac-*-${Environment}"
                   - !If
@@ -186,6 +193,26 @@ Resources:
                     - IsProduction
                     - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-public_front-github-ecr"
                     - !Ref AWS::NoValue
+              # Las acciones de arriba actuan sobre el ARN del rol; estas actuan
+              # sobre el de la politica, asi que necesitan su propio statement y
+              # su propio alcance. Mismo patron de nombre: nada fuera de las
+              # politicas de automatizacion de este ambiente.
+              - Sid: ManageEnvironmentAutomationPolicies
+                Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListEntitiesForPolicy
+                  - iam:ListPolicyTags
+                  - iam:ListPolicyVersions
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${ProjectName}-iac-*-${Environment}"
       Tags:
         - Key: Project
           Value: !Ref ProjectName

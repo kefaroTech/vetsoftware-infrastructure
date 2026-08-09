@@ -8,34 +8,35 @@ provider "aws" {
   skip_requesting_account_id  = true
 }
 
+variables {
+  project_name             = "vetsoftware"
+  aws_account_id           = "123456789012"
+  aws_region               = "us-east-1"
+  backend_repository_name  = "vetsoftware-backend"
+  github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+  github_organization      = "kefaroTech"
+  github_organization_id   = "12345678"
+  github_repository        = "VetSoftwareIaC"
+  github_repository_id     = "100000004"
+  state_bucket_name        = "vetsoftware-prod-tfstate-123456789012"
+  state_kms_key_arn        = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+  environments = {
+    dev = {
+      state_key                = "vetsoftware/dev/terraform.tfstate"
+      github_plan_environment  = "iac-plan-dev"
+      github_apply_environment = "iac-apply-dev"
+    }
+    prod = {
+      state_key                = "vetsoftware/prod/terraform.tfstate"
+      github_plan_environment  = "iac-plan-prod"
+      github_apply_environment = "iac-apply-prod"
+    }
+  }
+}
+
 run "environment_and_function_roles_are_isolated" {
   command = plan
 
-  variables {
-    project_name             = "vetsoftware"
-    aws_account_id           = "123456789012"
-    aws_region               = "us-east-1"
-    backend_repository_name  = "vetsoftware-backend"
-    github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
-    github_organization      = "kefaroTech"
-    github_organization_id   = "12345678"
-    github_repository        = "VetSoftwareIaC"
-    github_repository_id     = "100000004"
-    state_bucket_name        = "vetsoftware-prod-tfstate-123456789012"
-    state_kms_key_arn        = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
-    environments = {
-      dev = {
-        state_key                = "vetsoftware/dev/terraform.tfstate"
-        github_plan_environment  = "iac-plan-dev"
-        github_apply_environment = "iac-apply-dev"
-      }
-      prod = {
-        state_key                = "vetsoftware/prod/terraform.tfstate"
-        github_plan_environment  = "iac-plan-prod"
-        github_apply_environment = "iac-apply-prod"
-      }
-    }
-  }
 
   assert {
     condition = length(aws_iam_role.this) == 4 && toset(keys(aws_iam_role.this)) == toset([
@@ -172,14 +173,31 @@ run "environment_and_function_roles_are_isolated" {
   # era ensanchar comodines para ahorrar caracteres, que abarata el numero a
   # costa del privilegio minimo.
   #
-  # Este techo ya es la restriccion que manda. El siguiente permiso que haga
-  # falta no cabe: toca mover terraform-infrastructure-read -unos 3.000
-  # caracteres identicos en los cuatro roles- a una politica administrada, lo que
-  # exige primero darle iam:CreatePolicy y iam:AttachRolePolicy al rol de
-  # bootstrap en bootstrap-role.yml.
+  # Ese techo mando hasta que la linea base de trazabilidad pidio sus permisos y
+  # dejo de caber, que es justo el escenario que este comentario anticipaba. Las
+  # lecturas -identicas en los cuatro roles- pasaron a una politica administrada,
+  # que tiene su propio limite y no cuenta contra el agregado inline. El guard
+  # vuelve a tener margen de sobra sin haber ensanchado un solo comodin.
   assert {
     condition     = alltrue([for count in values(output.inline_policy_character_counts) : count <= 9700])
     error_message = format("Las políticas inline deben conservar margen bajo el límite IAM de 10.240 caracteres; conteos=%s.", jsonencode(output.inline_policy_character_counts))
+  }
+
+  # La administrada tiene un techo mas bajo -6.144- y ahi vive el bloque de
+  # lecturas, que es el que mas crece: cada servicio nuevo suma sus Describe.
+  assert {
+    condition     = alltrue([for count in values(output.managed_policy_character_counts) : count <= 5800])
+    error_message = format("Las políticas administradas deben conservar margen bajo el límite IAM de 6.144 caracteres; conteos=%s.", jsonencode(output.managed_policy_character_counts))
+  }
+
+  # Las lecturas dejan de ser inline: si alguien las devuelve a PutRolePolicy, el
+  # agregado vuelve a apretar y el proximo permiso no cabra otra vez.
+  assert {
+    condition = (
+      length(aws_iam_policy.infrastructure_read) == 4 &&
+      length(aws_iam_role_policy_attachment.infrastructure_read) == 4
+    )
+    error_message = "Las lecturas de infraestructura deben vivir en una política administrada adjunta, no en una inline."
   }
 
   assert {
@@ -251,5 +269,68 @@ run "environment_and_function_roles_are_isolated" {
       ]) == 1,
     ])
     error_message = "Apply debe poder crear y etiquetar el secreto que RDS genera para el master user."
+  }
+}
+
+# Un modulo nuevo puede introducir tipos de recurso que estos roles no saben
+# crear, y nada lo detecta antes de tiempo: el plan no comprueba permisos, y el
+# gate no ejecuta apply. El AccessDenied aparece a mitad del apply, con parte de
+# la infraestructura ya creada.
+#
+# Paso el 9 de agosto de 2026 con modules/account_baseline: el rastro de la
+# cuenta se anadio sin extender el rol, y el apply murio en tres recursos a la
+# vez -PutBucketLogging, CreateTrail y el TagResource del analizador-.
+#
+# Esta lista es el contrato entre account_baseline y el rol que lo aplica. Si se
+# amplia el modulo, se amplia aqui, y el fallo se ve en el commit en lugar de a
+# mitad del apply.
+run "apply_puede_crear_la_linea_base_de_trazabilidad" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for accion in [
+        "cloudtrail:CreateTrail",
+        "cloudtrail:StartLogging",
+        "cloudtrail:PutEventSelectors",
+        "cloudtrail:AddTags",
+        "access-analyzer:CreateAnalyzer",
+        # El analizador se etiqueta al crearlo: sin TagResource la creacion falla
+        # entera aunque CreateAnalyzer este concedido.
+        "access-analyzer:TagResource",
+        ] : alltrue([
+          for key in ["dev_apply", "prod_apply"] :
+          strcontains(data.aws_iam_policy_document.apply_regional[key].json, accion)
+      ])
+    ])
+    error_message = "El rol de apply debe poder crear el trail y el analizador de la cuenta; sin esto el apply muere a mitad, con recursos ya creados."
+  }
+
+  # El access logging es la via gratuita para reconstruir quien accedio a un
+  # documento con datos personales, y se configura sobre un bucket que ya existe.
+  assert {
+    condition = alltrue([
+      for key in ["dev_apply", "prod_apply"] :
+      strcontains(data.aws_iam_policy_document.apply_storage[key].json, "s3:PutBucketLogging")
+    ])
+    error_message = "El rol de apply debe poder activar el server access logging de los buckets del ambiente."
+  }
+
+  # Plan y drift refrescan estos recursos en cada corrida. Sin lectura, el ciclo
+  # diario falla sobre algo que el apply si pudo crear, que es la unica variante
+  # peor que no poder crearlo.
+  assert {
+    condition = alltrue([
+      for accion in [
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:GetEventSelectors",
+        "access-analyzer:ListAnalyzers",
+        ] : alltrue([
+          for key in ["dev_plan", "dev_apply", "prod_plan", "prod_apply"] :
+          strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, accion)
+      ])
+    ])
+    error_message = "Los dos roles deben poder LEER el trail y el analizador; si no, el plan y el drift fallan al refrescarlos."
   }
 }
