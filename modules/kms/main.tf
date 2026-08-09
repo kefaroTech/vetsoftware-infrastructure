@@ -41,6 +41,37 @@ data "aws_iam_policy_document" "this" {
     }
   }
 
+  # El rastro de la cuenta cifra sus archivos con esta clave. CloudTrail no usa la
+  # identidad de quien crea el trail: pide la data key con la suya propia, asi
+  # que sin este statement CreateTrail falla con
+  # InsufficientEncryptionPolicyException aunque el rol de apply tenga todos los
+  # permisos de CloudTrail y del bucket. El mensaje nombra el bucket Y la clave,
+  # lo que despista: lo que falta es el permiso sobre la clave.
+  #
+  # SourceArn acota a los trails de esta cuenta y region, de modo que ningun
+  # trail ajeno pueda pedirle a esta clave que cifre por el.
+  statement {
+    sid    = "AllowCloudTrailEncryption"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+
+    actions = [
+      "kms:DescribeKey",
+      "kms:GenerateDataKey*",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${data.aws_partition.current.partition}:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/*"]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.cost_alerts_sns_enabled ? [1] : []
 

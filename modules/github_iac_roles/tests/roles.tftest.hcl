@@ -306,6 +306,17 @@ run "apply_puede_crear_la_linea_base_de_trazabilidad" {
     error_message = "El rol de apply debe poder crear el trail y el analizador de la cuenta; sin esto el apply muere a mitad, con recursos ya creados."
   }
 
+  # El analizador necesita su rol vinculado la primera vez que se crea uno en la
+  # cuenta. Sin esto CreateAnalyzer falla por iam:CreateServiceLinkedRole y no
+  # por un permiso de access-analyzer, que es lo que despista al leer el error.
+  assert {
+    condition = alltrue([
+      for key in ["dev_apply", "prod_apply"] :
+      strcontains(data.aws_iam_policy_document.apply_identity[key].json, "access-analyzer.amazonaws.com")
+    ])
+    error_message = "El rol de apply debe poder crear el rol vinculado del Access Analyzer; sin el, CreateAnalyzer falla."
+  }
+
   # El access logging es la via gratuita para reconstruir quien accedio a un
   # documento con datos personales, y se configura sobre un bucket que ya existe.
   assert {

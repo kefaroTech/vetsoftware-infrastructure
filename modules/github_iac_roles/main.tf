@@ -541,6 +541,11 @@ data "aws_iam_policy_document" "apply_identity" {
       test     = "StringEquals"
       variable = "iam:AWSServiceName"
       values = [
+        # El analizador de accesos necesita su rol vinculado la primera vez que
+        # se crea uno en la cuenta. Sin esto, CreateAnalyzer falla por
+        # iam:CreateServiceLinkedRole y no por un permiso de access-analyzer,
+        # que es lo que despista al leer el error.
+        "access-analyzer.amazonaws.com",
         "ecs.amazonaws.com",
         "ecs.application-autoscaling.amazonaws.com",
         "elasticache.amazonaws.com",

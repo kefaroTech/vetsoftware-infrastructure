@@ -92,3 +92,7 @@ output "cost_profile" {
 output "traceability" {
   value = module.account_baseline.traceability
 }
+
+output "cmk_authorized_services" {
+  value = module.kms.authorized_services
+}
