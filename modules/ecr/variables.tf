@@ -74,19 +74,10 @@ variable "development_retention_days" {
   }
 }
 
-variable "development_images_to_keep" {
-  description = "Tope de imágenes de desarrollo por repositorio. Acota el coste ante una racha de compilaciones; la retención normal la fija development_retention_days."
-  type        = number
-  default     = 150
-
-  # Cada imagen de mas cuesta ~1 centavo al mes: comparten siete de sus ocho
-  # capas y solo la del aplicativo es exclusiva, unos 106 MiB. El tope existe
-  # para que una racha anomala no se desborde, no para ahorrar.
-  validation {
-    condition     = var.development_images_to_keep >= 10 && var.development_images_to_keep <= 1000
-    error_message = "development_images_to_keep debe estar entre 10 y 1000."
-  }
-}
+# development_images_to_keep se elimino al pasar la retencion a tiempo. ECR
+# rechaza dos reglas sobre el mismo conjunto de tags, asi que un tope por
+# cantidad no puede convivir con la ventana; mantener la variable habria dejado
+# una palanca que no conecta con nada.
 
 variable "development_tag_prefix" {
   description = "Prefijo obligatorio de los tags publicados desde develop. Aísla los artefactos de dev de los tags de release."

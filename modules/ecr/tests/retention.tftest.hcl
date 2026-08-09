@@ -98,25 +98,27 @@ run "retention_separates_release_from_development" {
     error_message = "Las imágenes de desarrollo deben retenerse por tiempo -30 días o más-, no por número de compilaciones."
   }
 
-  # El tope solo acota el coste ante una racha anomala. Si baja al punto de poder
-  # morder en una semana normal de trabajo, vuelve a ser una retencion por
-  # cantidad disfrazada y el fallo regresa.
+  # ECR rechaza dos reglas que apunten al mismo conjunto de tags -"Rules must
+  # contain unique sets of tags per storage class"- y lo hace en el apply, no en
+  # el plan: terraform test no puede verlo. Un tope por cantidad sobre dev-
+  # convivia con la ventana en el codigo y reventaba contra la API.
   assert {
     condition = alltrue([
       for policy in aws_ecr_lifecycle_policy.this :
-      jsondecode(policy.policy).rules[2].selection.tagPrefixList == ["dev-"] &&
-      jsondecode(policy.policy).rules[2].selection.countType == "imageCountMoreThan" &&
-      jsondecode(policy.policy).rules[2].selection.countNumber >= 100
+      length(distinct([
+        for rule in jsondecode(policy.policy).rules :
+        jsonencode(lookup(rule.selection, "tagPrefixList", []))
+      ])) == length(jsondecode(policy.policy).rules)
     ])
-    error_message = "El tope de imágenes de desarrollo debe quedar muy por encima de una semana de compilaciones; si no, sustituye a la ventana de tiempo."
+    error_message = "Cada regla de ciclo de vida debe apuntar a un conjunto de tags distinto: ECR rechaza la política entera si se repiten."
   }
 
   assert {
     condition = alltrue([
       for policy in aws_ecr_lifecycle_policy.this :
-      jsondecode(policy.policy).rules[3].selection.tagPrefixList == ["sha-"] &&
-      jsondecode(policy.policy).rules[3].selection.countType == "imageCountMoreThan" &&
-      jsondecode(policy.policy).rules[3].selection.countNumber == 30
+      jsondecode(policy.policy).rules[2].selection.tagPrefixList == ["sha-"] &&
+      jsondecode(policy.policy).rules[2].selection.countType == "imageCountMoreThan" &&
+      jsondecode(policy.policy).rules[2].selection.countNumber == 30
     ])
     error_message = "La retención debe conservar como máximo 30 imágenes productivas identificadas por sha-."
   }
