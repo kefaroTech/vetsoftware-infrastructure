@@ -152,7 +152,11 @@ resource "aws_cloudwatch_event_target" "ecs_task_failed_notification" {
 
   rule      = aws_cloudwatch_event_rule.ecs_task_failed[0].name
   target_id = "notify-events"
-  arn       = aws_sns_topic.events[0].arn
+
+  # Al topic critico: una tarea que muere sin que nadie lo pidiera exige mirar
+  # ahora. Es ademas la notificacion que lleva stopCode y stoppedReason, es
+  # decir, el motivo real de la caida.
+  arn = aws_sns_topic.alarms_critical[0].arn
 
   input_transformer {
     input_paths = {
@@ -212,7 +216,12 @@ resource "aws_cloudwatch_event_target" "ecs_deployment_failed_notification" {
 
   rule      = aws_cloudwatch_event_rule.ecs_deployment_failed[0].name
   target_id = "notify-events"
-  arn       = aws_sns_topic.events[0].arn
+
+  # Este SI se queda en el topic de eventos, a diferencia de los otros dos. El
+  # circuit breaker ya revirtio: la version anterior sigue sirviendo y no hay
+  # nada caido que atender ahora mismo. Es informacion de despliegue, no un
+  # incidente.
+  arn = aws_sns_topic.events[0].arn
 
   input_transformer {
     input_paths = {
@@ -274,7 +283,11 @@ resource "aws_cloudwatch_event_target" "ecs_service_impaired_notification" {
 
   rule      = aws_cloudwatch_event_rule.ecs_service_impaired[0].name
   target_id = "notify-events"
-  arn       = aws_sns_topic.events[0].arn
+
+  # Al topic critico: el scheduler que no logra colocar una tarea deja el
+  # servicio sin capacidad, y a diferencia de un despliegue revertido no hay una
+  # version anterior sosteniendo el servicio mientras tanto.
+  arn = aws_sns_topic.alarms_critical[0].arn
 
   input_transformer {
     input_paths = {

@@ -286,19 +286,32 @@ run "notifications_render_in_slack_instead_of_dumping_json" {
     error_message = "Las notificaciones de eventos deben usar el esquema de notificacion personalizada de Amazon Q Developer."
   }
 
-  # Todo evento sale por el topic de eventos, sin importar su gravedad: un
-  # evento cuenta lo que paso y va al canal de infra. Si uno se cuela en el
-  # topic de alarmas, aterriza en el canal que debe estar reservado a lo que
-  # exige accion.
+  # Los eventos se reparten por SEVERIDAD, no por familia. Antes salian los cinco
+  # por el topic de eventos, que aterriza en el canal de infra, y el resultado era
+  # que un ":rotating_light: evento critico de RDS" llegaba al canal de menor
+  # prioridad mientras una advertencia de reinicio de tarea -alarma, no evento-
+  # llegaba al de alertas: la severidad quedaba invertida entre las dos familias.
+  # Paso el 9 de agosto de 2026, cuando las dos notificaciones que llevaban la
+  # causa raiz de un encendido fallido fueron a parar a infra.
+  assert {
+    condition = alltrue([
+      aws_cloudwatch_event_target.database_critical_notification[0].arn == aws_sns_topic.alarms_critical[0].arn,
+      aws_cloudwatch_event_target.ecs_task_failed_notification[0].arn == aws_sns_topic.alarms_critical[0].arn,
+      aws_cloudwatch_event_target.ecs_service_impaired_notification[0].arn == aws_sns_topic.alarms_critical[0].arn,
+    ])
+    error_message = "RDS critico, tarea muerta y scheduler sin capacidad son incidentes: van al topic critico, no al de eventos."
+  }
+
+  # Lo informativo se queda en infra, o el canal de alertas se llena de ruido y
+  # deja de leerse, que es el fallo que la separacion original venia a evitar. El
+  # despliegue revertido entra aqui a proposito: el circuit breaker ya actuo y la
+  # version anterior sigue sirviendo, asi que no hay nada caido que atender.
   assert {
     condition = alltrue([
       aws_cloudwatch_event_target.database_warning_notification[0].arn == aws_sns_topic.events[0].arn,
-      aws_cloudwatch_event_target.database_critical_notification[0].arn == aws_sns_topic.events[0].arn,
-      aws_cloudwatch_event_target.ecs_task_failed_notification[0].arn == aws_sns_topic.events[0].arn,
       aws_cloudwatch_event_target.ecs_deployment_failed_notification[0].arn == aws_sns_topic.events[0].arn,
-      aws_cloudwatch_event_target.ecs_service_impaired_notification[0].arn == aws_sns_topic.events[0].arn,
     ])
-    error_message = "Los eventos de ECS y RDS deben publicarse en el topic de eventos, no en los de alarmas."
+    error_message = "La advertencia de RDS y el despliegue revertido son informativos: se quedan en el topic de eventos."
   }
 }
 

@@ -10,17 +10,40 @@ El inventario en vivo se consulta con `terraform output alerting`.
 
 ## 1. Ruteo por tipo de señal
 
-Cuatro topics, tres canales. La separación es por **tipo de señal**, no por
-severidad: una alarma dice que algo está mal, un evento dice que algo pasó, y un
-aviso de costo no exige nada hoy. Cada familia tiene su ritmo, y mezclarlas hace
-que la más frecuente entierre a la más importante.
+Cuatro topics, tres canales. La separación es por **tipo de señal** —una alarma
+dice que algo está mal, un evento dice que algo pasó, un aviso de costo no exige
+nada hoy— **salvo en los eventos, que se parten por severidad**. Cada familia
+tiene su ritmo, y mezclarlas hace que la más frecuente entierre a la más
+importante.
 
 | Topic | Contenido | Canal |
 | --- | --- | --- |
 | `vetsoftware-dev-alarms` | alarmas de advertencia | alertas |
-| `vetsoftware-dev-alarms-critical` | alarmas críticas y compuestas | alertas |
-| `vetsoftware-dev-events` | despliegues, apagados, eventos de ECS y RDS | infra |
+| `vetsoftware-dev-alarms-critical` | alarmas críticas y compuestas, **y los eventos que son incidentes** | alertas |
+| `vetsoftware-dev-events` | despliegues, apagados y los eventos informativos de ECS y RDS | infra |
 | `vetsoftware-dev-finops` | informe diario, presupuesto, anomalías | costos |
+
+### Qué evento va a qué topic
+
+Al principio salían **todos** los eventos por el topic de eventos, sin importar
+su gravedad. El resultado era que un `🚨 evento critico de RDS` aterrizaba en el
+canal de infra mientras una advertencia de reinicio de tarea —alarma, no evento—
+llegaba al de alertas: la severidad quedaba invertida entre las dos familias. El
+9 de agosto de 2026 eso importó, porque las dos notificaciones que llevaban la
+causa raíz de un encendido fallido fueron a parar a infra.
+
+| Evento | Topic | Por qué |
+| --- | --- | --- |
+| RDS crítico | crítico | La base está fuera de servicio o a punto |
+| Tarea ECS detenida | crítico | Muere sin que nadie lo pidiera, y trae `stopCode` y `stoppedReason` |
+| Scheduler sin capacidad | crítico | El servicio se queda sin tareas y nada lo sostiene |
+| RDS advertencia | eventos | Conviene saberlo, no exige actuar |
+| Despliegue revertido | eventos | El circuit breaker ya actuó: la versión anterior sigue sirviendo |
+
+Como los eventos críticos publican en el topic crítico, **EventBridge está
+autorizado en los dos topics**. Si faltara ese permiso, la regla casaría, el
+target existiría y SNS rechazaría el `Publish`: la notificación desaparecería sin
+error visible. Hay un contrato que lo fija.
 
 La severidad sigue partida en dos topics aunque ambos vayan al mismo canal. No
 cuesta nada y deja mandar lo crítico a una guardia más adelante con
@@ -32,8 +55,8 @@ cuesta nada y deja mandar lo crítico a una guardia más adelante con
 | --- | --- | --- |
 | `slack_channel_id` | costos, y todo lo que no tenga canal propio | deshabilita Slack |
 | `slack_alerts_channel_id` | alarmas | cae al canal base |
-| `slack_infra_channel_id` | eventos | cae al canal base |
-| `slack_critical_channel_id` | alarmas críticas | acompañan a las advertencias |
+| `slack_infra_channel_id` | eventos informativos | cae al canal base |
+| `slack_critical_channel_id` | alarmas críticas y eventos que son incidentes | acompañan a las advertencias |
 
 Configurar de menos nunca deja una señal sin destino: la manda al canal que ya
 se estaba leyendo. Se crea **una configuración de Amazon Q por canal distinto**,
