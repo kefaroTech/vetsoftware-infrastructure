@@ -79,9 +79,36 @@ resource "aws_ecr_lifecycle_policy" "this" {
           type = "expire"
         }
       },
+      # Por tiempo y no por cantidad. La retencion protege de una sola cosa: que
+      # la imagen fijada en la task definition siga existiendo cuando haya que
+      # colocar una tarea nueva. Ese riesgo se mide en cuanto lleva el ambiente
+      # sin desplegar, no en cuantas veces se ha compilado mientras tanto.
+      #
+      # Contar builds hacia lo contrario de lo que se pretendia: cuanto mas
+      # activo el desarrollo, antes caia la imagen desplegada. El 8 de agosto de
+      # 2026 una jornada de merges publico diez imagenes y expulso la que dev
+      # tenia corriendo; al encender al dia siguiente, la tarea no pudo bajarla y
+      # el ambiente no levanto.
       {
         rulePriority = 2
-        description  = "Keep the ${var.development_images_to_keep} newest development images"
+        description  = "Keep development images pushed in the last ${var.development_retention_days} days"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = [var.development_tag_prefix]
+          countType     = "sinceImagePushed"
+          countUnit     = "days"
+          countNumber   = var.development_retention_days
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      # Tope de coste, no de higiene. ECR expira una imagen si CUALQUIER regla la
+      # selecciona, asi que sobrevive lo que sea a la vez reciente y este dentro
+      # del tope. Solo muerde en una racha de compilaciones fuera de lo normal.
+      {
+        rulePriority = 3
+        description  = "Cap development images at ${var.development_images_to_keep}"
         selection = {
           tagStatus     = "tagged"
           tagPrefixList = [var.development_tag_prefix]
@@ -93,7 +120,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
         }
       },
       {
-        rulePriority = 3
+        rulePriority = 4
         description  = "Keep the ${var.images_to_keep} newest production release images"
         selection = {
           tagStatus     = "tagged"

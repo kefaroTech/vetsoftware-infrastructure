@@ -61,14 +61,30 @@ variable "github_development_environment" {
   }
 }
 
-variable "development_images_to_keep" {
-  description = "Imágenes de desarrollo conservadas por repositorio antes de expirar las más antiguas."
+variable "development_retention_days" {
+  description = "Días que se conservan las imágenes de desarrollo. Es el tiempo que un ambiente puede pasar sin desplegar y seguir pudiendo arrancar con la imagen que tiene fijada."
   type        = number
-  default     = 10
+  default     = 30
 
+  # El minimo no es arbitrario: por debajo de una semana, un ambiente apagado el
+  # viernes y encendido tras un puente ya podria no encontrar su imagen.
   validation {
-    condition     = var.development_images_to_keep >= 3 && var.development_images_to_keep <= 100
-    error_message = "development_images_to_keep debe estar entre 3 y 100."
+    condition     = var.development_retention_days >= 7 && var.development_retention_days <= 365
+    error_message = "development_retention_days debe estar entre 7 y 365."
+  }
+}
+
+variable "development_images_to_keep" {
+  description = "Tope de imágenes de desarrollo por repositorio. Acota el coste ante una racha de compilaciones; la retención normal la fija development_retention_days."
+  type        = number
+  default     = 150
+
+  # Cada imagen de mas cuesta ~1 centavo al mes: comparten siete de sus ocho
+  # capas y solo la del aplicativo es exclusiva, unos 106 MiB. El tope existe
+  # para que una racha anomala no se desborde, no para ahorrar.
+  validation {
+    condition     = var.development_images_to_keep >= 10 && var.development_images_to_keep <= 1000
+    error_message = "development_images_to_keep debe estar entre 10 y 1000."
   }
 }
 
