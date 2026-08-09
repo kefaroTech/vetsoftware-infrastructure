@@ -124,6 +124,9 @@ run "production_configuration_plans" {
     error_message = "Ni GuardDuty ni los data events pueden encenderse sin decidirlo: los dos se facturan."
   }
 
+  // Igual que en dev: la autorizacion de la CMK no es afirmable bajo
+  // mock_provider, que vacia todo aws_iam_policy_document.
+
   # Una shell en el contenedor de produccion lee DB_PASSWORD, JWT_SECRET y
   # DIAN_ENC_KEY. Que este apagada es parte del hallazgo, no un detalle aparte.
   assert {

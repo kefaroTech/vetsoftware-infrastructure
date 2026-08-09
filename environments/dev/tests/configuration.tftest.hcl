@@ -190,6 +190,14 @@ run "development_cost_profile_plans" {
     error_message = "Ni GuardDuty ni los data events pueden encenderse sin decidirlo: los dos se facturan."
   }
 
+  // Que la CMK autorice a cloudtrail.amazonaws.com no se puede afirmar aqui:
+  // mock_provider sustituye todo aws_iam_policy_document por un documento vacio,
+  // igual que en sns_publish_authorization del modulo de monitoreo. El output
+  // cmk_authorized_services existe y sirve para inspeccionarlo con terraform
+  // output, pero fijarlo exige que modules/kms deje de usar
+  // data.aws_caller_identity y pueda contrastarse con proveedor real, como ya
+  // hicieron github_iac_roles y account_baseline.
+
   assert {
     condition     = output.cost_profile.valkey_storage_gb == 1 && output.cost_profile.valkey_ecpu_per_second == 1000
     error_message = "Valkey dev debe mantener los límites mínimos."
