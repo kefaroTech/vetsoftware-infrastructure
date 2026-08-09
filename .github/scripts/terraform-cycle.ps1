@@ -131,12 +131,30 @@ function Set-CurrentBackendImage {
     # la lectura de ECS. El circuito de imagen (deploy-backend-*) sigue siendo la via
     # normal; esto es para cuando ese circuito no puede correr.
     if (-not [string]::IsNullOrWhiteSpace($env:FORCE_BACKEND_IMAGE_URI)) {
-        if ($env:FORCE_BACKEND_IMAGE_URI -notmatch $imagePattern) {
-            throw "FORCE_BACKEND_IMAGE_URI debe fijar $repositoryName por digest inmutable: <cuenta>.dkr.ecr.<region>.amazonaws.com/$repositoryName@sha256:<64 hex>."
+        # El valor llega pegado a mano en un input de workflow_dispatch, y un
+        # espacio al final o un no-rompible del portapapeles son invisibles tanto
+        # en el campo como en el log. Sin normalizar, la corrida se pierde entera
+        # por un caracter que nadie puede ver: el patron esta anclado y el
+        # mensaje mostraba una URI identica a la esperada.
+        #
+        # Trim() cubre el espacio normal y el no-rompible, que Char.IsWhiteSpace
+        # reconoce; los de ancho cero no, y por eso van aparte.
+        $forcedImage = $env:FORCE_BACKEND_IMAGE_URI
+        foreach ($invisible in @([char]0x200B, [char]0x200C, [char]0x200D, [char]0xFEFF)) {
+            $forcedImage = $forcedImage.Replace([string]$invisible, "")
+        }
+        $forcedImage = $forcedImage.Trim()
+
+        if ($forcedImage -notmatch $imagePattern) {
+            # Se muestra entre comillas y con su longitud porque el fallo tipico
+            # no se ve leyendo el valor: "la URI parece correcta" es exactamente
+            # el sintoma de un caracter invisible, y las comillas delimitan donde
+            # empieza y acaba lo que de verdad llego.
+            throw "FORCE_BACKEND_IMAGE_URI debe fijar $repositoryName por digest inmutable: <cuenta>.dkr.ecr.<region>.amazonaws.com/$repositoryName@sha256:<64 hex>. Se recibio '$forcedImage' ($($forcedImage.Length) caracteres)."
         }
 
-        $env:TF_VAR_backend_image_uri = $env:FORCE_BACKEND_IMAGE_URI
-        Write-Host "[Terraform] Imagen forzada desde el dispatch: $env:FORCE_BACKEND_IMAGE_URI" -ForegroundColor Yellow
+        $env:TF_VAR_backend_image_uri = $forcedImage
+        Write-Host "[Terraform] Imagen forzada desde el dispatch: $forcedImage" -ForegroundColor Yellow
         if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
                 "",
