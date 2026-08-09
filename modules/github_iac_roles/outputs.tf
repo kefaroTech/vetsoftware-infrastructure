@@ -32,8 +32,9 @@ output "inline_policy_character_counts" {
   description = "Caracteres agregados de políticas inline por rol; IAM limita cada rol a 10.240."
   value = {
     for key, role in local.role_definitions : key => nonsensitive(sum(concat(
+      # infrastructure_read ya no suma aqui: es una politica administrada y tiene
+      # su propio limite, que se vigila aparte.
       [
-        length(replace(data.aws_iam_policy_document.infrastructure_read[key].json, "/\\s/", "")),
         length(replace(data.aws_iam_policy_document.state[key].json, "/\\s/", "")),
       ],
       role.function == "apply" ? [
@@ -43,5 +44,13 @@ output "inline_policy_character_counts" {
         length(replace(data.aws_iam_policy_document.apply_global[key].json, "/\\s/", "")),
       ] : [],
     )))
+  }
+}
+
+output "managed_policy_character_counts" {
+  description = "Caracteres de las políticas administradas por rol; IAM limita cada una a 6.144."
+  value = {
+    for key, policy in data.aws_iam_policy_document.infrastructure_read :
+    key => nonsensitive(length(replace(policy.json, "/\\s/", "")))
   }
 }
