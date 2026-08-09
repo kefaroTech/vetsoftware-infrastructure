@@ -68,6 +68,11 @@ locals {
     "ecs:List*",
     "elasticache:Describe*",
     "elasticache:ListTagsForResource",
+    # El informe de costos. Plan y drift refrescan la funcion en cada corrida, y
+    # el proveedor lee bastante mas que GetFunction al hacerlo: configuracion,
+    # politica, versiones y etiquetas.
+    "lambda:Get*",
+    "lambda:List*",
     # El plan tiene que poder leer las reglas de EventBridge y sus targets para
     # detectar deriva. Sin esto el refresh falla antes de llegar al diff.
     "events:Describe*",
@@ -206,6 +211,14 @@ locals {
     "rds:*DBParameterGroup",
     "rds:*DBSubnetGroup",
     "rds:RemoveTagsFromResource",
+    # La funcion del informe de costos. El codigo viaja en el propio recurso, asi
+    # que actualizarlo es UpdateFunctionCode y no un despliegue aparte.
+    "lambda:CreateFunction",
+    "lambda:DeleteFunction",
+    "lambda:TagResource",
+    "lambda:UntagResource",
+    "lambda:UpdateFunctionCode",
+    "lambda:UpdateFunctionConfiguration",
     "scheduler:*Schedule",
     "scheduler:TagResource",
     "scheduler:UntagResource",
@@ -571,6 +584,9 @@ data "aws_iam_policy_document" "apply_identity" {
         "ecs-tasks.amazonaws.com",
         "firehose.amazonaws.com",
         "chatbot.amazonaws.com",
+        # Crear una Lambda es pasarle su rol de ejecucion: sin esto, CreateFunction
+        # falla por iam:PassRole y no por un permiso de Lambda.
+        "lambda.amazonaws.com",
         "scheduler.amazonaws.com",
         "vpc-flow-logs.amazonaws.com",
       ]

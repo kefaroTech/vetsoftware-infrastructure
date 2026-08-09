@@ -272,19 +272,25 @@ run "environment_and_function_roles_are_isolated" {
   }
 }
 
-# Un modulo nuevo puede introducir tipos de recurso que estos roles no saben
-# crear, y nada lo detecta antes de tiempo: el plan no comprueba permisos, y el
-# gate no ejecuta apply. El AccessDenied aparece a mitad del apply, con parte de
-# la infraestructura ya creada.
+# REGISTRO DE PERMISOS POR MODULO. Un modulo nuevo puede introducir tipos de
+# recurso que estos roles no saben crear, y nada lo detecta antes de tiempo: el
+# plan no comprueba permisos y el gate no ejecuta apply. El AccessDenied aparece
+# a mitad del apply, con parte de la infraestructura ya creada.
 #
-# Paso el 9 de agosto de 2026 con modules/account_baseline: el rastro de la
-# cuenta se anadio sin extender el rol, y el apply murio en tres recursos a la
-# vez -PutBucketLogging, CreateTrail y el TagResource del analizador-.
+# Paso cuatro veces el 9 de agosto de 2026. Tres con account_baseline
+# -PutBucketLogging, CreateTrail, el TagResource del analizador- y una con
+# cost_report, que fallo en lambda:CreateFunction.
 #
-# Esta lista es el contrato entre account_baseline y el rol que lo aplica. Si se
-# amplia el modulo, se amplia aqui, y el fallo se ve en el commit en lugar de a
-# mitad del apply.
-run "apply_puede_crear_la_linea_base_de_trazabilidad" {
+# Al anadir un modulo con un tipo de recurso nuevo, se anade aqui lo que necesita.
+# Vale la pena mirar tres cosas que no son obvias leyendo el modulo:
+#
+#   - Que identidad USA el recurso, no solo cual lo crea. CloudTrail pide su data
+#     key con la suya, y el permiso que faltaba era el de la key policy.
+#   - Los permisos que se piden de rebote: etiquetar al crear, pasar un rol de
+#     ejecucion, crear un rol vinculado de servicio.
+#   - Las lecturas, o el plan y el drift fallaran sobre algo que el apply si pudo
+#     crear.
+run "apply_puede_crear_los_recursos_de_los_modulos" {
   command = plan
 
   assert {
@@ -327,6 +333,29 @@ run "apply_puede_crear_la_linea_base_de_trazabilidad" {
     error_message = "El rol de apply debe poder activar el server access logging de los buckets del ambiente."
   }
 
+  # cost_report: la Lambda del informe diario.
+  assert {
+    condition = alltrue([
+      for accion in ["lambda:CreateFunction", "lambda:UpdateFunctionCode", "lambda:TagResource"] :
+      alltrue([
+        for key in ["dev_apply", "prod_apply"] :
+        strcontains(data.aws_iam_policy_document.apply_regional[key].json, accion)
+      ])
+    ])
+    error_message = "El rol de apply debe poder crear y actualizar la funcion del informe de costos."
+  }
+
+  # Crear una Lambda es pasarle su rol de ejecucion: sin PassRole hacia
+  # lambda.amazonaws.com, CreateFunction falla por IAM y no por un permiso de
+  # Lambda, que es lo que despista al leer el error.
+  assert {
+    condition = alltrue([
+      for key in ["dev_apply", "prod_apply"] :
+      strcontains(data.aws_iam_policy_document.apply_identity[key].json, "lambda.amazonaws.com")
+    ])
+    error_message = "El rol de apply debe poder pasar el rol de ejecucion a Lambda."
+  }
+
   # Plan y drift refrescan estos recursos en cada corrida. Sin lectura, el ciclo
   # diario falla sobre algo que el apply si pudo crear, que es la unica variante
   # peor que no poder crearlo.
@@ -337,11 +366,12 @@ run "apply_puede_crear_la_linea_base_de_trazabilidad" {
         "cloudtrail:GetTrailStatus",
         "cloudtrail:GetEventSelectors",
         "access-analyzer:ListAnalyzers",
+        "lambda:Get*",
         ] : alltrue([
           for key in ["dev_plan", "dev_apply", "prod_plan", "prod_apply"] :
           strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, accion)
       ])
     ])
-    error_message = "Los dos roles deben poder LEER el trail y el analizador; si no, el plan y el drift fallan al refrescarlos."
+    error_message = "Los dos roles deben poder LEER el trail, el analizador y la funcion; si no, el plan y el drift fallan al refrescarlos."
   }
 }
