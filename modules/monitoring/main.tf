@@ -271,6 +271,33 @@ data "aws_iam_policy_document" "alarms_critical" {
     }
   }
 
+  # Los eventos criticos -RDS fuera de servicio, tarea muerta, scheduler que no
+  # coloca- entran por aca ademas de las alarmas, asi que EventBridge tambien
+  # tiene que poder publicar. Sin este statement el target existe, la regla casa
+  # y SNS rechaza el Publish: la notificacion desaparece sin dejar rastro en
+  # ningun sitio donde alguien mire.
+  dynamic "statement" {
+    for_each = local.ecs_events_enabled || local.database_events_enabled ? [1] : []
+
+    content {
+      sid     = "EventBridgeSNSPublishingPermissions"
+      effect  = "Allow"
+      actions = ["SNS:Publish"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["events.amazonaws.com"]
+      }
+
+      resources = [local.alarms_critical_topic_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
 }
 
 resource "aws_sns_topic_policy" "alarms_critical" {

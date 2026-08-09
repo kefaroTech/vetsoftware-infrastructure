@@ -124,6 +124,27 @@ run "alarms_are_authorized_to_publish" {
     error_message = "El permiso de CloudWatch debe acotarse con aws:SourceAccount a las alarmas de esta cuenta."
   }
 
+  # Los eventos criticos publican en el topic critico, no en el de eventos, asi
+  # que EventBridge tiene que estar autorizado en los dos. Si falta el permiso el
+  # target existe, la regla casa y SNS rechaza el Publish: la notificacion
+  # desaparece sin error visible en ningun sitio. Es el fallo mas caro de todos
+  # los posibles aqui, porque se descubre el dia que hacia falta la alerta.
+  assert {
+    condition = alltrue([
+      for policy in [
+        data.aws_iam_policy_document.events[0].json,
+        data.aws_iam_policy_document.alarms_critical[0].json,
+        ] : anytrue([
+          for statement in jsondecode(policy).Statement : (
+            try(statement.Principal.Service, "") == "events.amazonaws.com" &&
+            contains(flatten([statement.Action]), "SNS:Publish") &&
+            try(statement.Condition.StringEquals["aws:SourceAccount"], "") == "123456789012"
+          )
+      ])
+    ])
+    error_message = "El topic de eventos y el critico deben autorizar a events.amazonaws.com acotado a la cuenta; sin eso EventBridge publica al vacio."
+  }
+
   # Cada publicador tiene que quedar en el topic de su familia. Si Budgets sigue
   # autorizado en el topic de alarmas, el informe de costos vuelve a caer en el
   # canal de alertas, que es justo lo que la separacion viene a evitar.

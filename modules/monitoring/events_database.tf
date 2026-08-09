@@ -46,7 +46,14 @@ resource "aws_cloudwatch_event_target" "database_critical_notification" {
 
   rule      = aws_cloudwatch_event_rule.database_critical[0].name
   target_id = "notify-events"
-  arn       = aws_sns_topic.events[0].arn
+
+  # Al topic critico, no al de eventos. La regla ya separa lo critico de lo
+  # informativo -son dos listas de EventID distintas, con titulos y pasos
+  # distintos- y mandar las dos al mismo destino tiraba esa clasificacion en el
+  # ultimo paso: un ":rotating_light: evento critico de RDS" aterrizaba en el
+  # canal de infra mientras una advertencia de reinicio de tarea llegaba al de
+  # alertas. La severidad quedaba invertida entre alarmas y eventos.
+  arn = aws_sns_topic.alarms_critical[0].arn
 
   input_transformer {
     input_paths = {
