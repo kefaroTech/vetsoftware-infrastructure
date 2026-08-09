@@ -14,6 +14,14 @@
 # La lista de EventIDs es explicita a proposito. Suscribirse a la categoria
 # completa "availability" traeria tambien RDS-EVENT-0004 y 0006 -apagado y
 # reinicio-, que en dev son el apagado programado de cada noche.
+#
+# El replace() sobre jsonencode no es cosmetico. jsonencode convierte los signos
+# de menor y mayor a su forma unicode escapada -lo hereda de encoding/json de
+# Go- y EventBridge busca el marcador en el TEXTO de la plantilla, no en el JSON
+# ya parseado. Escapado no lo encuentra, no sustituye nada, y el mensaje llega con
+# los marcadores crudos. Paso el 9 de agosto de 2026 con RDS-EVENT-0403: la
+# alerta llego diciendo "Evento: <eventId>" y hubo que ir al CLI a averiguar
+# cual habia sido.
 
 resource "aws_cloudwatch_event_rule" "database_critical" {
   count = local.database_events_enabled ? 1 : 0
@@ -47,7 +55,7 @@ resource "aws_cloudwatch_event_target" "database_critical_notification" {
       time    = "$.time"
     }
 
-    input_template = jsonencode({
+    input_template = replace(replace(jsonencode({
       version = "1.0"
       source  = "custom"
       content = {
@@ -66,7 +74,7 @@ resource "aws_cloudwatch_event_target" "database_critical_notification" {
         threadId = "${var.name}-rds-events"
         summary  = "Evento critico de RDS"
       }
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
 
@@ -102,7 +110,7 @@ resource "aws_cloudwatch_event_target" "database_warning_notification" {
       time    = "$.time"
     }
 
-    input_template = jsonencode({
+    input_template = replace(replace(jsonencode({
       version = "1.0"
       source  = "custom"
       content = {
@@ -115,6 +123,6 @@ resource "aws_cloudwatch_event_target" "database_warning_notification" {
         threadId = "${var.name}-rds-events"
         summary  = "Evento de RDS"
       }
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }

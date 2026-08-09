@@ -27,7 +27,8 @@ $terraformRoots = @(
     "modules/account_baseline",
     "modules/database",
     "modules/ecr",
-    "modules/github_iac_roles"
+    "modules/github_iac_roles",
+    "modules/monitoring"
 )
 $terraformTestRoots = @(
     "environments/prod",
@@ -35,7 +36,8 @@ $terraformTestRoots = @(
     "modules/account_baseline",
     "modules/database",
     "modules/ecr",
-    "modules/github_iac_roles"
+    "modules/github_iac_roles",
+    "modules/monitoring"
 )
 $logDirectory = Join-Path $repositoryRoot ".tools/logs/terraform-gate"
 $timestamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
@@ -402,7 +404,14 @@ function Get-PreCommitScope {
                     $roots += @("environments/prod", "environments/dev", "modules/database")
                     $scanTargets += @("environments/prod", "environments/dev", "modules/database")
                 }
-                { $_ -in @("alb", "cache", "ecs_backend", "kms", "monitoring", "network", "secrets", "security") } {
+                # Tenia cuatro archivos de contrato que nunca se ejecutaban por no
+                # estar declarado como raiz. Uno de ellos es el que habria
+                # atrapado los marcadores escapados de las notificaciones.
+                "monitoring" {
+                    $roots += @("environments/prod", "environments/dev", "modules/monitoring")
+                    $scanTargets += @("environments/prod", "environments/dev", "modules/monitoring")
+                }
+                { $_ -in @("alb", "cache", "ecs_backend", "kms", "network", "secrets", "security") } {
                     $roots += @("environments/prod", "environments/dev")
                     $scanTargets += @("environments/prod", "environments/dev")
                 }

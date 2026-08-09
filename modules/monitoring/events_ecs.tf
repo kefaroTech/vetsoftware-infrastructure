@@ -162,7 +162,7 @@ resource "aws_cloudwatch_event_target" "ecs_task_failed_notification" {
       stoppedAt = "$.detail.stoppedAt"
     }
 
-    input_template = jsonencode({
+    input_template = replace(replace(jsonencode({
       version = "1.0"
       source  = "custom"
       content = {
@@ -181,7 +181,7 @@ resource "aws_cloudwatch_event_target" "ecs_task_failed_notification" {
         threadId = "${var.name}-ecs-task-stop"
         summary  = "Tarea ECS detenida"
       }
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
 
@@ -221,7 +221,7 @@ resource "aws_cloudwatch_event_target" "ecs_deployment_failed_notification" {
       time         = "$.time"
     }
 
-    input_template = jsonencode({
+    input_template = replace(replace(jsonencode({
       version = "1.0"
       source  = "custom"
       content = {
@@ -239,7 +239,7 @@ resource "aws_cloudwatch_event_target" "ecs_deployment_failed_notification" {
         threadId = "${var.name}-ecs-deployment"
         summary  = "Despliegue ECS fallido"
       }
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
 
@@ -283,7 +283,7 @@ resource "aws_cloudwatch_event_target" "ecs_service_impaired_notification" {
       time      = "$.time"
     }
 
-    input_template = jsonencode({
+    input_template = replace(replace(jsonencode({
       version = "1.0"
       source  = "custom"
       content = {
@@ -301,6 +301,6 @@ resource "aws_cloudwatch_event_target" "ecs_service_impaired_notification" {
         threadId = "${var.name}-ecs-service-action"
         summary  = "Scheduler ECS degradado"
       }
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
