@@ -139,6 +139,37 @@ function Wait-DatabaseAvailable {
     )
 }
 
+# Devuelve el estado en el que quedo la instancia, para que quien llama decida.
+#
+# Se sondea en lugar de usar un waiter porque no hay uno: la CLI solo expone
+# db-instance-available y db-instance-deleted. El intervalo y el techo imitan al
+# waiter oficial -reintentos cortos, diez minutos de tope-, que sobra para un
+# stop, que tarda unos minutos.
+function Wait-DatabaseStopped {
+    Write-Host "[RDS] $databaseIdentifier se esta deteniendo; esperando a que termine para poder arrancarla..." -ForegroundColor Yellow
+
+    for ($intento = 1; $intento -le 40; $intento++) {
+        $estado = & aws rds describe-db-instances `
+            --db-instance-identifier $databaseIdentifier `
+            --query "DBInstances[0].DBInstanceStatus" --output text 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "No fue posible consultar el estado de $databaseIdentifier mientras se detenia."
+        }
+
+        $estado = ([string]$estado).Trim()
+        if ($estado -ne "stopping") {
+            # Puede haber quedado en 'stopped' -lo normal- o alguien pudo haberla
+            # arrancado mientras tanto. En los dos casos el que llama sabe seguir.
+            Write-Host "[RDS] $databaseIdentifier quedo en '$estado'." -ForegroundColor Cyan
+            return $estado
+        }
+
+        Start-Sleep -Seconds 15
+    }
+
+    throw "$databaseIdentifier sigue en 'stopping' tras diez minutos. Revise la consola de RDS antes de reintentar el encendido."
+}
+
 # El aviso sale por el topic de alertas que Amazon Q ya publica en Slack -el mismo
 # que usa el aviso de despliegue-: reusar ese canal evita un webhook nuevo y un
 # secreto mas que rotar. Aca no hay terraform del que leer el ARN, asi que se arma
@@ -274,6 +305,20 @@ try {
     Write-Host "Estado inicial: base '$databaseStatus', servicio con $($serviceCounts.Running) de $($serviceCounts.Desired) tarea(s) corriendo." -ForegroundColor Cyan
 
     if ($Mode -eq "Start") {
+        # Un Stop lanzado poco antes deja la base en 'stopping', y ese estado no
+        # se puede tratar como "cualquier otro": RDS rechaza StartDBInstance
+        # mientras dura, y el waiter de 'available' no lleva 'stopping' entre sus
+        # estados de fallo -si los de 'failed' o 'incompatible-parameters', que
+        # por eso no hace falta contemplar aqui-. El resultado era esperar media
+        # hora un estado al que la instancia no iba a llegar sola, porque nadie
+        # la estaba arrancando.
+        #
+        # Paso el 9 de agosto de 2026: un Stop a las 04:43 y un Start a las 04:45
+        # dejaron el workflow colgado hasta agotar el waiter.
+        if ($databaseStatus -eq "stopping") {
+            $databaseStatus = Wait-DatabaseStopped
+        }
+
         # La base primero: una tarea que arranca sin base muere en Liquibase y el
         # circuit breaker la marca fallida.
         if ($databaseStatus -eq "stopped") {
@@ -332,6 +377,12 @@ try {
         }
         elseif ($databaseStatus -eq "stopped") {
             Write-Host "[RDS] La base ya estaba apagada." -ForegroundColor Green
+        }
+        elseif ($databaseStatus -eq "stopping") {
+            # El problema espejo del arranque: esperar a 'available' para poder
+            # detener algo que ya se esta deteniendo es esperar a que la
+            # instancia retroceda. Ya va camino del estado que se pedia.
+            Write-Host "[RDS] La base ya se estaba deteniendo." -ForegroundColor Green
         }
         else {
             # stop-db-instance solo acepta una instancia disponible.
