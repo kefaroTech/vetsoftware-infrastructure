@@ -1,12 +1,28 @@
 name: Terraform quality dev
 
+# Este workflow absorbio las raices de bootstrap: antes existia un
+# 'Terraform quality bootstrap dev' aparte que corria el mismo gate, con el
+# mismo -Mode ci, las mismas acciones y los mismos permisos, solo que sobre
+# bootstrap, modules/ecr y modules/github_iac_roles. Eran dos arranques de
+# runner para un trabajo que cabe en una sola invocacion. NO volver a partirlo
+# en dos: si se anade una raiz, va en el -Roots del ultimo paso, y su ruta en
+# el paths: de arriba.
+
 on:
   pull_request:
     branches:
       - develop
-  push:
-    branches:
-      - develop
+    paths:
+      - "environments/dev/**"
+      - "modules/**"
+      - "bootstrap/**"
+      - "scripts/quality/**"
+      - "scripts/security/**"
+      - ".tflint.hcl"
+      - ".terraform-version"
+      - ".github/scripts/terraform-*.ps1"
+      - ".github/workflows/terraform-bootstrap-dev.yml"
+      - ".github/workflows/terraform-quality-dev.yml"
   workflow_dispatch:
 
 permissions:
@@ -18,9 +34,11 @@ concurrency:
 
 jobs:
   validate:
-    name: Format, lint and validate dev
+    name: Format, lint and validate dev and bootstrap
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45 y no 30: este job hace ahora el trabajo que antes se repartian dos, cada
+    # uno con su presupuesto de 30 minutos.
+    timeout-minutes: 45
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: false
@@ -43,7 +61,7 @@ jobs:
           tflint_version: v0.64.0
           github_token: ${{ github.token }}
 
-      - name: Run the quality gate scoped to the development root
+      - name: Run the quality gate for the dev and bootstrap roots
         # Sin token, la descarga del plugin de TFLint va sin autenticar contra
         # la API de GitHub y comparte el limite de 60 por hora con las demas IP
         # del runner: el gate se cae con un 403 que no tiene nada que ver con el
@@ -51,4 +69,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: ./scripts/quality/terraform-gate.ps1 -Mode ci -Roots environments/dev
+        run: >-
+          ./scripts/quality/terraform-gate.ps1 -Mode ci
+          -Roots environments/dev,bootstrap,modules/ecr,modules/github_iac_roles

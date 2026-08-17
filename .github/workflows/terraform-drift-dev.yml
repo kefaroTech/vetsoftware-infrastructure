@@ -2,7 +2,11 @@ name: Terraform drift dev
 
 on:
   schedule:
-    - cron: "17 11 * * *"
+    # Cadencia bajada de diaria a semanal: hay deriva permanente sin resolver en
+    # module.cost_report.* y en module.database.aws_db_instance -esta ultima la
+    # provoca el propio apagado programado de EventBridge-, asi que el informe
+    # diario solo repetia hallazgos conocidos. Volver a subirla al resolverlos.
+    - cron: "17 11 * * MON"
   workflow_dispatch:
 
 permissions:
