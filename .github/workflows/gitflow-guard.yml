@@ -15,11 +15,19 @@ on:
     branches:
       - main
       - develop
+  # Sin 'edited': ese tipo dispara con cada cambio de titulo o de cuerpo del PR,
+  # que no es nada que este workflow mire. El precio conocido: cambiar la rama
+  # destino de un PR ya abierto -lo unico de 'edited' que si afecta a
+  # branch-naming- no revalida hasta el siguiente push.
   pull_request:
-    types: [opened, reopened, edited, synchronize]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
+
+concurrency:
+  group: gitflow-guard-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -29,10 +37,12 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout complete history
+      - name: Checkout de la punta y su padre
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          # Solo se cuentan los padres del commit de punta: con dos niveles basta
+          # y se evita clonar la historia completa en cada push.
+          fetch-depth: 2
 
       - name: Verificar que la punta es un merge de pull request
         env:
