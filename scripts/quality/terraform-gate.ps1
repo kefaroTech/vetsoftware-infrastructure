@@ -390,7 +390,10 @@ function Get-PreCommitScope {
                     $roots += @("bootstrap", "modules/github_iac_roles")
                     $scanTargets += @("bootstrap", "modules/github_iac_roles")
                 }
-                "scheduled_shutdown" {
+                # log_shipping va solo con dev por ahora: prod exporta a traves de
+                # Alloy y todavia no tiene este tramo. Cuando lo tenga, se anade
+                # aqui su raiz.
+                { $_ -in @("scheduled_shutdown", "log_shipping") } {
                     $roots += "environments/dev"
                     $scanTargets += "environments/dev"
                 }

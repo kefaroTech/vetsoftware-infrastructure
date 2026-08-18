@@ -1,0 +1,158 @@
+# Configuracion del sidecar colector de TRAZAS y METRICAS.
+#
+# Se inyecta como variable de entorno (OTELCOL_CONFIG) y el binario arranca con
+# --config=env:OTELCOL_CONFIG. Asi no hay que hornear una imagen propia ni montar
+# un fichero: la configuracion viaja en la definicion de tarea y cambia con un
+# apply. Toda interpolacion de este fichero la resuelve Terraform; lo que debe
+# resolver el propio colector en tiempo de arranque va escapado con doble dolar,
+# de modo que aqui se escribe $${env:VARIABLE} y al colector le llega la forma
+# que el entiende. El escape aplica tambien dentro de los comentarios: templatefile
+# no distingue comentario de contenido.
+#
+# NO hay pipeline de logs a proposito. Los logs de la aplicacion salen por stdout
+# hacia CloudWatch y de ahi los recoge Firehose (modules/log_shipping): su
+# durabilidad vive fuera de la tarea y no necesita pasar por aqui. Si algun dia
+# alguien apunta OTEL_EXPORTER_OTLP_LOGS_ENDPOINT a este receptor, el colector
+# respondera 404 en /v1/logs porque no existe el pipeline, y esa es la senal
+# correcta: este componente no es responsable de los logs.
+#
+# NO hay tail_sampling a proposito. El muestreo inteligente lo hace Adaptive
+# Traces en el lado de Grafana Cloud (plugin grafana-adaptivetraces-app). Un
+# tail_sampling aqui seria incorrecto en cuanto haya mas de una tarea: los spans
+# de una misma traza se repartirian entre tareas y cada colector decidiria con
+# informacion parcial, descartando mitades de traza. Este sidecar es
+# deliberadamente tonto -recibe, guarda en disco, reintenta, reenvia- y eso es
+# justo lo que le permite escalar sin coordinacion entre tareas.
+
+extensions:
+  # La razon de existir de todo esto. La cola de envio se respalda en disco, en
+  # el volumen de tarea montado en /var/lib/otelcol: si el colector se reinicia,
+  # lo pendiente sigue ahi en vez de desaparecer con la memoria del proceso.
+  # create_directory es obligatorio porque el volumen se monta vacio y el
+  # subdirectorio no existe todavia en el primer arranque.
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/queue
+      max_transaction_size: 65536
+
+  # Las credenciales no estan en esta configuracion: llegan por variables de
+  # entorno que ECS resuelve contra Secrets Manager con el rol de ejecucion. Lo
+  # que queda escrito en la definicion de tarea es el nombre de la variable, no
+  # su valor, asi que el secreto no viaja por Terraform ni queda en el state.
+  basicauth/grafana:
+    client_auth:
+      username: $${env:GRAFANA_OTLP_USERNAME}
+      password: $${env:GRAFANA_OTLP_API_KEY}
+
+receivers:
+  # Solo loopback. En awsvpc todos los contenedores de la tarea comparten el
+  # namespace de red, asi que el backend llega por 127.0.0.1 sin exponer nada al
+  # exterior: el receptor no necesita TLS ni autenticacion porque no es
+  # alcanzable desde fuera de la tarea. Solo HTTP: la aplicacion exporta con
+  # OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf y no usa gRPC.
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+        max_request_body_size: 8388608
+
+processors:
+  # Va primero en los dos pipelines. Protege al colector de que un pico de
+  # entrada lo lleve al OOM y se lleve por delante la cola que estaba
+  # protegiendo. Se queda por debajo de la reserva del contenedor para que el
+  # rechazo lo haga el colector -visible en otelcol_receiver_refused_*- y no el
+  # kernel, que no deja rastro.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: ${memory_limit_mib}
+    spike_limit_mib: ${memory_spike_limit_mib}
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Un unico exportador para las dos senales. otlp_http anade /v1/traces y
+  # /v1/metrics al endpoint base, que es exactamente la forma del gateway OTLP
+  # de Grafana Cloud. Se escribe otlp_http y no el alias otlphttp: el binario
+  # 0.159 acepta los dos pero avisa de que el segundo esta obsoleto, y un aviso
+  # ignorado hoy es un arranque roto en la actualizacion que lo retire.
+  otlp_http/grafana:
+    endpoint: ${otlp_endpoint}
+    auth:
+      authenticator: basicauth/grafana
+
+    # sending_queue con storage es lo que convierte la cola en memoria -que
+    # descarta en silencio- en una cola en disco que sobrevive al reinicio.
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+      num_consumers: ${queue_consumers}
+      queue_size: ${queue_size}
+
+    # Ventana amplia a proposito: cubre el reinicio de un destino, un 429
+    # sostenido o una ventana de mantenimiento de Grafana Cloud sin descartar el
+    # lote. Si se agota, la perdida queda contabilizada en
+    # otelcol_exporter_send_failed_* en vez de ser invisible.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: ${retry_max_elapsed_time}
+
+service:
+  extensions: [file_storage/queue, basicauth/grafana]
+
+  telemetry:
+    # Formato de lista name/value, no el mapa plano heredado: el binario 0.159
+    # acepta el mapa pero lo marca como legacy en cada arranque. Estos tres
+    # atributos son los que permiten separar las series del colector de las de la
+    # aplicacion en Grafana Cloud.
+    resource:
+      attributes:
+        - name: service.name
+          value: ${self_service_name}
+        - name: service.namespace
+          value: ${self_service_namespace}
+        - name: deployment.environment.name
+          value: ${environment_name}
+
+    # JSON obligatorio: el filtro de metrica de CloudWatch que vigila este
+    # contenedor consulta $.level, y con el encoder de consola por defecto no
+    # habria campo que consultar.
+    logs:
+      level: info
+      encoding: json
+
+    # Las metricas del propio colector salen por su PROPIO receptor OTLP, de modo
+    # que atraviesan el mismo pipeline durable que todo lo demas: cola en disco y
+    # reintentos. Es un requisito, no un adorno. Sin estas series
+    # -otelcol_exporter_send_failed_spans, otelcol_exporter_enqueue_failed_spans,
+    # otelcol_exporter_queue_size- la perdida vuelve a ser indemostrable: se
+    # sabria que faltan trazas pero no si se descartaron, cuando ni cuantas. Y al
+    # ir por la cola, tambien sobreviven al corte que estan denunciando: cuando
+    # Grafana Cloud vuelve, llega la serie que explica el hueco.
+    metrics:
+      level: normal
+      readers:
+        - periodic:
+            interval: ${self_metrics_interval_ms}
+            exporter:
+              otlp:
+                protocol: http/protobuf
+                endpoint: http://127.0.0.1:4318
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/grafana]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/grafana]

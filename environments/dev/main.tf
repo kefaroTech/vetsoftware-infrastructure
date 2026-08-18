@@ -29,8 +29,17 @@ module "secrets" {
   grafana_secret_version          = var.grafana_secret_version
   cloudflare_tunnel_token         = var.cloudflare_tunnel_token
   cloudflare_tunnel_token_version = var.cloudflare_tunnel_token_version
-  recovery_window_in_days         = 0
-  tags                            = local.common_tags
+
+  # Secreto propio para la clave que lee Firehose. No es una clave mas dentro de
+  # grafana-cloud: AWS solo documenta que Firehose falla al conectar si el JSON
+  # del secreto no tiene el formato correcto, sin decir si tolera claves
+  # hermanas, y ese fallo no se ve hasta que faltan logs en Loki.
+  grafana_logs_secret_enabled = var.log_shipping_enabled
+  grafana_logs_access_key     = var.grafana_logs_access_key
+  grafana_logs_secret_version = var.grafana_logs_secret_version
+
+  recovery_window_in_days = 0
+  tags                    = local.common_tags
 }
 
 resource "aws_security_group" "backend" {
@@ -285,10 +294,34 @@ module "backend" {
   database_connect_resource_arns = [
     "arn:aws:rds-db:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.database.resource_id}/${module.database.master_username}"
   ]
-  kms_key_arn               = module.kms.key_arn
-  log_retention_days        = var.log_retention_days
-  enable_container_insights = var.backend_container_insights
-  tags                      = local.common_tags
+  kms_key_arn        = module.kms.key_arn
+  log_retention_days = var.log_retention_days
+  # El log group del backend es ahora el origen del envio durable a Grafana
+  # Cloud, asi que su retencion se separa de la del entorno: catorce dias dan
+  # margen para reenviar a mano lo que Firehose no logre entregar. Los demas
+  # grupos -flow logs, RDS, cost_report- siguen en tres dias.
+  backend_log_retention_days = var.backend_log_retention_days
+  enable_container_insights  = var.backend_container_insights
+
+  # Sidecar colector de TRAZAS y METRICAS. Los logs no pasan por aqui: ya tienen
+  # su propio camino durable por CloudWatch y Firehose, fuera de la tarea. Lo que
+  # seguia sin proteger eran estas dos senales, que salian por OTLP directo con
+  # una cola en memoria que descarta en silencio.
+  #
+  # El destino es el gateway de Grafana Cloud, el mismo al que apunta hoy la
+  # aplicacion: el sidecar no cambia a donde va la telemetria, cambia que se
+  # guarde en disco y se reintente cuando el destino no responde.
+  telemetry_sidecar_enabled = var.telemetry_sidecar_enabled
+  telemetry_sidecar_cpu     = var.telemetry_sidecar_cpu
+  telemetry_sidecar_memory  = var.telemetry_sidecar_memory
+  telemetry_otlp_endpoint   = local.grafana_otlp_base
+  # El mismo secreto que ya guarda las credenciales OTLP. El colector lee de ahi
+  # OTLP_USERNAME y OTLP_API_KEY con el rol de ejecucion, en el arranque del
+  # contenedor: no viajan por Terraform ni quedan en el state.
+  telemetry_credentials_secret_arn = module.secrets.grafana_secret_arn
+  telemetry_environment_name       = var.environment
+
+  tags = local.common_tags
 }
 
 module "monitoring" {
@@ -344,6 +377,13 @@ module "monitoring" {
   # Prod no se entera: conserva el default del modulo.
   database_swap_warning_bytes = var.database_swap_warning_bytes
 
+  # El sidecar es essential = false: puede morir sin llevarse la tarea y sin que
+  # ECS emita una parada. Estas alarmas son lo unico que convierte esa muerte en
+  # una senal; sin ellas la bandera seria una forma silenciosa de perder trazas.
+  telemetry_sidecar_enabled        = var.telemetry_sidecar_enabled
+  telemetry_sidecar_log_group_name = module.backend.telemetry_sidecar_log_group_name
+  telemetry_task_container_count   = module.backend.task_container_count
+
   cache_alarms_enabled          = true
   cache_name                    = module.cache.name
   cache_maximum_data_storage_gb = var.valkey_maximum_data_storage_gb
@@ -351,6 +391,51 @@ module "monitoring" {
 
   alloy_instance_ids = []
   tags               = local.common_tags
+}
+
+# Ultimo tramo hacia Grafana Cloud. La aplicacion sigue exportando por OTLP
+# mientras dure la convivencia; lo que cambia es que ahora existe un segundo
+# camino que no depende de una cola en memoria. La etiqueta telemetry_source es
+# la que permite comparar los dos flujos en Loki antes de apagar el viejo.
+#
+# Va con count y no cableado siempre para poder desplegar el entorno con el envio
+# apagado -por ejemplo, mientras no exista el token con scope logs:write-.
+module "log_shipping" {
+  count  = var.log_shipping_enabled ? 1 : 0
+  source = "../../modules/log_shipping"
+
+  name                  = local.name
+  source_log_group_name = module.backend.log_group_name
+  source_log_group_arn  = module.backend.log_group_arn
+  endpoint_url          = var.grafana_logs_firehose_endpoint
+
+  # Secreto dedicado, que contiene unicamente api_key. Firehose lo resuelve por
+  # su cuenta en cada entrega: la clave no viaja por Terraform ni queda en el
+  # state.
+  access_key_secret_arn = module.secrets.grafana_logs_secret_arn
+
+  # Reproducen exactamente las que hoy pone el exportador OTLP directo
+  # -spring.opentelemetry.resource-attributes en application-dev.yml-, mas la que
+  # distingue el origen. Sin ellas los logs llegarian con la etiqueta por defecto
+  # del endpoint y ninguna consulta actual los encontraria.
+  loki_labels = {
+    service_name                = "vetsoftware"
+    service_namespace           = "mainvet"
+    deployment_environment_name = var.environment
+    telemetry_source            = "firehose"
+  }
+
+  kms_key_arn        = module.kms.key_arn
+  log_retention_days = var.log_retention_days
+
+  backup_retention_days = var.log_shipping_backup_retention_days
+  # dev se recrea a proposito; el respaldo no tiene valor probatorio.
+  backup_bucket_force_destroy = true
+
+  alarm_topic_arn          = module.monitoring.alarm_topic_arn != null ? module.monitoring.alarm_topic_arn : ""
+  critical_alarm_topic_arn = module.monitoring.critical_alarm_topic_arn != null ? module.monitoring.critical_alarm_topic_arn : ""
+
+  tags = local.common_tags
 }
 
 module "scheduled_shutdown" {

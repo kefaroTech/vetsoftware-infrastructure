@@ -191,6 +191,10 @@ locals {
     "logs:*LogGroup",
     "logs:*LogStream",
     "logs:*MetricFilter",
+    # El envio durable de logs a Grafana Cloud: la suscripcion del log group del
+    # backend hacia Firehose. Sin esto el apply crea el stream y falla justo al
+    # conectarlo, con la mitad del camino construido.
+    "logs:*SubscriptionFilter",
     "logs:PutLogGroupDeletionProtection",
     "logs:PutResourcePolicy",
     "logs:PutRetentionPolicy",
@@ -587,6 +591,10 @@ data "aws_iam_policy_document" "apply_identity" {
         # Crear una Lambda es pasarle su rol de ejecucion: sin esto, CreateFunction
         # falla por iam:PassRole y no por un permiso de Lambda.
         "lambda.amazonaws.com",
+        # Crear una suscripcion es pasarle a CloudWatch Logs el rol con el que
+        # empujara hacia Firehose: sin esto, PutSubscriptionFilter falla por
+        # iam:PassRole y no por un permiso de logs.
+        "logs.amazonaws.com",
         "scheduler.amazonaws.com",
         "vpc-flow-logs.amazonaws.com",
       ]

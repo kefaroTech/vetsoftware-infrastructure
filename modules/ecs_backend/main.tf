@@ -43,13 +43,28 @@ resource "aws_ecs_cluster" "this" {
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${var.name}/backend"
-  retention_in_days = var.log_retention_days
+  retention_in_days = var.backend_log_retention_days != null ? var.backend_log_retention_days : var.log_retention_days
   kms_key_id        = var.kms_key_arn
   tags              = var.tags
 }
 
 resource "aws_cloudwatch_log_group" "cloudflare_tunnel" {
   name              = "/ecs/${var.name}/cloudflare-tunnel"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+  tags              = var.tags
+}
+
+# Log group propio del sidecar. Es esencial que no comparta el del backend: el
+# colector es essential = false, asi que puede morir sin llevarse la tarea y sin
+# que nadie se entere. Estas lineas son la unica evidencia de por que murio -y
+# son las que consulta el filtro de metrica que dispara la alarma-. Si algun dia
+# readonlyRootFilesystem le impide escribir en un path que necesite, el sintoma
+# aparece aqui y en ningun otro sitio.
+resource "aws_cloudwatch_log_group" "telemetry" {
+  count = var.telemetry_sidecar_enabled ? 1 : 0
+
+  name              = "/ecs/${var.name}/telemetry"
   retention_in_days = var.log_retention_days
   kms_key_id        = var.kms_key_arn
   tags              = var.tags
@@ -174,12 +189,44 @@ resource "aws_iam_role_policy" "task" {
 }
 
 locals {
-  container_definition = {
-    name      = "backend"
+  # Los nombres de contenedor se declaran una vez y se referencian desde las
+  # dependencias. Antes se leian de vuelta con local.container_definition.name,
+  # que dejo de resolverse cuando esa definicion pasa por merge().
+  backend_container_name   = "backend"
+  telemetry_container_name = "telemetry"
+
+  telemetry_enabled = var.telemetry_sidecar_enabled
+
+  telemetry_cpu    = local.telemetry_enabled ? var.telemetry_sidecar_cpu : 0
+  telemetry_memory = local.telemetry_enabled ? var.telemetry_sidecar_memory : 0
+
+  telemetry_volume_name = "telemetry-queue"
+  telemetry_queue_mount = "/var/lib/otelcol"
+
+  # El sidecar arranca ANTES que el backend y, por simetria, ECS lo para al
+  # final: el orden de parada es el inverso del de arranque. Eso le da al
+  # colector la ventana entera de drenaje despues de que el backend deje de
+  # emitir, que es exactamente cuando hace falta. condition = "START" y no
+  # "HEALTHY" porque la imagen es distroless -sin shell ni curl- y no hay health
+  # check que ECS pueda ejecutar dentro de ella; esperar a HEALTHY dejaria el
+  # backend bloqueado para siempre.
+  #
+  # La clave se anade con merge y no se pone a null: un "dependsOn": null en el
+  # JSON no es lo mismo que no declararla, y deja una diferencia permanente
+  # contra lo que AWS devuelve normalizado.
+  backend_depends_on = local.telemetry_enabled ? {
+    dependsOn = [{
+      containerName = local.telemetry_container_name
+      condition     = "START"
+    }]
+  } : {}
+
+  container_definition = merge({
+    name      = local.backend_container_name
     image     = var.image_uri
     essential = true
-    cpu       = var.cpu - var.cloudflare_tunnel_cpu
-    memory    = var.memory - var.cloudflare_tunnel_memory
+    cpu       = var.cpu - var.cloudflare_tunnel_cpu - local.telemetry_cpu
+    memory    = var.memory - var.cloudflare_tunnel_memory - local.telemetry_memory
 
     portMappings = [{
       name          = "http"
@@ -228,7 +275,7 @@ locals {
 
     readonlyRootFilesystem = false
     stopTimeout            = 30
-  }
+  }, local.backend_depends_on)
 
   cloudflare_tunnel_definition = {
     name      = "cloudflare-tunnel"
@@ -259,7 +306,7 @@ locals {
     }]
 
     dependsOn = [{
-      containerName = local.container_definition.name
+      containerName = local.backend_container_name
       condition     = "HEALTHY"
     }]
 
@@ -288,6 +335,107 @@ locals {
     stopTimeout            = 30
   }
 
+  telemetry_config = local.telemetry_enabled ? templatefile("${path.module}/templates/otel-collector.yaml.tftpl", {
+    otlp_endpoint            = trimsuffix(var.telemetry_otlp_endpoint, "/")
+    memory_limit_mib         = var.telemetry_sidecar_memory_limit_mib
+    memory_spike_limit_mib   = var.telemetry_sidecar_memory_spike_limit_mib
+    queue_size               = var.telemetry_queue_size
+    queue_consumers          = var.telemetry_queue_consumers
+    retry_max_elapsed_time   = var.telemetry_retry_max_elapsed_time
+    self_metrics_interval_ms = var.telemetry_self_metrics_interval_ms
+    self_service_name        = "${var.name}-telemetry-sidecar"
+    self_service_namespace   = "mainvet"
+    environment_name         = var.telemetry_environment_name
+  }) : ""
+
+  telemetry_definition = {
+    name = local.telemetry_container_name
+
+    image = var.telemetry_sidecar_image
+
+    # essential = false a proposito: si el colector cae, la API sigue en pie. El
+    # precio de esa decision es que su muerte es silenciosa -ECS no reemplaza la
+    # tarea ni emite una parada-, y por eso existe la alarma dedicada del modulo
+    # de monitoreo. Sin ella, esta bandera seria una forma de perder telemetria
+    # sin enterarse.
+    essential = false
+    cpu       = var.telemetry_sidecar_cpu
+    memory    = var.telemetry_sidecar_memory
+
+    # 120 segundos es el maximo que Fargate respeta en stopTimeout. Es la ventana
+    # que tiene el colector, ya sin backend emitiendo, para drenar a Grafana
+    # Cloud lo que le quede en la cola antes de que ECS lo mate. Lo que no drene
+    # sigue en el volumen, pero el volumen de tarea muere con la tarea: por eso
+    # interesa que drene aqui y no confiar en el disco para sobrevivir a un
+    # reemplazo.
+    stopTimeout = 120
+
+    # La configuracion entera viaja en una variable de entorno y el binario la
+    # lee de ahi. Evita hornear una imagen propia solo para meter un YAML.
+    command = ["--config=env:OTELCOL_CONFIG"]
+
+    environment = [{
+      name  = "OTELCOL_CONFIG"
+      value = local.telemetry_config
+    }]
+
+    secrets = [
+      {
+        name      = "GRAFANA_OTLP_USERNAME"
+        valueFrom = "${var.telemetry_credentials_secret_arn}:OTLP_USERNAME::"
+      },
+      {
+        name      = "GRAFANA_OTLP_API_KEY"
+        valueFrom = "${var.telemetry_credentials_secret_arn}:OTLP_API_KEY::"
+      },
+    ]
+
+    mountPoints = [{
+      sourceVolume  = local.telemetry_volume_name
+      containerPath = local.telemetry_queue_mount
+      readOnly      = false
+    }]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        # one() y no [0]: Terraform evalua las dos ramas de un condicional aunque
+        # solo use una, asi que con el sidecar apagado -y la lista de log groups
+        # vacia- un indice fijo revienta el plan del entorno entero.
+        awslogs-group         = one(aws_cloudwatch_log_group.telemetry[*].name)
+        awslogs-region        = data.aws_region.current.region
+        awslogs-stream-prefix = "telemetry"
+      }
+    }
+
+    linuxParameters = {
+      initProcessEnabled = true
+    }
+
+    # POR QUE ROOT, y no es un descuido. La imagen del colector es distroless y
+    # corre como UID 10001, pero los volumenes de tarea de Fargate se montan
+    # propiedad de root sin heredar el UID del contenedor. Con el usuario de la
+    # imagen, la extension file_storage no puede crear /var/lib/otelcol/queue y
+    # el colector muere en el arranque: exactamente el sintoma que se busca
+    # evitar, y ademas silencioso porque el contenedor no es essential. La
+    # superficie que abre es acotada: sin puertos expuestos fuera de loopback,
+    # con el raiz de solo lectura y sin credenciales mas alla de las dos que ya
+    # necesita para hablar con Grafana Cloud.
+    user = "0"
+
+    # El colector solo escribe en el volumen montado, asi que el raiz puede ir de
+    # solo lectura. AVISO: no esta ejercitado contra la imagen real. Si algun
+    # componente necesitara otro path escribible -un temporal, una cache-, el
+    # sintoma es el sidecar muerto nada mas arrancar y la causa aparece en su log
+    # group, /ecs/<name>/telemetry.
+    readonlyRootFilesystem = true
+  }
+
+  container_definitions = concat(
+    [local.container_definition, local.cloudflare_tunnel_definition],
+    local.telemetry_enabled ? [local.telemetry_definition] : [],
+  )
+
   task_definition = merge({
     family                  = "${var.name}-backend"
     networkMode             = "awsvpc"
@@ -300,7 +448,7 @@ locals {
       cpuArchitecture       = var.cpu_architecture
       operatingSystemFamily = "LINUX"
     }
-    containerDefinitions = [local.container_definition, local.cloudflare_tunnel_definition]
+    containerDefinitions = local.container_definitions
     }, var.ephemeral_storage_gib > 20 ? {
     ephemeralStorage = {
       sizeInGiB = var.ephemeral_storage_gib
@@ -331,7 +479,41 @@ resource "aws_ecs_task_definition" "backend" {
     }
   }
 
+  # Volumen de tarea sin configuracion: en Fargate se respalda con el
+  # almacenamiento efimero de la tarea. Es lo que hace que la cola del colector
+  # este en disco y no en memoria, de modo que un reinicio del proceso no se
+  # lleve lo pendiente. No sobrevive al reemplazo de la tarea -por eso el
+  # stopTimeout de 120 segundos importa: el drenaje ordenado es la defensa, el
+  # disco es solo el amortiguador-.
+  dynamic "volume" {
+    for_each = local.telemetry_enabled ? [1] : []
+
+    content {
+      name = local.telemetry_volume_name
+    }
+  }
+
   tags = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = !var.telemetry_sidecar_enabled || trimspace(var.telemetry_otlp_endpoint) != ""
+      error_message = "telemetry_otlp_endpoint es obligatorio con el sidecar activo: sin destino el colector encola en disco hasta llenarse y descarta."
+    }
+
+    precondition {
+      condition     = !var.telemetry_sidecar_enabled || trimspace(var.telemetry_credentials_secret_arn) != ""
+      error_message = "telemetry_credentials_secret_arn es obligatorio con el sidecar activo: sin OTLP_USERNAME y OTLP_API_KEY cada entrega rebota con 401."
+    }
+
+    # Igualar el limite a la reserva no protege de nada: quien corta pasa a ser
+    # el kernel, el contenedor muere por OOM sin escribir una linea y la cola que
+    # este sidecar existe para proteger se queda sin quien la drene.
+    precondition {
+      condition     = !var.telemetry_sidecar_enabled || var.telemetry_sidecar_memory_limit_mib < var.telemetry_sidecar_memory
+      error_message = "telemetry_sidecar_memory_limit_mib debe quedar por debajo de telemetry_sidecar_memory para que rechace el colector y no el kernel."
+    }
+  }
 }
 
 resource "aws_ecs_service" "backend" {
@@ -400,8 +582,8 @@ resource "aws_ecs_service" "backend" {
     }
 
     precondition {
-      condition     = var.cpu > var.cloudflare_tunnel_cpu && var.memory > var.cloudflare_tunnel_memory
-      error_message = "La tarea debe reservar CPU y memoria adicionales al sidecar Cloudflare Tunnel."
+      condition     = var.cpu > (var.cloudflare_tunnel_cpu + local.telemetry_cpu) && var.memory > (var.cloudflare_tunnel_memory + local.telemetry_memory)
+      error_message = "La tarea debe reservar CPU y memoria adicionales a las de sus sidecars."
     }
   }
 }

@@ -61,6 +61,11 @@ jobs:
           terraform_version: 1.15.8
           terraform_wrapper: false
 
+      # Sin valor canonico para prod el check solo avisa; ver el manifiesto.
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-prod)'
+
       - name: Validate AWS plan configuration
         shell: pwsh
         run: |
@@ -118,6 +123,10 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
+
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-prod)'
 
       - name: Validate AWS apply configuration
         shell: pwsh

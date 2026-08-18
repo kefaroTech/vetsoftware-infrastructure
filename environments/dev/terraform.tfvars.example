@@ -12,7 +12,7 @@ api_domain_name = "dev-api.kefaro.tech"
 # Use digest inmutable y una imagen ARM64 compatible con Fargate Spot.
 backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:REEMPLAZAR_64_HEX"
 
-grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
+grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-3.grafana.net/otlp"
 # Fronts dev publicados en Cloudflare Pages sobre la zona kefaro.tech.
 cors_allowed_origins   = ["https://dev-public.kefaro.tech", "https://dev-admin.kefaro.tech"]
 email_from             = "VetSoftware Dev <noreply@kefaro.tech>"
@@ -20,14 +20,28 @@ registration_verification_url = "https://dev-public.kefaro.tech/verify-email"
 password_reset_url             = "https://dev-public.kefaro.tech/restablecer-contrasena"
 login_url                      = "https://dev-public.kefaro.tech/login"
 
+# Envio durable de logs a Grafana Cloud por Kinesis Firehose. El endpoint es el del
+# stack y ya viene por defecto; solo se declara aqui si cambia de stack.
+log_shipping_enabled               = true
+backend_log_retention_days         = 14
+log_shipping_backup_retention_days = 30
+# grafana_logs_firehose_endpoint = "https://aws-logs-prod-042.grafana.net/aws-logs/api/v1/push"
+
 # Variables ephemeral recomendadas, no tfvars:
 # $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"...mínimo-32...","RESEND_API_KEY":"re_xxx","RECAPTCHA_SECRET":"xxx"}'
 # $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("OTLP_USERNAME:OTLP_API_KEY"))
 # $env:TF_VAR_grafana_secrets_json = "{`"OTLP_USERNAME`":`"...`",`"OTLP_API_KEY`":`"...`",`"OTEL_EXPORTER_OTLP_HEADERS`":`"Authorization=Basic $basic`"}"
 # $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-dev"
+#
+# La clave que lee Kinesis Firehose va en SU PROPIO secreto, no dentro del anterior.
+# NO es el token a secas: Grafana la compone como <loki_instance_id>:<token>, y el
+# instance ID de Loki de este stack es 1706326. El token es de una Cloud Access Policy
+# con el unico scope logs:write. Sin espacios alrededor de los dos puntos.
+# Pegar solo el glc_... da un apply verde, un stream creado y cero entregas.
+# $env:TF_VAR_grafana_logs_access_key = "1706326:glc_..."
 
 # Perfil económico predeterminado:
-# backend 512 CPU / 2048 MiB, solo Fargate Spot, escalado acotado a 0–1 tarea
+# backend 512 CPU / 3072 MiB de tarea, solo Fargate Spot, escalado acotado a 0–1 tarea
 # RDS db.t4g.small / 20 GiB / backup 7 dias / proteccion contra borrado / snapshot final
 # Valkey Serverless 1 GB / 1000 ECPU, logs 3 días, sin ALB y sin Alloy dedicado
 # Confirme la suscripción SNS enviada a alarm_email. Antes de configurar IDs de Slack,
@@ -44,3 +58,17 @@ scheduled_shutdown_enabled = true
 schedule_timezone          = "America/Bogota"
 backend_stop_schedule      = "cron(0 20 ? * MON-FRI *)"
 database_stop_schedule     = "cron(15 20 ? * MON-FRI *)"
+
+# Sidecar colector de trazas y metricas, con cola en disco y reintento de 30 min.
+# Se entrega APAGADO: RemoteConnectionValidator rechaza localhost en los endpoints
+# OTLP de trazas y metricas, asi que encenderlo contra la imagen actual del backend
+# impide arrancar la aplicacion, no solo degrada la telemetria. Detalle y condicion
+# de salida en docs/ALERTAS_OPERATIVAS.md, seccion 6.ter.
+# El sidecar reutiliza OTLP_USERNAME y OTLP_API_KEY del secreto de Grafana Cloud:
+# se autentica con basicauth, no con la cabecera ya construida.
+telemetry_sidecar_enabled = false
+
+# Muestreo al 100 %. El emisor deja de decidir que traza sobrevive; lo decide
+# Adaptive Traces en Grafana Cloud, que ve la traza completa. Medido: pico de
+# 0,225 spans/s al 25 %, ~0,9 spans/s al 100 %, contra un limite de ~1.250.
+tracing_sampling = 1.0

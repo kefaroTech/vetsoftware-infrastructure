@@ -8,6 +8,8 @@ on:
       - "environments/prod/**"
       - "modules/**"
       - ".github/scripts/terraform-*.ps1"
+      - ".github/scripts/assert-telemetry-endpoint.ps1"
+      - ".github/telemetry-endpoints.json"
       - ".github/workflows/terraform-plan-prod.yml"
   workflow_dispatch:
 
@@ -66,6 +68,13 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
+
+      # Prod todavia no tiene stack de Grafana Cloud ni valor canonico: el check
+      # avisa y deja pasar. Se instala igual para que el dia que se cree el stack
+      # el control ya este en su sitio y solo haya que fijar el endpoint.
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.PROD_GRAFANA_OTLP_ENDPOINT (repositorio)'
 
       - name: Validate plan role configuration
         shell: pwsh
