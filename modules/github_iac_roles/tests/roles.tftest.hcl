@@ -371,6 +371,54 @@ run "apply_puede_crear_los_recursos_de_los_modulos" {
     error_message = "El rol de apply debe poder pasar el rol de ejecucion a Lambda."
   }
 
+  # monitoring: las mute rules de la ventana de mantenimiento. Es el ciclo de
+  # vida COMPLETO -crear/actualizar, leer en el refresh, borrar en el destroy- y
+  # ninguna de sus acciones se solapa con las de las alarmas: DeleteAlarms no
+  # borra una regla y PutMetricAlarm no la crea. Los cuatro nombres salen del
+  # SDK de CloudWatch que viaja en el proveedor 6.56 -Put/Get/List/Delete
+  # AlarmMuteRule-, no de deducirlos del nombre del recurso.
+  #
+  # Faltaban las cuatro: el apply de dev del 17-08-2026 modifico las ~29 alarmas
+  # y murio en PutAlarmMuteRule, dejando el entorno notificando 24/7. Se afirman
+  # aqui para que quitarlas vuelva a costar un test rojo y no medio apply.
+  assert {
+    condition = alltrue([
+      for accion in ["cloudwatch:PutAlarmMuteRule", "cloudwatch:DeleteAlarmMuteRule"] :
+      alltrue([
+        for key in ["dev_apply", "prod_apply"] :
+        strcontains(data.aws_iam_policy_document.apply_regional[key].json, accion)
+      ])
+    ])
+    error_message = "El rol de apply debe poder crear y borrar las mute rules de la ventana de mantenimiento; sin esto el apply muere despues de haber modificado todas las alarmas."
+  }
+
+  # GetAlarmMuteRule es un Get: cloudwatch:Describe* no lo cubre, igual que no
+  # cubria ListTagsForResource. Va en los cuatro roles porque el refresh lo hace
+  # tanto el apply como el plan y el drift.
+  assert {
+    condition = alltrue([
+      for accion in ["cloudwatch:GetAlarmMuteRule", "cloudwatch:ListAlarmMuteRules"] :
+      alltrue([
+        for key in ["dev_plan", "dev_apply", "prod_plan", "prod_apply"] :
+        strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, accion)
+      ])
+    ])
+    error_message = "Los cuatro roles deben poder LEER las mute rules; Describe* no alcanza a GetAlarmMuteRule y el refresh falla sobre una regla que el apply si pudo crear."
+  }
+
+  # El plan lee la ventana, no la escribe. Mismo limite que ya rige para
+  # EventBridge y para las alarmas.
+  assert {
+    condition = alltrue([
+      for key in ["dev_plan", "prod_plan"] :
+      alltrue([
+        !strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, "cloudwatch:PutAlarmMuteRule"),
+        !strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, "cloudwatch:DeleteAlarmMuteRule"),
+      ])
+    ])
+    error_message = "El rol de plan solo puede leer las mute rules, nunca crearlas ni borrarlas."
+  }
+
   # Plan y drift refrescan estos recursos en cada corrida. Sin lectura, el ciclo
   # diario falla sobre algo que el apply si pudo crear, que es la unica variante
   # peor que no poder crearlo.
