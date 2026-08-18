@@ -268,15 +268,22 @@ variable "database_arn" {
   default     = ""
 }
 
+# Es margen absoluto hasta el swap, no un porcentaje de la RAM instalada: MySQL
+# dimensiona el buffer pool como fraccion de DBInstanceClassMemory y se expande
+# hasta ocupar la memoria que le den, asi que la memoria libre en reposo no se
+# duplica al doblar la clase. Por eso este umbral no se escalo al pasar dev de
+# db.t4g.micro a db.t4g.small: escalarlo lo habria dejado sonando siempre.
 variable "database_freeable_memory_threshold_bytes" {
-  description = "Umbral de memoria libre de RDS; protege especialmente db.t4g.micro en dev."
+  description = "Umbral de memoria libre de RDS; margen absoluto hasta el swap, no proporcion de la RAM."
   type        = number
   default     = 268435456
 }
 
-# Por debajo de esta marca db.t4g.micro ya no tiene con que atender un pico: el
+# Por debajo de esta marca la instancia ya no tiene con que atender un pico: el
 # InnoDB buffer pool empieza a competir con las conexiones y el siguiente paso es
-# swap, no lentitud.
+# swap, no lentitud. Validado con datos reales: durante la crisis de memoria de
+# dev el minimo de FreeableMemory fue 71,9 MB, o sea que la alarma disparo antes
+# del reinicio del motor.
 variable "database_freeable_memory_critical_bytes" {
   description = "Memoria libre de RDS que anticipa swap y caida del motor."
   type        = number
@@ -347,6 +354,11 @@ variable "database_free_storage_critical_percent" {
   default     = 10
 }
 
+# A diferencia de FreeableMemory, este umbral si depende del tamano: en una
+# instancia holgada el swap sostenido no deberia existir, asi que cuanto mas RAM
+# tenga la clase, mas grave es cualquier swap y mas bajo conviene el umbral. Dev
+# lo baja a 64 MiB desde su root; este default es el de una clase justa de
+# memoria.
 variable "database_swap_warning_bytes" {
   description = "Swap sostenido de RDS que confirma presion de memoria."
   type        = number

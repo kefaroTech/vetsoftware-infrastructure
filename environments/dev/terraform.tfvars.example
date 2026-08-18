@@ -28,7 +28,7 @@ login_url                      = "https://dev-public.kefaro.tech/login"
 
 # Perfil económico predeterminado:
 # backend 512 CPU / 2048 MiB, solo Fargate Spot, escalado acotado a 0–1 tarea
-# RDS db.t4g.micro / 20 GiB / backup 7 dias / proteccion contra borrado / snapshot final
+# RDS db.t4g.small / 20 GiB / backup 7 dias / proteccion contra borrado / snapshot final
 # Valkey Serverless 1 GB / 1000 ECPU, logs 3 días, sin ALB y sin Alloy dedicado
 # Confirme la suscripción SNS enviada a alarm_email. Antes de configurar IDs de Slack,
 # autorice el workspace en Amazon Q Developer in chat applications.

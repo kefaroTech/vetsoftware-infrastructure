@@ -140,9 +140,12 @@ run "development_cost_profile_plans" {
     error_message = "Dev debe usar solo Fargate Spot y limitar el servicio entre cero y una tarea."
   }
 
+  # db.t4g.small es el escalon posterior a la crisis de memoria de la db.t4g.micro
+  # (RDS-EVENT-0403 repetido). El contrato sigue congelando la clase: cualquier
+  # subida posterior vuelve a ser una decision explicita de costo, no un descuido.
   assert {
-    condition     = output.cost_profile.database_class == "db.t4g.micro" && output.cost_profile.database_backup_days == 7
-    error_message = "RDS dev debe conservar db.t4g.micro y siete dias de backup."
+    condition     = output.cost_profile.database_class == "db.t4g.small" && output.cost_profile.database_backup_days == 7
+    error_message = "RDS dev debe conservar db.t4g.small y siete dias de backup."
   }
 
   assert {
@@ -297,14 +300,29 @@ run "development_cost_profile_plans" {
 
   # Los umbrales se derivan de max_connections y del volumen: si alguien cambia
   # la clase de instancia sin actualizar database_max_connections, esta asercion
-  # es la que lo detiene antes de que las alarmas avisen tarde.
+  # es la que lo detiene antes de que las alarmas avisen tarde. 120 es el valor
+  # declarado para db.t4g.small y sigue siendo provisional hasta medirlo con
+  # SHOW GLOBAL VARIABLES LIKE 'max_connections' contra la instancia arrancada.
   assert {
     condition = (
-      output.alerting.database.max_connections == 60 &&
-      output.alerting.database.connections_warning == 42 &&
-      output.alerting.database.connections_critical == 54
+      output.alerting.database.max_connections == 120 &&
+      output.alerting.database.connections_warning == 84 &&
+      output.alerting.database.connections_critical == 108
     )
-    error_message = "Los umbrales de conexiones deben derivarse de max_connections: 70% advertencia y 90% critico sobre 60 conexiones."
+    error_message = "Los umbrales de conexiones deben derivarse de max_connections: 70% advertencia y 90% critico sobre 120 conexiones."
+  }
+
+  # La subida a db.t4g.small cambia que significa cada senal de memoria. Los dos
+  # umbrales de FreeableMemory se quedan donde estaban porque miden margen
+  # absoluto hasta el swap, no un porcentaje de la RAM instalada; el de swap baja
+  # a 64 MiB porque con 2 GiB el swap sostenido deja de ser normal.
+  assert {
+    condition = (
+      output.alerting.database.freeable_memory_warning_bytes == 268435456 &&
+      output.alerting.database.freeable_memory_critical_bytes == 100663296 &&
+      output.alerting.database.swap_warning_bytes == 67108864
+    )
+    error_message = "Dev debe conservar los umbrales de memoria libre en 256 MiB y 96 MiB y endurecer el de swap a 64 MiB."
   }
 
   assert {

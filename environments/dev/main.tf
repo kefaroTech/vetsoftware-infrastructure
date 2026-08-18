@@ -337,6 +337,12 @@ module "monitoring" {
   # SHOW GLOBAL VARIABLES LIKE 'max_connections' al cambiar de clase.
   database_max_connections       = var.database_max_connections
   database_allocated_storage_gib = var.database_allocated_storage
+  # Unico umbral de alarma que dev endurece respecto del modulo. Los de memoria
+  # -256 MiB y 96 MiB- se dejan en el default a proposito: miden margen absoluto
+  # hasta el swap, y ese margen no se duplica porque la instancia tenga el doble
+  # de RAM. El de swap si cambia de significado con 2 GiB y baja a 64 MiB.
+  # Prod no se entera: conserva el default del modulo.
+  database_swap_warning_bytes = var.database_swap_warning_bytes
 
   cache_alarms_enabled          = true
   cache_name                    = module.cache.name
