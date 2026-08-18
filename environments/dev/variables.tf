@@ -642,15 +642,44 @@ variable "maintenance_mute_windows" {
 
   default = {
     nightly = {
-      expression  = "cron(55 19 ? * * *)"
+      expression  = "cron(55 19 * * *)"
       duration    = "PT12H10M"
       description = "Apagado programado de dev: ECS a las 20:00 y RDS a las 20:15, hasta el arranque manual de la manana."
     }
 
     weekend = {
-      expression  = "cron(0 8 ? * SAT,SUN *)"
+      expression  = "cron(0 8 * * SAT,SUN)"
       duration    = "PT12H"
       description = "Fin de semana: dev queda apagado entero porque el arranque es manual y no se ejecuta."
     }
+  }
+
+  # CloudWatch usa cron de CINCO campos -Minutes Hours Day-of-month Month
+  # Day-of-week-, NO el de seis de EventBridge que usa el resto de este repo
+  # para scheduled_shutdown. No lleva campo de ano y no admite "?": de hecho
+  # el ejemplo de AWS es cron(0 2 * * *), con "*" a la vez en dia-del-mes y
+  # dia-de-semana, que es justo lo que EventBridge prohibe.
+  #
+  # Esta validacion existe porque el proveedor NO valida la expresion en
+  # cliente: una expresion del dialecto equivocado pasa fmt, validate, tflint,
+  # los contratos y el plan, y solo revienta en el apply -despues de haber
+  # modificado las alarmas-, con un "ValidationError: not valid" que no dice
+  # que le molesta. Paso exactamente eso.
+  validation {
+    condition = alltrue([
+      for w in values(var.maintenance_mute_windows) :
+      can(regex("^cron\\([^ ?]+ [^ ?]+ [^ ?]+ [^ ?]+ [^ ?)]+\\)$", w.expression))
+      || can(regex("^at\\(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}\\)$", w.expression))
+    ])
+    error_message = "expression debe ser cron de CINCO campos -cron(Minutes Hours Day-of-month Month Day-of-week)- sin '?' ni campo de ano, o at(YYYY-MM-DDTHH:MM). El dialecto de seis campos de EventBridge que usa scheduled_shutdown NO vale aqui: CloudWatch lo rechaza en el apply, no en el plan."
+  }
+
+  # ISO 8601, minimo PT1M y maximo P15D segun la API.
+  validation {
+    condition = alltrue([
+      for w in values(var.maintenance_mute_windows) :
+      can(regex("^P(\\d+D)?(T(\\d+H)?(\\d+M)?(\\d+S)?)?$", w.duration)) && w.duration != "P"
+    ])
+    error_message = "duration debe ir en formato ISO 8601 entre PT1M y P15D, por ejemplo PT12H10M o P2DT12H."
   }
 }
