@@ -61,7 +61,14 @@ locals {
     "cloudtrail:GetTrailStatus",
     "cloudtrail:ListTags",
     "cloudwatch:Describe*",
+    # Las mute rules NO son alarmas: su lectura es GetAlarmMuteRule, y Describe*
+    # -que solo cubre DescribeAlarms- no la alcanza. Sin esto el apply crea la
+    # regla y muere al releerla, y el plan y el drift fallan despues sobre algo
+    # que el apply si pudo crear. ListAlarmMuteRules es la paginada que el
+    # proveedor usa para resolverla por nombre cuando aun no tiene el ARN.
+    "cloudwatch:GetAlarmMuteRule",
     "cloudwatch:GetMetricData",
+    "cloudwatch:ListAlarmMuteRules",
     "cloudwatch:ListTagsForResource",
     "ec2:Describe*",
     "ecs:Describe*",
@@ -131,10 +138,23 @@ locals {
     "cloudtrail:StartLogging",
     "cloudtrail:StopLogging",
     "cloudtrail:UpdateTrail",
+    # El ciclo de vida de las mute rules es un juego de acciones propio, ninguna
+    # compartida con las alarmas: DeleteAlarms no borra una regla y PutMetricAlarm
+    # no la crea. Falto entero -es una funcion de febrero de 2026, posterior a la
+    # auditoria de permisos- y el apply de dev del 17-08 murio en
+    # PutAlarmMuteRule con las ~29 alarmas ya modificadas.
+    #
+    # El Resource de este statement es "*" acotado por aws:RequestedRegion, y eso
+    # es lo que hace que baste con anadir las acciones: la mute rule tiene su
+    # propio tipo de ARN -alarm-mute-rule, no alarm-, asi que cualquier intento de
+    # acotarla con un patron :alarm:* concederia la accion sobre un recurso que
+    # nunca existe y dejaria el permiso inservible.
+    "cloudwatch:DeleteAlarmMuteRule",
     "cloudwatch:DeleteAlarms",
     # Las alarmas compuestas no se crean con PutMetricAlarm: CloudWatch expone una
     # accion aparte, y sin ella el apply falla con AccessDenied justo despues de
     # haber creado todas las alarmas de metrica. DeleteAlarms si borra las dos.
+    "cloudwatch:PutAlarmMuteRule",
     "cloudwatch:PutCompositeAlarm",
     "cloudwatch:PutMetricAlarm",
     "cloudwatch:TagResource",
