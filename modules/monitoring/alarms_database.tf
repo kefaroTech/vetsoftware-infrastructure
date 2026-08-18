@@ -54,10 +54,14 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_critical" {
 }
 
 # Conexiones. El limite real es max_connections, calculado por RDS como
-# {DBInstanceClassMemory/12582880}: en clases micro la memoria reservada lo deja
-# alrededor de 60. Cuando se agota, MySQL responde "Too many connections" y el
-# backend deja de servir aunque la base este perfectamente viva; por eso el
-# umbral critico esta antes del limite y no en el limite.
+# {DBInstanceClassMemory/12582880} -formula de sistema, no fijada en el parameter
+# group-: en clases micro la memoria reservada lo deja alrededor de 60 y en small
+# alrededor de 120. Cada root declara el suyo en database_max_connections y hay
+# que medirlo con SHOW GLOBAL VARIABLES al cambiar de clase, porque
+# DBInstanceClassMemory no lo expone ningun describe-*. Cuando se agota, MySQL
+# responde "Too many connections" y el backend deja de servir aunque la base este
+# perfectamente viva; por eso el umbral critico esta antes del limite y no en el
+# limite.
 resource "aws_cloudwatch_metric_alarm" "database_connections" {
   alarm_name          = "${var.name}-database-connections-high"
   alarm_description   = "ADVERTENCIA · ${local.database_connections_warning_threshold} conexiones abiertas de un maximo de ${var.database_max_connections} (${var.database_connections_warning_percent}%). Revisar fugas del pool antes de que llegue al limite."
@@ -190,8 +194,10 @@ resource "aws_cloudwatch_metric_alarm" "database_memory_critical" {
   tags = merge(var.tags, { Severity = "critical" })
 }
 
-# Swap sostenido en una instancia de 1 GiB no es una molestia de rendimiento: es
-# el sintoma que precede al reinicio del motor por presion de memoria.
+# Swap sostenido en una instancia de memoria justa no es una molestia de
+# rendimiento: es el sintoma que precede al reinicio del motor por presion de
+# memoria. Cuanto mas holgada la clase, mas anomalo es cualquier swap y mas bajo
+# se pone el umbral desde el root -dev usa 64 MiB con db.t4g.small-.
 resource "aws_cloudwatch_metric_alarm" "database_swap" {
   alarm_name          = "${var.name}-database-swap-usage"
   alarm_description   = "ADVERTENCIA · RDS lleva 15 minutos usando swap: hay presion real de memoria, no un pico."

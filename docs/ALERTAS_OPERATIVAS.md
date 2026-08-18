@@ -139,13 +139,13 @@ sus logs, y ese archivo conserva el `stoppedReason` exacto.
 | --- | --- | --- | --- |
 | `database-high-cpu` | `CPUUtilization` | > 80 % · 3 × 5 min | advertencia |
 | `database-cpu-saturated` | `CPUUtilization` | > 95 % · 2 × 5 min | crítico |
-| `database-connections-high` | `DatabaseConnections` | > 42 (70 % de 60) | advertencia |
-| `database-connections-exhausted` | `DatabaseConnections` | > 54 (90 % de 60) | crítico |
+| `database-connections-high` | `DatabaseConnections` | dev > 84 (70 % de 120) · prod > 42 (70 % de 60) | advertencia |
+| `database-connections-exhausted` | `DatabaseConnections` | dev > 108 (90 % de 120) · prod > 54 (90 % de 60) | crítico |
 | `database-low-storage` | `FreeStorageSpace` | < 5 GiB (25 %) | advertencia |
 | `database-storage-exhausted` | `FreeStorageSpace` | < 2 GiB (10 %) | crítico |
 | `database-low-memory` | `FreeableMemory` | < 256 MiB | advertencia |
 | `database-memory-exhausted` | `FreeableMemory` mínimo | < 96 MiB · 3 de 5 × 1 min | crítico |
-| `database-swap-usage` | `SwapUsage` | > 128 MiB · 15 min | advertencia |
+| `database-swap-usage` | `SwapUsage` | dev > 64 MiB · prod > 128 MiB · 15 min | advertencia |
 | `database-read-latency` / `-write-latency` | `Read/WriteLatency` | > 20 ms · 15 min | advertencia |
 | `database-disk-queue` | `DiskQueueDepth` | > 5 · 15 min | advertencia |
 | `database-ebsiobalance-low` / `-ebsbytebalance-low` | crédito EBS | < 20 % · 15 min | advertencia |
@@ -159,14 +159,28 @@ Conexiones y disco se calculan desde `database_max_connections` y
 mueve las alarmas con ellos; escribir `42` a mano las deja mintiendo en silencio
 el día que alguien toque la instancia.
 
-**`database_max_connections = 60`.** RDS calcula `max_connections` como
-`{DBInstanceClassMemory/12582880}`, y AWS documenta que en clases micro la
-memoria reservada deja el resultado alrededor de 60. **Al cambiar
-`database_instance_class` hay que reconfirmarlo:**
+**`database_max_connections`: dev 120 (provisional), prod 60.** El parameter
+group deja `max_connections` en su fórmula de sistema
+`{DBInstanceClassMemory/12582880}`, así que **el motor lo recalcula solo al
+cambiar de clase**: la variable no configura nada, solo declara de qué número
+cuelgan los umbrales. La aritmética pura da 85 para 1 GiB y 170 para 2 GiB, pero
+lo medido en `db.t4g.micro` fueron 60 — RDS reserva memoria y el efectivo sale en
+torno a 0,70 del aritmético. Por eso dev declara 120 al subir a `db.t4g.small`:
+es la extrapolación de ese factor, y se declara por lo bajo a propósito, porque
+quedarse corto adelanta las alarmas (ruido corregible) mientras que pasarse las
+deja mudas y el cliente recibe *Too many connections* sin aviso previo.
+
+`DBInstanceClassMemory` no lo expone ningún `describe-*`. **Al cambiar
+`database_instance_class` hay que reconfirmarlo contra la instancia ya
+arrancada** y ajustar la variable al valor medido:
 
 ```sql
 SHOW GLOBAL VARIABLES LIKE 'max_connections';
 ```
+
+Prod corre `db.t4g.small` pero sigue declarando el default del módulo, 60. Sus
+alarmas de conexiones avisan antes de tiempo, que es el lado seguro del error;
+alinearlo es un cambio aparte, con su propia medición.
 
 ### La alarma que pidió el negocio
 
@@ -262,16 +276,61 @@ noche, así que no sirven como señal.
 Las alarmas que también lo cubren, en orden de aparición:
 
 1. `database-low-memory` (< 256 MiB) — el primer aviso, todavía con margen.
-2. `database-swap-usage` — confirma presión real de memoria.
+2. `database-swap-usage` (dev < 64 MiB) — confirma presión real de memoria.
 3. `database-saturated` — la pareja memoria baja + swap escala a crítico.
 4. `database-memory-exhausted` (< 96 MiB) — el motor está por reiniciarse.
 5. `RDS-EVENT-0403` — RDS ya intervino por su cuenta.
 
-**Arreglo de fondo, no cubierto por ninguna alerta:** la instancia es
-insuficiente para la carga. Subir a `db.t4g.small` (2 GiB) o identificar el
-trabajo diario de las ~12:34 UTC. Las alertas hacen visible el problema, no lo
-resuelven — y si se sube de clase, hay que reconfirmar
-`database_max_connections`.
+### Por qué los umbrales de memoria no se duplicaron con la RAM
+
+Al pasar dev de 1 GiB a 2 GiB la tentación es escalar los umbrales en proporción
+—256 → 512 MiB y 96 → 192 MiB—. Sería un error. `FreeableMemory` mide **margen
+absoluto hasta el swap**, y ese margen no crece porque haya más RAM instalada:
+MySQL dimensiona `innodb_buffer_pool_size` como una fracción de
+`DBInstanceClassMemory`, así que el motor se expande hasta ocupar la memoria
+nueva y la memoria libre en reposo **no se duplica**. Un umbral de advertencia en
+512 MiB quedaría en el entorno del estado normal de la instancia y sonaría de
+forma permanente: exactamente el ruido que ya arrastra la alarma de créditos de
+CPU. Los dos umbrales se quedan por tanto en 256 MiB y 96 MiB, y el de 96 MiB
+tiene además respaldo empírico — el mínimo observado durante la crisis fue
+71,9 MB, es decir, la alarma sí disparó antes del reinicio.
+
+`SwapUsage` es el caso contrario y sí se recalibra. Con 1 GiB el swap sostenido
+era crónico —380,9 MB de media, pico de 540,1 MB— y un umbral de 128 MiB llegaba
+tarde: cuando se cruzaba, la instancia ya estaba en el crash loop. Con 2 GiB el
+swap sostenido debería desaparecer, de modo que cualquier swap significativo
+vuelve a ser una señal temprana. Dev baja a **64 MiB**, por encima de los pocos MB
+de páginas ociosas que Linux mueve en reposo y muy por debajo del territorio
+donde el motor ya está perdido, conservando la ventana de 15 minutos sostenidos
+para que un pico aislado no despierte a nadie. Prod conserva 128 MiB.
+
+`database-cpu-credits-low` se queda en 30 créditos. `db.t4g.small` tiene los
+mismos 2 vCPU que `micro`, así que 30 créditos son el mismo tiempo absoluto de
+ráfaga; lo que cambia es que la línea base a la que cae al agotarlos es el doble
+(20 % frente a 10 %), o sea que la condición es **menos** grave que antes, no más.
+Escalarla en proporción la haría disparar antes por un problema menor.
+
+**Arreglo de fondo, ya en código y pendiente de aplicar:** la instancia era
+insuficiente para la carga. `environments/dev` declara `db.t4g.small` (2 GiB) en
+lugar de `db.t4g.micro`; el `apply` va por su workflow con aprobación humana.
+Identificar el trabajo diario de las ~12:34 UTC sigue pendiente y es
+independiente del tamaño: las alertas hacen visible el problema, no lo resuelven.
+
+`innodb_buffer_pool_size` **no está fijado** en el parameter group (queda en
+`engine-default`), así que las bajadas a 27 MB fueron ajustes dinámicos en
+caliente de RDS y no una escritura persistente: al arrancar con 2 GiB el motor
+recalcula el buffer pool desde cero y no arrastra ese lastre.
+
+**Precondición operativa del cambio de clase:** la instancia de dev pasa la mayor
+parte del tiempo `stopped` por el apagado programado. Un `modify` sobre una
+instancia parada puede rechazarse o quedarse en cola hasta el autoarranque de los
+siete días. **Hay que arrancar dev con `Start dev environment` antes de aplicar**
+y confirmar que la instancia está `available`.
+
+Después del primer arranque en `small`, dos verificaciones obligatorias:
+reconfirmar `database_max_connections` con `SHOW GLOBAL VARIABLES` y observar
+`FreeableMemory` durante una o dos semanas para validar que 256 MiB y 96 MiB
+siguen siendo umbrales útiles con el nuevo tamaño de buffer pool.
 
 `SERVICE_TASK_PLACEMENT_FAILURE` con `reason: RESOURCE:FARGATE` es la falla más
 probable de dev: el servicio corre 100 % en Fargate Spot y significa que AWS no

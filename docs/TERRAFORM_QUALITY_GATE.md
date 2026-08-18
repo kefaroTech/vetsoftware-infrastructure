@@ -34,7 +34,7 @@ El hook no ejecuta `terraform plan`, `apply`, state remoto ni operaciones que re
 
 La arquitectura actual materializa esta política sin balanceador: Cloudflare Tunnel saliente restringido entrega a `http://localhost:8080`, el backend no tiene ingress, el egress público se limita por puerto, S3 conserva su Gateway Endpoint, y siguen vigentes CMK, VPC Flow Logs y el endurecimiento de RDS.
 
-Desarrollo conserva `db.t4g.micro` por decision de costo. El contrato automatizado impide cambiarlo accidentalmente y CloudWatch alerta cuando `FreeableMemory` cae por debajo de 256 MiB.
+Desarrollo usa `db.t4g.small` desde la crisis de memoria de la `db.t4g.micro`; la clase sigue siendo una decision explicita de costo. El contrato automatizado (`environments/dev/tests/configuration.tftest.hcl`) impide cambiarla accidentalmente y CloudWatch alerta cuando `FreeableMemory` cae por debajo de 256 MiB.
 
 ## Ejecucion y logs
 

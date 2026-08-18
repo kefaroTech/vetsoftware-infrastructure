@@ -144,9 +144,14 @@ variable "database_parameter_group_family" {
   default = "mysql8.4"
 }
 
+# Subida de db.t4g.micro (1 GiB) a db.t4g.small (2 GiB) por crisis de memoria: seis
+# RDS-EVENT-0403 con el InnoDB buffer pool forzado a 27 MiB, FreeableMemory minimo de
+# 71,9 MB y SwapUsage medio de 380,9 MB. El cuello es RAM, no CPU ni disco: el storage
+# gp3 sigue en 20 GiB, la instancia sigue Single-AZ y el backup sigue en siete dias.
+# Al cambiar de clase hay que reconfirmar database_max_connections.
 variable "database_instance_class" {
   type    = string
-  default = "db.t4g.micro"
+  default = "db.t4g.small"
 }
 
 variable "database_allocated_storage" {
@@ -387,19 +392,52 @@ variable "runbook_url" {
   default     = ""
 }
 
-# RDS calcula max_connections como {DBInstanceClassMemory/12582880}. AWS
-# documenta que en clases micro la memoria reservada deja el resultado alrededor
-# de 60. Reconfirmar con SHOW GLOBAL VARIABLES LIKE 'max_connections' al cambiar
-# database_instance_class: si este valor miente, las alarmas de conexiones
-# avisan tarde o no avisan.
+# PROVISIONAL: reconfirmar tras el primer arranque en db.t4g.small con
+# SHOW GLOBAL VARIABLES LIKE 'max_connections' y ajustar este valor al medido.
+#
+# El parameter group deja max_connections en su formula de sistema
+# -{DBInstanceClassMemory/12582880}, source: system-, asi que el motor lo
+# recalcula solo al doblar la RAM: esta variable NO configura nada, solo declara
+# el limite efectivo del que cuelgan los umbrales de las alarmas de conexiones.
+#
+# La aritmetica pura da 85 para 1 GiB y 170 para 2 GiB, pero en db.t4g.micro lo
+# medido fueron 60, no 85: RDS reserva memoria y el efectivo sale en torno a 0,70
+# del aritmetico. Extrapolando ese mismo factor, db.t4g.small deberia quedar
+# alrededor de 120. DBInstanceClassMemory no lo expone ningun describe-*, asi que
+# 120 es estimacion, no dato.
+#
+# Se declara por lo bajo a proposito: quedarse corto adelanta las alarmas, que es
+# ruido corregible; pasarse las deja mudas y el cliente recibe "Too many
+# connections" sin aviso previo.
 variable "database_max_connections" {
   description = "max_connections efectivo de la instancia dev; los umbrales de conexiones se derivan de aqui."
   type        = number
-  default     = 60
+  default     = 120
 
   validation {
     condition     = var.database_max_connections > 0
     error_message = "database_max_connections debe ser mayor que cero."
+  }
+}
+
+# Con 1 GiB el swap sostenido era cronico -380,9 MB de media, pico de 540,1 MB- y
+# el umbral de 128 MiB del modulo llegaba tarde: para cuando se cruzaba, la
+# instancia ya estaba en el crash loop. Con 2 GiB el swap sostenido deberia
+# desaparecer, asi que cualquier swap significativo vuelve a ser una senal
+# temprana y no un sintoma terminal. Se endurece a 64 MiB, por encima de los
+# pocos MB de paginas ociosas que Linux mueve en reposo y muy por debajo del
+# territorio donde el motor ya esta perdido. La ventana sigue siendo de 15
+# minutos sostenidos para que un pico aislado no despierte a nadie.
+#
+# Solo dev. Prod conserva el default del modulo -128 MiB- y no cambia con esto.
+variable "database_swap_warning_bytes" {
+  description = "Swap sostenido de RDS que confirma presion de memoria en dev; endurecido tras subir a db.t4g.small."
+  type        = number
+  default     = 67108864
+
+  validation {
+    condition     = var.database_swap_warning_bytes > 0
+    error_message = "database_swap_warning_bytes debe ser mayor que cero."
   }
 }
 

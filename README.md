@@ -23,7 +23,7 @@ La configuración evita NAT Gateway e Interface Endpoints de pago. S3 conserva s
 ## Entornos
 
 - `environments/prod`: infraestructura completa y protegida, con VPC `10.40.0.0/16`, Alloy, RDS, Valkey y archivo de auditoría propios.
-- `environments/dev`: infraestructura completa e independiente, con VPC propia `10.50.0.0/16`. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.micro`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
+- `environments/dev`: infraestructura completa e independiente, con VPC propia `10.50.0.0/16`. Ejecuta como máximo una tarea ARM64 de 512 CPU/2048 MiB exclusivamente en Fargate Spot, RDS `db.t4g.small`, Valkey 1 GB/1000 ECPU y logs de tres días. Exporta OTLP directamente a Grafana Cloud, sin otra EC2 Alloy.
 
 **Los dos entornos son independientes y no comparten recursos administrados.** Cada uno tiene bootstrap, bucket de state, KMS, ECR backend, roles, VPC, datos, secretos y workflows propios. Pueden desplegarse en cualquier orden o existir por separado. El único prerrequisito externo de la cuenta es el proveedor OIDC de GitHub.
 
