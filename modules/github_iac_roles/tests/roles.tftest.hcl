@@ -212,6 +212,21 @@ run "environment_and_function_roles_are_isolated" {
     error_message = "Los roles IaC no deben conservar permisos ELB y sí deben administrar métricas de errores del túnel."
   }
 
+  # El envio durable de logs a Grafana Cloud son dos permisos que no se parecen
+  # entre si y que fallan en momentos distintos: sin la suscripcion, el apply crea
+  # el delivery stream y muere al conectarlo; sin el PassRole a CloudWatch Logs,
+  # muere en el mismo sitio pero por iam:PassRole, que despista porque el mensaje
+  # no nombra a logs.
+  assert {
+    condition = alltrue([
+      strcontains(data.aws_iam_policy_document.apply_regional["dev_apply"].json, "logs:*SubscriptionFilter"),
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "logs.amazonaws.com"),
+      strcontains(data.aws_iam_policy_document.apply_identity["dev_apply"].json, "firehose.amazonaws.com"),
+      !strcontains(data.aws_iam_policy_document.infrastructure_read["dev_plan"].json, "logs:*SubscriptionFilter"),
+    ])
+    error_message = "Apply debe poder suscribir el log group del backend a Firehose y pasar el rol a CloudWatch Logs; plan no."
+  }
+
   # PutMetricAlarm no crea alarmas compuestas y sin events: no hay reglas que
   # traduzcan un evento de ECS o RDS en un aviso. Faltando cualquiera de las dos,
   # el apply del modulo de monitoreo muere con AccessDenied a mitad de camino.

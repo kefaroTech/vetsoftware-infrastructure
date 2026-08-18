@@ -471,3 +471,44 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+# ---------------------------------------------------------------------------
+# Sidecar colector de trazas y metricas
+# ---------------------------------------------------------------------------
+
+variable "telemetry_sidecar_enabled" {
+  description = "Crea las alarmas del sidecar colector de trazas y metricas del backend."
+  type        = bool
+  default     = false
+}
+
+variable "telemetry_sidecar_log_group_name" {
+  description = "Log group del contenedor colector; de ahi sale el conteo de errores del sidecar."
+  type        = string
+  default     = ""
+}
+
+# El filtro comprueba todas las posiciones del array de contenedores para no
+# depender de un orden que ECS no garantiza. Es el numero de contenedores de la
+# definicion de tarea, no una preferencia.
+variable "telemetry_task_container_count" {
+  description = "Contenedores de la definicion de tarea que recorre el filtro de sidecar detenido."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.telemetry_task_container_count >= 1 && var.telemetry_task_container_count <= 10
+    error_message = "telemetry_task_container_count debe estar entre 1 y 10."
+  }
+}
+
+variable "telemetry_sidecar_error_threshold" {
+  description = "Errores del colector en una ventana de cinco minutos, sostenidos dos ventanas, que hacen sonar la advertencia."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.telemetry_sidecar_error_threshold >= 1
+    error_message = "telemetry_sidecar_error_threshold debe ser al menos 1."
+  }
+}

@@ -24,6 +24,31 @@ locals {
   # supervision no tiene por que poder aplicar infraestructura-.
   cost_reporter_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-plan-${var.environment}"
 
+  grafana_otlp_base = trimsuffix(var.grafana_otlp_endpoint, "/")
+
+  # Los tres endpoints OTLP, y por que solo dos de ellos se mueven.
+  #
+  # TRAZAS y METRICAS son las senales que este cambio existe para proteger:
+  # salian por OTLP directo con una cola en memoria que descarta en silencio en
+  # cuanto Grafana Cloud tarda en responder. Con el sidecar activo apuntan al
+  # colector local, que las guarda en disco y reintenta media hora.
+  #
+  # LOGS no se mueve, y no es un olvido. Su durabilidad ya esta resuelta fuera de
+  # la tarea -stdout -> CloudWatch -> Firehose -> Grafana Cloud, modules/
+  # log_shipping-, asi que meterlos en el sidecar no anadiria una sola garantia y
+  # si duplicaria la ruta. El sidecar no declara pipeline de logs a proposito:
+  # apuntar esta variable al colector daria 404 en /v1/logs y la exportacion OTLP
+  # de logs -que sigue encendida en la aplicacion, apagarla es una fase
+  # posterior- se romperia sin que nada mas lo notara. Se queda en el gateway.
+  #
+  # El interruptor tiene que ser reversible de verdad: con
+  # telemetry_sidecar_enabled = false, estas tres lineas producen exactamente los
+  # mismos valores que antes de este cambio. Un interruptor que deja localhost
+  # cableado no apaga el sidecar, corta la telemetria.
+  otlp_traces_endpoint  = var.telemetry_sidecar_enabled ? "http://localhost:4318/v1/traces" : "${local.grafana_otlp_base}/v1/traces"
+  otlp_metrics_endpoint = var.telemetry_sidecar_enabled ? "http://localhost:4318/v1/metrics" : "${local.grafana_otlp_base}/v1/metrics"
+  otlp_logs_endpoint    = "${local.grafana_otlp_base}/v1/logs"
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY = "framework"
@@ -37,9 +62,9 @@ locals {
     PDF_MAX_HTML_SIZE                   = var.pdf_max_html_size
     PDF_MAX_PDF_SIZE                    = var.pdf_max_pdf_size
     OTEL_EXPORTER_OTLP_PROTOCOL         = "http/protobuf"
-    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "${trimsuffix(var.grafana_otlp_endpoint, "/")}/v1/metrics"
-    OTEL_EXPORTER_OTLP_LOGS_ENDPOINT    = "${trimsuffix(var.grafana_otlp_endpoint, "/")}/v1/logs"
-    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  = "${trimsuffix(var.grafana_otlp_endpoint, "/")}/v1/traces"
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = local.otlp_metrics_endpoint
+    OTEL_EXPORTER_OTLP_LOGS_ENDPOINT    = local.otlp_logs_endpoint
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  = local.otlp_traces_endpoint
     DEPLOYMENT_ENVIRONMENT              = var.environment
     VETSOFTWARE_INSTANCE_ID             = "ecs-fargate-spot"
     TRACING_SAMPLING                    = tostring(var.tracing_sampling)
@@ -69,7 +94,23 @@ locals {
     # EncryptedStringConverter la lee con System.getenv en un inicializador estatico,
     # no como propiedad de Spring: sin ella Hibernate no puede cargar la clase y el
     # arranque muere antes del EntityManagerFactory.
-    DIAN_ENC_KEY               = "${module.secrets.application_secret_arn}:DIAN_ENC_KEY::"
+    DIAN_ENC_KEY = "${module.secrets.application_secret_arn}:DIAN_ENC_KEY::"
+
+    # Se queda SIEMPRE, con sidecar o sin el, por dos razones independientes y
+    # cada una suficiente.
+    #
+    # La primera: la exportacion OTLP de logs sigue apuntando al gateway de
+    # Grafana Cloud y sin esta cabecera cada envio rebota con 401.
+    #
+    # La segunda es mas dura. RemoteConnectionValidator -perfiles dev y prod,
+    # BeanFactoryPostProcessor con HIGHEST_PRECEDENCE- exige que
+    # OTEL_EXPORTER_OTLP_HEADERS tenga texto y lanza IllegalStateException si no.
+    # Quitarla con el sidecar activo no degradaria la telemetria: impediria
+    # arrancar la aplicacion.
+    #
+    # Con el sidecar activo la cabecera tambien viaja hacia 127.0.0.1, donde el
+    # colector la ignora. Es inofensivo y es el precio de que la variable sea
+    # global a las tres senales en el SDK.
     OTEL_EXPORTER_OTLP_HEADERS = "${module.secrets.grafana_secret_arn}:OTEL_EXPORTER_OTLP_HEADERS::"
   }
 }

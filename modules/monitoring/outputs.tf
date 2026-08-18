@@ -84,3 +84,11 @@ output "slack_chat_configuration_arns" {
   description = "ARN de cada configuración Amazon Q Developer/Slack, una por canal."
   value       = [for config in aws_chatbot_slack_channel_configuration.channels : config.chat_configuration_arn]
 }
+
+output "telemetry_sidecar_alarm_names" {
+  description = "Alarmas del sidecar colector; vacio cuando el sidecar o el ruteo de notificaciones estan apagados."
+  value = local.telemetry_alarms_enabled ? [
+    aws_cloudwatch_metric_alarm.telemetry_sidecar_stopped[0].alarm_name,
+    aws_cloudwatch_metric_alarm.telemetry_sidecar_errors[0].alarm_name,
+  ] : []
+}

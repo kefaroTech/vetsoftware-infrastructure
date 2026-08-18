@@ -355,6 +355,148 @@ de RDS lo hacía y disparaba una alerta diaria a las 20:15, que es la forma más
 rápida de enseñarle a un equipo a ignorar el canal. Hay un test que lo impide
 volver a introducir: `scheduled_shutdown_does_not_page`.
 
+## 6.bis El envío de logs a Grafana Cloud
+
+Estas tres viven en `modules/log_shipping`, no en `modules/monitoring`, porque
+vigilan un tramo con dueño propio. Se cablean a los mismos dos topics de
+severidad del entorno.
+
+Existen porque el fallo de este camino no es ruidoso: la aplicación sigue
+respondiendo, CloudWatch sigue teniendo todos los eventos y lo único que ocurre
+es que Loki deja de recibirlos. Así se abrió el hueco de 50 minutos que originó
+el cambio.
+
+| Alarma | Métrica | Umbral | Qué significa |
+| --- | --- | --- | --- |
+| `logs-delivery-failing` | `DeliveryToHttpEndpoint.Success` | < 1 durante 10 min | crítico · el endpoint rechaza. Clave de acceso sin el `1706326:` delante, token sin `logs:write`, 429, endpoint del stack equivocado o petición por encima de 5 MiB |
+| `logs-in-error-bucket` | `DeliveryToS3.Records` | ≥ 1 en 5 min | crítico · Firehose agotó los reintentos y depositó registros en `s3://vetsoftware-dev-logs-backup-.../errors/`. Eso **no** está en Loki |
+| `logs-delivery-stalled` | `DeliveryToHttpEndpoint.DataFreshness` | > 15 min | advertencia · sigue reintentando. Loki va con retraso, todavía no hay pérdida |
+
+`DeliveryToS3.Records` se usa como medida de "hay objetos bajo el prefijo de
+error" a propósito: con `s3_backup_mode = "FailedDataOnly"` lo único que Firehose
+escribe en ese bucket son los registros que no pudo entregar, y las métricas de
+S3 por prefijo son métricas de petición y se facturan. Esta es gratuita y llega
+antes.
+
+Las tres usan `treat_missing_data = "notBreaching"` por la misma razón que el
+resto: dev se apaga cada noche y sin tráfico Firehose no publica métrica.
+
+## 6.ter El sidecar de trazas y métricas
+
+Los logs se protegieron fuera de la tarea (6.bis). Las trazas y las métricas se
+protegen **dentro**, con un sidecar `opentelemetry-collector-contrib` que encola
+en disco y reintenta media hora. El sidecar no procesa logs y no hace
+`tail_sampling`: el muestreo lo decide Adaptive Traces en Grafana Cloud, que ve
+la traza completa, y un colector por tarea solo vería su trozo.
+
+El contenedor es `essential = false` a propósito —si el colector cae, la API
+sigue en pie— y esa decisión tiene un precio exacto: ECS **no** reemplaza la
+tarea, **no** emite una parada y nadie se entera. Sin lo que sigue, esa bandera
+sería una forma silenciosa de perder telemetría.
+
+### Lo que sí se ve desde CloudWatch
+
+| Alarma | Métrica | Umbral | Qué significa |
+| --- | --- | --- | --- |
+| `telemetry-sidecar-stopped` | `TelemetrySidecarStopped` | ≥ 1 en 5 min | crítico · el colector se detuvo con la tarea todavía corriendo. Trazas y métricas se quedaron sin cola durable y ECS no lo va a revivir: hay que forzar un despliegue |
+| `telemetry-sidecar-errors` | `TelemetrySidecarErrors` | ≥ 5 en 5 min, dos ventanas | advertencia · sigue vivo y reintentando, pero la cola en disco está creciendo. Credenciales, endpoint o un path que `readonlyRootFilesystem` no le deja escribir |
+
+`TelemetrySidecarStopped` sale de una regla de EventBridge distinta de la de la
+sección 2. Aquella archiva paradas de **tarea** (`lastStatus = STOPPED`) y por
+definición nunca verá morir a un contenedor no esencial, porque en ese caso la
+tarea sigue `RUNNING`. Ésta archiva justo lo contrario —tarea viva, contenido
+cambiando por dentro— en
+`/aws/events/vetsoftware-dev/telemetry-container-state`, y el filtro recorre
+todas las posiciones del array `containers` porque ECS no garantiza su orden. Un
+contenedor `STOPPED` dentro de una tarea `RUNNING` solo puede ser el sidecar: el
+backend y `cloudflared` son `essential` y su muerte se lleva la tarea entera.
+
+`TelemetrySidecarErrors` lee el log group del propio colector. Por eso la
+plantilla fuerza `service.telemetry.logs.encoding: json`: con el encoder de
+consola por defecto no habría campo `$.level` que consultar y el filtro no
+encontraría nada nunca.
+
+Las dos usan `treat_missing_data = "notBreaching"`, como el resto del entorno:
+dev se apaga cada noche.
+
+### Lo que necesariamente vive en Grafana Cloud
+
+Hay un tercer modo de fallo —**vivo, sin errores y sin entregar**— que CloudWatch
+no puede ver. Las series que lo demuestran son métricas internas del colector y
+viajan a Grafana Cloud por el mismo pipeline durable que todo lo demás, así que
+sobreviven al corte que están denunciando: cuando Grafana vuelve, llega la serie
+que explica el hueco. Esa propiedad es la razón de que las self-metrics salgan
+por el propio receptor OTLP y no por un `/metrics` de Prometheus.
+
+Las reglas ya estaban escritas para el stack de contenedores en
+`VetSoftware/docker/prometheus-platform-alerts.yml:241-286`. Se reutilizan tal
+cual, quitando solo las de logs, que aquí no aplican porque el sidecar no los
+procesa:
+
+```yaml
+# Fallo sostenido de exportación. Con retry_on_failure un fallo aislado ya NO es
+# pérdida: es un reintento. Por eso es warning y exige 10 minutos.
+- alert: VetSoftwareOtelTraceExportFailing
+  expr: increase(otelcol_exporter_send_failed_spans[5m]) > 0
+  for: 10m
+  labels: { severity: warning, domain: observability, service: vetsoftware }
+
+# Pérdida consumada: la cola estaba llena y el dato se descartó.
+- alert: VetSoftwareOtelQueueDroppingTelemetry
+  expr: sum(increase(otelcol_exporter_enqueue_failed_spans[5m])) > 0
+  for: 1m
+  labels: { severity: critical, domain: observability, service: vetsoftware }
+
+# Indicador adelantado: avisa antes de que la cola se llene y empiece a descartar.
+- alert: VetSoftwareOtelQueueNearCapacity
+  expr: |
+    (
+      otelcol_exporter_queue_size
+      / clamp_min(otelcol_exporter_queue_capacity, 1)
+    ) > 0.8
+  for: 5m
+  labels: { severity: warning, domain: observability, service: vetsoftware }
+```
+
+Una cuarta, que no existe en el fichero original y aquí sí hace falta, porque es
+el contrapeso de `essential = false` visto desde el otro lado: silencio total del
+colector. Debe acotarse a la ventana en la que dev está encendido, o el apagado
+de las 20:00 la convierte en una página diaria.
+
+```yaml
+- alert: VetSoftwareOtelSidecarSilent
+  expr: absent_over_time(otelcol_process_uptime{deployment_environment_name="dev"}[15m])
+  for: 5m
+  labels: { severity: warning, domain: observability, service: vetsoftware }
+```
+
+**Estas cuatro reglas no las crea Terraform.** Viven en el stack de Grafana Cloud
+y hoy quedan documentadas, no aplicadas: cargarlas es un paso manual pendiente.
+
+### Por qué el interruptor se entrega apagado
+
+`telemetry_sidecar_enabled` está en `false`, y no por prudencia genérica.
+`RemoteConnectionValidator` (`VetSoftware`, `@Profile({"dev","prod"})`,
+`BeanFactoryPostProcessor` con `HIGHEST_PRECEDENCE`) rechaza `localhost`,
+`127.0.0.1`, `0.0.0.0` y `::1` en `management.otlp.metrics.export.url` y en
+`management.opentelemetry.tracing.export.otlp.endpoint`, que son exactamente las
+dos propiedades que alimentan `OTEL_EXPORTER_OTLP_{METRICS,TRACES}_ENDPOINT`.
+Dev arranca con `SPRING_PROFILES_ACTIVE=prod`, así que la validación aplica.
+
+Encender el interruptor contra la imagen actual del backend no degrada la
+telemetría: **impide arrancar la aplicación**, y lo hace antes de crear el
+`DataSource`. Un sidecar es por definición un destino local, así que esa
+validación tiene que aprender a permitir loopback para las dos rutas OTLP —y solo
+para ellas— antes de que esto se pueda poner en `true`. Ese cambio vive en el
+repositorio de la aplicación.
+
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` no se mueve en ninguna de las dos ramas.
+Apuntarlo al sidecar daría 404 en `/v1/logs`, porque no existe ese pipeline, y su
+durabilidad ya está resuelta por el camino de 6.bis. Y `OTEL_EXPORTER_OTLP_HEADERS`
+sigue viniendo de `backend_secrets` siempre: la exportación OTLP de logs la
+necesita para autenticarse, y el propio `RemoteConnectionValidator` se niega a
+arrancar si está vacía.
+
 ## 7. Runbook
 
 | Llega esto | Primero mirar | Salida habitual |
@@ -368,6 +510,9 @@ volver a introducir: `scheduled_shutdown_does_not_page`.
 | `database-saturated` | las cuatro hijas para ver cuál par se activó | dice qué recurso se agotó primero |
 | `cache-auth-failures` tras un despliegue | `valkey_password_version` | subirla fuerza a reescribir usuario y secreto en el mismo apply |
 | RDS-EVENT-0031 | consola de RDS | RDS recomienda restaurar a un punto en el tiempo; **no reiniciar a ciegas**, se pierde el diagnóstico |
+| `logs-delivery-failing` | `/aws/kinesisfirehose/vetsoftware-dev-logs`, flujo `HttpEndpointDelivery` | ahí está la respuesta literal del endpoint. Un 401 casi siempre es la clave de acceso pegada sin el `1706326:` delante, o un token sin `logs:write`; un 502, una petición por encima de 5 MiB |
+| `logs-in-error-bucket` | prefijo `errors/` del bucket de respaldo | los objetos son los eventos que faltan en Loki; el original sigue 14 días en `/ecs/vetsoftware-dev-backend/backend` |
+| `logs-delivery-stalled` | `DeliveryToHttpEndpoint.Success` de la misma ventana | si Success sigue en 1, es lentitud del endpoint y se resuelve solo dentro de las dos horas de reintento |
 
 ## 8. Verificación
 

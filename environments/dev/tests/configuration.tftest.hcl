@@ -115,6 +115,7 @@ run "development_cost_profile_plans" {
     })
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
 
     grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
     cors_allowed_origins          = ["https://dev.example.test"]
@@ -130,9 +131,13 @@ run "development_cost_profile_plans" {
     slack_infra_channel_id        = "C0INFRA0000"
   }
 
+  # 3072 y no 2048: la tarea creció para alojar el sidecar colector sin quitarle
+  # memoria al backend, que pasa de 1920 a 2688 MiB efectivos. La CPU no se
+  # mueve. El contrato sigue congelando los dos valores para que cualquier
+  # subida posterior vuelva a ser una decisión explícita de costo.
   assert {
-    condition     = output.cost_profile.backend_cpu_mib == 512 && output.cost_profile.backend_memory_mib == 2048
-    error_message = "Dev debe conservar 512 CPU y 2048 MiB."
+    condition     = output.cost_profile.backend_cpu_mib == 512 && output.cost_profile.backend_memory_mib == 3072
+    error_message = "Dev debe conservar 512 CPU y 3072 MiB de tarea."
   }
 
   assert {
@@ -221,6 +226,19 @@ run "development_cost_profile_plans" {
   assert {
     condition     = output.cost_profile.log_retention_days == 3 && output.cost_profile.load_balancer_count == 0 && !output.cost_profile.dedicated_alloy
     error_message = "Dev debe retener logs tres días y operar sin ALB ni Alloy dedicado."
+  }
+
+  # La retención del backend se separó de la del entorno cuando su log group pasó
+  # a ser la frontera de durabilidad del envío a Grafana Cloud. Las dos van en la
+  # misma aserción a propósito: si alguien "unifica" las retenciones, o el backend
+  # pierde su margen para reenviar, o RDS y los flow logs se encarecen en
+  # silencio. El contrato de RDS en tres días ya se afirma más arriba.
+  assert {
+    condition = (
+      output.cost_profile.backend_log_retention_days == 14 &&
+      output.cost_profile.log_retention_days == 3
+    )
+    error_message = "El log group del backend debe retener catorce días sin arrastrar consigo la retención general del entorno."
   }
 
   assert {
@@ -363,5 +381,421 @@ run "development_cost_profile_plans" {
       output.finops_alerts.anomaly_monitor_arn != null
     )
     error_message = "Dev debe alertar por correo y Slack al forecast USD 28 y real USD 35, con el monitor de anomalías encendido ahora que Cost Explorer está habilitado."
+  }
+}
+
+# El envío durable de logs. Estas aserciones existen porque el modo de fallo de
+# este tramo no es ruidoso: los logs siguen llegando, pero a un sitio donde nadie
+# los busca, o dejan de llegar sin que nada cambie de color.
+run "durable_log_shipping_contract" {
+  command = plan
+
+  variables {
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    application_secrets_json = jsonencode({
+      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
+      RESEND_API_KEY   = "test-only-resend-key"
+      RECAPTCHA_SECRET = "test-only-recaptcha-key"
+    })
+
+    grafana_secrets_json = jsonencode({
+      OTLP_USERNAME              = "test-only-user"
+      OTLP_API_KEY               = "test-only-api-key"
+      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
+    })
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    cors_allowed_origins          = ["https://dev.example.test"]
+    email_from                    = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url = "https://dev.example.test/verify"
+    password_reset_url            = "https://dev.example.test/reset"
+    login_url                     = "https://dev.example.test/login"
+    api_domain_name               = "dev-api.example.test"
+    alarm_email                   = "finops@example.test"
+    slack_workspace_id            = "T0123456789"
+    slack_channel_id              = "C0123456789"
+  }
+
+  # Lo crítico y lo que más fácil se rompe. Grafana quita el prefijo `lbl_` al
+  # almacenar, así que `lbl_service_name` aterriza en Loki como `service_name`:
+  # sin estos cuatro atributos los logs entran con la etiqueta por defecto del
+  # endpoint -{job="cloud/aws"}- y ninguna consulta actual los encuentra. Los tres
+  # primeros reproducen lo que hoy pone el exportador OTLP directo
+  # (spring.opentelemetry.resource-attributes en application-dev.yml).
+  assert {
+    condition = (
+      output.log_shipping.loki_labels["lbl_service_name"] == "vetsoftware" &&
+      output.log_shipping.loki_labels["lbl_service_namespace"] == "mainvet" &&
+      output.log_shipping.loki_labels["lbl_deployment_environment_name"] == "dev"
+    )
+    error_message = "Las etiquetas lbl_ deben reproducir service_name, service_namespace y deployment_environment_name del exportador OTLP; sin ellas las consultas existentes dejan de encontrar los logs."
+  }
+
+  # Mientras convivan las dos rutas hacia Loki hay que poder compararlas. Sin esta
+  # etiqueta no se puede afirmar que la nueva no se deja nada antes de apagar la
+  # vieja: los dos flujos serían indistinguibles en la misma serie.
+  assert {
+    condition     = output.log_shipping.loki_labels["lbl_telemetry_source"] == "firehose"
+    error_message = "Falta la etiqueta que distingue el origen; sin ella no se pueden comparar la ruta OTLP y la ruta Firehose."
+  }
+
+  # Todas las etiquetas van prefijadas. Un atributo sin `lbl_` no falla: se ignora
+  # en silencio y la etiqueta simplemente no existe en Loki.
+  assert {
+    condition     = alltrue([for name in keys(output.log_shipping.loki_labels) : startswith(name, "lbl_")])
+    error_message = "Todo common attribute que deba convertirse en etiqueta de Loki tiene que llevar el prefijo lbl_."
+  }
+
+  # El motivo entero del cambio: dos horas de reintento y respaldo en S3. Con la
+  # cola en memoria del BatchLogRecordProcessor un 429 sostenido abrió un hueco de
+  # 50 minutos; con esta ventana se absorbe, y lo que no se absorba queda en el
+  # bucket en vez de desaparecer.
+  assert {
+    condition = (
+      output.log_shipping.retry_duration_seconds == 7200 &&
+      output.log_shipping.s3_backup_mode == "FailedDataOnly" &&
+      output.log_shipping.error_output_prefix != "" &&
+      output.log_shipping.backup_retention_days >= 7
+    )
+    error_message = "El envío debe reintentar el máximo de 7200 s y respaldar en S3 lo que no logre entregar."
+  }
+
+  assert {
+    condition = (
+      output.log_shipping.filter_pattern == "" &&
+      output.log_shipping.content_encoding == "GZIP" &&
+      output.log_shipping.buffering_interval_seconds == 60 &&
+      output.log_shipping.distribution == "ByLogStream" &&
+      output.log_shipping.cloudwatch_logging
+    )
+    error_message = "La suscripción debe enviar todos los eventos comprimidos, agrupados por flujo, con buffering de un minuto y los errores del propio Firehose visibles en CloudWatch."
+  }
+
+  # El endpoint responde HTTP 502 a cualquier petición por encima de 5 MiB, y ese
+  # rechazo solo se ve en el log group de Firehose. Las plantillas oficiales de
+  # Grafana usan 1 MB; el contrato lo fija para que subirlo sea una decisión.
+  assert {
+    condition     = output.log_shipping.buffering_size_mib <= 5
+    error_message = "El buffer de entrega no puede superar 5 MiB: el endpoint de Grafana Cloud rechaza con HTTP 502 las peticiones más grandes."
+  }
+
+  # La clave de acceso vive en un secreto propio, no como una clave más dentro del
+  # que comparten OTLP y el sidecar. AWS solo documenta que Firehose "falla al
+  # conectar si el secreto no tiene el formato JSON correcto", sin aclarar si
+  # tolera claves hermanas, y ese fallo es silencioso y en tiempo de entrega.
+  assert {
+    condition     = output.log_shipping.access_key_secret_name == "vetsoftware-dev/grafana-cloud-logs"
+    error_message = "El envío de logs debe leer de su secreto dedicado, no del secreto compartido de Grafana Cloud."
+  }
+
+  assert {
+    condition = (
+      output.log_shipping.delivery_stream_name == "vetsoftware-dev-logs" &&
+      output.log_shipping.source_log_group == "/ecs/vetsoftware-dev-backend/backend" &&
+      output.log_shipping.backup_bucket_name == "vetsoftware-dev-logs-backup-123456789012-us-east-1"
+    )
+    error_message = "El stream debe leer del log group del backend y respaldar en el bucket del entorno."
+  }
+
+  # El endpoint es específico del stack: aws-logs-prod-042. Este entorno ya
+  # arrastró una vez tres endpoints distintos entre el plan, el apply y la
+  # documentación, y esa clase de deriva no da error, solo silencio en Loki.
+  assert {
+    condition     = output.log_shipping.endpoint_url == "https://aws-logs-prod-042.grafana.net/aws-logs/api/v1/push"
+    error_message = "El endpoint de Firehose debe apuntar al stack aws-logs-prod-042 de Grafana Cloud."
+  }
+
+  # Las alarmas son la mitad del valor del cambio: el fallo tiene que dejar de ser
+  # invisible.
+  assert {
+    condition = (
+      length(output.log_shipping.alarm_names) == 3 &&
+      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-delivery-failing") &&
+      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-in-error-bucket") &&
+      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-delivery-stalled")
+    )
+    error_message = "Deben existir las tres alarmas del tramo: entrega fallando, datos en el prefijo de error y entrega atascada."
+  }
+
+  # El token de la Cloud Access Policy no se declara en Terraform: Firehose lo
+  # resuelve contra Secrets Manager en cada entrega. Si algún día alguien lo pasa
+  # por `access_key`, acaba en el state.
+  assert {
+    condition     = !output.log_shipping.access_key_in_state
+    error_message = "La clave de acceso del endpoint no puede viajar en la configuración del stream ni quedar en el state."
+  }
+
+  assert {
+    condition     = output.log_shipping.encrypted_with_cmk == "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+    error_message = "El respaldo en S3 y el log group operativo de Firehose deben cifrarse con la CMK del entorno."
+  }
+}
+
+# El error probable, convertido en fallo del plan.
+#
+# La clave de acceso NO es el token: la plantilla oficial de CloudFormation de
+# Grafana Labs la compone como '${LogsInstanceID}:${LogsWriteToken}'. Pegar solo
+# el `glc_...` —que es lo que devuelve la consola al crear la Cloud Access
+# Policy, y por tanto lo que uno tiene en el portapapeles— produce un apply
+# verde, un stream creado y cero entregas. No hay excepción, no hay alarma de
+# infraestructura: solo Loki vacío por esa ruta.
+#
+# Por eso el contrato exige el prefijo numérico, y no simplemente "no vacío".
+run "la_clave_de_acceso_exige_el_instance_id_delante" {
+  command = plan
+
+  expect_failures = [var.grafana_logs_access_key]
+
+  variables {
+    log_shipping_enabled = true
+
+    # El token tal cual sale de la consola de Grafana, sin el `1706326:` delante.
+    grafana_logs_access_key = "glc_test-only-logs-write-token"
+
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    application_secrets_json = jsonencode({
+      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
+      RESEND_API_KEY   = "test-only-resend-key"
+      RECAPTCHA_SECRET = "test-only-recaptcha-key"
+    })
+
+    grafana_secrets_json = jsonencode({
+      OTLP_USERNAME              = "test-only-user"
+      OTLP_API_KEY               = "test-only-api-key"
+      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
+    })
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    cors_allowed_origins          = ["https://dev.example.test"]
+    email_from                    = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url = "https://dev.example.test/verify"
+    password_reset_url            = "https://dev.example.test/reset"
+    login_url                     = "https://dev.example.test/login"
+    api_domain_name               = "dev-api.example.test"
+  }
+}
+
+# El sidecar de trazas y métricas, con el interruptor APAGADO.
+#
+# Este run es el importante de los dos. Un intento anterior dejó
+# OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT fijos a localhost, y eso convirtió
+# `telemetry_sidecar_enabled = false` en una forma de cortar la telemetría en
+# silencio: la aplicación seguía exportando, pero contra un colector que no
+# existía en la tarea. Apagar el interruptor tiene que devolver el sistema
+# exactamente al comportamiento anterior a este cambio, no dejarlo peor.
+run "el_sidecar_apagado_devuelve_la_exportacion_directa" {
+  command = plan
+
+  variables {
+    telemetry_sidecar_enabled = false
+
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    application_secrets_json = jsonencode({
+      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
+      RESEND_API_KEY   = "test-only-resend-key"
+      RECAPTCHA_SECRET = "test-only-recaptcha-key"
+    })
+
+    grafana_secrets_json = jsonencode({
+      OTLP_USERNAME              = "test-only-user"
+      OTLP_API_KEY               = "test-only-api-key"
+      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
+    })
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    cors_allowed_origins          = ["https://dev.example.test"]
+    email_from                    = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url = "https://dev.example.test/verify"
+    password_reset_url            = "https://dev.example.test/reset"
+    login_url                     = "https://dev.example.test/login"
+    api_domain_name               = "dev-api.example.test"
+    alarm_email                   = "finops@example.test"
+    slack_workspace_id            = "T0123456789"
+    slack_channel_id              = "C0123456789"
+  }
+
+  # Las tres señales salen directas al gateway de Grafana Cloud. Ninguna apunta a
+  # localhost: sin sidecar, localhost es un puerto cerrado.
+  assert {
+    condition = (
+      output.telemetry.otlp_endpoints.traces == "https://otlp.example.test/otlp/v1/traces" &&
+      output.telemetry.otlp_endpoints.metrics == "https://otlp.example.test/otlp/v1/metrics" &&
+      output.telemetry.otlp_endpoints.logs == "https://otlp.example.test/otlp/v1/logs"
+    )
+    error_message = "Con el sidecar apagado los tres endpoints OTLP deben volver al gateway de Grafana Cloud; dejar localhost cableado corta la telemetría en silencio."
+  }
+
+  # Sin destino remoto autenticado no hay exportación posible, y además
+  # RemoteConnectionValidator se niega a arrancar la aplicación sin esta variable.
+  assert {
+    condition     = output.telemetry.otlp_headers_from_secret
+    error_message = "OTEL_EXPORTER_OTLP_HEADERS debe seguir viniendo de backend_secrets con el sidecar apagado."
+  }
+
+  # Ni contenedor, ni volumen, ni log group, ni alarmas: apagado es apagado.
+  assert {
+    condition = (
+      !output.telemetry.sidecar.enabled &&
+      output.telemetry.sidecar.cpu == 0 &&
+      output.telemetry.sidecar.memory == 0 &&
+      length(output.telemetry.sidecar.pipelines) == 0 &&
+      length(output.telemetry.alarm_names) == 0
+    )
+    error_message = "Con el interruptor apagado no debe quedar ningún resto del sidecar en la tarea ni en las alarmas."
+  }
+
+  # La tarea creció aunque el sidecar no esté: el backend se queda con toda la
+  # memoria nueva menos la de cloudflared.
+  assert {
+    condition     = output.telemetry.sidecar.backend_memory == 2944
+    error_message = "Sin sidecar el backend debe recibir 3072 - 128 = 2944 MiB."
+  }
+}
+
+# El mismo entorno con el interruptor ENCENDIDO. Aquí se afirma lo que distingue
+# a este sidecar de un colector cualquiera: qué señales procesa, cuáles no, y por
+# qué la pérdida deja de ser silenciosa.
+run "el_sidecar_encendido_pone_la_cola_en_disco_sin_tocar_los_logs" {
+  command = plan
+
+  variables {
+    telemetry_sidecar_enabled = true
+
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    application_secrets_json = jsonencode({
+      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
+      RESEND_API_KEY   = "test-only-resend-key"
+      RECAPTCHA_SECRET = "test-only-recaptcha-key"
+    })
+
+    grafana_secrets_json = jsonencode({
+      OTLP_USERNAME              = "test-only-user"
+      OTLP_API_KEY               = "test-only-api-key"
+      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
+    })
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+    cors_allowed_origins          = ["https://dev.example.test"]
+    email_from                    = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url = "https://dev.example.test/verify"
+    password_reset_url            = "https://dev.example.test/reset"
+    login_url                     = "https://dev.example.test/login"
+    api_domain_name               = "dev-api.example.test"
+    alarm_email                   = "finops@example.test"
+    slack_workspace_id            = "T0123456789"
+    slack_channel_id              = "C0123456789"
+  }
+
+  # Trazas y métricas al colector local; los logs NO. Su durabilidad ya está
+  # resuelta por CloudWatch y Firehose fuera de la tarea, y el sidecar no declara
+  # pipeline de logs: apuntarlos aquí daría 404 en /v1/logs.
+  assert {
+    condition = (
+      output.telemetry.otlp_endpoints.traces == "http://localhost:4318/v1/traces" &&
+      output.telemetry.otlp_endpoints.metrics == "http://localhost:4318/v1/metrics" &&
+      output.telemetry.otlp_endpoints.logs == "https://otlp.example.test/otlp/v1/logs"
+    )
+    error_message = "Con el sidecar activo trazas y métricas van al colector local, pero los logs siguen yendo directos al gateway: su durabilidad vive fuera de la tarea."
+  }
+
+  # Las dos ausencias deliberadas, escritas como contrato porque un cambio
+  # distraído las revertiría sin ruido. tail_sampling sería incorrecto en cuanto
+  # haya más de una tarea: los spans de una traza se repartirían entre tasks y
+  # cada colector decidiría con información parcial.
+  assert {
+    condition = (
+      length(output.telemetry.sidecar.pipelines) == 2 &&
+      contains(output.telemetry.sidecar.pipelines, "traces") &&
+      contains(output.telemetry.sidecar.pipelines, "metrics") &&
+      !output.telemetry.sidecar.processes_logs &&
+      !output.telemetry.sidecar.tail_sampling
+    )
+    error_message = "El sidecar debe tener exactamente los pipelines de trazas y métricas, sin logs y sin tail_sampling."
+  }
+
+  # El motivo entero del cambio: cola en disco y media hora de reintento en vez
+  # de una cola en memoria que descarta en silencio.
+  assert {
+    condition = (
+      output.telemetry.sidecar.retry_max_elapsed_time == "30m" &&
+      output.telemetry.sidecar.queue_size == 2000 &&
+      output.telemetry.sidecar.self_metrics_durable
+    )
+    error_message = "El exportador debe reintentar 30 minutos con cola persistente, y las métricas internas deben salir por ese mismo pipeline durable."
+  }
+
+  # Sin las series internas la pérdida vuelve a ser indemostrable, y sin las
+  # alarmas un sidecar essential = false muere sin que nadie se entere.
+  assert {
+    condition = (
+      length(output.telemetry.alarm_names) == 2 &&
+      contains(output.telemetry.alarm_names, "vetsoftware-dev-telemetry-sidecar-stopped") &&
+      contains(output.telemetry.alarm_names, "vetsoftware-dev-telemetry-sidecar-errors")
+    )
+    error_message = "Deben existir las dos alarmas del sidecar: contenedor detenido con la tarea viva, y errores sostenidos del colector."
+  }
+
+  # El reparto. El backend sube respecto de hoy pese a ceder 256 MiB al sidecar,
+  # y el memory_limiter queda por debajo de la reserva para que quien rechace sea
+  # el colector -contabilizándolo- y no el kernel, que mata sin dejar rastro.
+  assert {
+    condition = (
+      output.telemetry.sidecar.cpu == 64 &&
+      output.telemetry.sidecar.memory == 256 &&
+      output.telemetry.sidecar.backend_memory == 2688 &&
+      output.telemetry.sidecar.memory_limit_mib < output.telemetry.sidecar.memory
+    )
+    error_message = "El sidecar debe reservar 64/256 dejando 2688 MiB al backend, con el memory_limiter por debajo de su reserva."
+  }
+
+  # ECS arranca el colector antes que el backend, así que lo para después: el
+  # drenaje ocurre con la aplicación ya callada. 120 s es el máximo de Fargate.
+  assert {
+    condition = (
+      output.telemetry.sidecar.backend_starts_after_sidecar &&
+      output.telemetry.sidecar.stop_timeout == 120
+    )
+    error_message = "El backend debe depender del arranque del sidecar para que ECS lo pare al final y le deje drenar."
+  }
+
+  # Root es deliberado y está documentado en el módulo: los volúmenes de tarea de
+  # Fargate se montan como root y el usuario 10001 de la imagen distroless no
+  # puede crear el directorio de la cola.
+  assert {
+    condition = (
+      output.telemetry.sidecar.runs_as_root &&
+      output.telemetry.sidecar.readonly_root &&
+      output.telemetry.sidecar.receiver_endpoint == "127.0.0.1:4318"
+    )
+    error_message = "El sidecar debe correr como root con el raíz de solo lectura y escuchar únicamente en loopback."
+  }
+
+  # Ni el usuario ni el token del colector pueden acabar en el state: ECS los
+  # resuelve contra Secrets Manager con el rol de ejecución.
+  assert {
+    condition     = !output.telemetry.sidecar.credentials_in_state
+    error_message = "Las credenciales OTLP del sidecar no pueden viajar en la definición de tarea ni quedar en el state."
+  }
+
+  # Muestreo al 100 %: el emisor deja de decidir y la decisión pasa a Adaptive
+  # Traces, que sí ve la traza completa.
+  assert {
+    condition     = output.telemetry.tracing_sampling == 1
+    error_message = "dev debe emitir el 100 % de las trazas y delegar el muestreo en Adaptive Traces."
   }
 }

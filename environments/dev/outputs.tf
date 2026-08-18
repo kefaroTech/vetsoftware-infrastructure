@@ -79,13 +79,16 @@ output "cost_profile" {
     valkey_storage_gb      = var.valkey_maximum_data_storage_gb
     valkey_ecpu_per_second = var.valkey_maximum_ecpu_per_second
     log_retention_days     = var.log_retention_days
-    load_balancer_count    = 0
-    dedicated_alloy        = false
-    dedicated_vpc          = true
-    assign_public_ip       = module.backend.assign_public_ip
-    public_https_cidr      = aws_vpc_security_group_egress_rule.backend_public_https.cidr_ipv4
-    public_https_port      = aws_vpc_security_group_egress_rule.backend_public_https.to_port
-    interface_endpoints    = 0
+    # El unico grupo que se sale de la retencion del entorno: es el origen del
+    # envio durable a Grafana Cloud y tiene que sobrevivir a un atasco largo.
+    backend_log_retention_days = module.backend.backend_log_retention_days
+    load_balancer_count        = 0
+    dedicated_alloy            = false
+    dedicated_vpc              = true
+    assign_public_ip           = module.backend.assign_public_ip
+    public_https_cidr          = aws_vpc_security_group_egress_rule.backend_public_https.cidr_ipv4
+    public_https_port          = aws_vpc_security_group_egress_rule.backend_public_https.to_port
+    interface_endpoints        = 0
   }
 }
 
@@ -99,4 +102,42 @@ output "cmk_authorized_services" {
 
 output "cost_reporting" {
   value = module.cost_report.reporting
+}
+
+output "log_shipping" {
+  description = "Contrato del envio durable de logs del backend a Grafana Cloud; nulo cuando el envio esta apagado."
+  value = var.log_shipping_enabled ? merge(module.log_shipping[0].shipping, {
+    # El nombre del secreto lo aporta el entorno porque el modulo solo recibe su
+    # ARN. Es lo que permite fijar en el contrato que la clave del envio vive en
+    # un secreto propio y no dentro del que comparten OTLP y el sidecar.
+    access_key_secret_name = module.secrets.grafana_logs_secret_name
+  }) : null
+}
+
+# Contrato del sidecar de trazas y metricas.
+#
+# Los tres endpoints se exponen tal cual llegan al contenedor porque el modo de
+# fallo de este cambio es exactamente ese: que apagar el interruptor no devuelva
+# el sistema a donde estaba y la telemetria quede cortada en silencio, apuntando
+# a un colector que ya no existe. Es un valor que hay que poder afirmar en las
+# dos ramas, no una intencion documentada.
+output "telemetry" {
+  description = "Contrato del sidecar colector y de los tres endpoints OTLP que recibe el backend en cada rama del interruptor."
+  value = {
+    sidecar = module.backend.telemetry_sidecar
+
+    otlp_endpoints = {
+      traces  = local.otlp_traces_endpoint
+      metrics = local.otlp_metrics_endpoint
+      logs    = local.otlp_logs_endpoint
+    }
+
+    # Requerida siempre: la exportacion OTLP de logs sigue yendo directa al
+    # gateway y RemoteConnectionValidator rechaza arrancar sin ella.
+    otlp_headers_from_secret = contains(keys(local.backend_secrets), "OTEL_EXPORTER_OTLP_HEADERS")
+
+    tracing_sampling = var.tracing_sampling
+
+    alarm_names = module.monitoring.telemetry_sidecar_alarm_names
+  }
 }

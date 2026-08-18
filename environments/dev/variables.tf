@@ -89,9 +89,13 @@ variable "backend_cpu" {
   default = 512
 }
 
+# 2048 -> 3072. La tarea gana un sidecar colector de 256 MiB y, aun asi, el
+# backend sube en vez de bajar: de 2048 - 128 = 1920 MiB efectivos pasa a
+# 3072 - 128 - 256 = 2688. No se reparte la misma tarta, se agranda.
 variable "backend_memory" {
-  type    = number
-  default = 2048
+  description = "Memoria de la tarea Fargate en MiB, repartida entre backend, cloudflared y el sidecar colector."
+  type        = number
+  default     = 3072
 }
 
 variable "backend_extra_environment" {
@@ -210,6 +214,11 @@ variable "application_secret_version" {
   default = 2
 }
 
+# El envio de logs por Firehose NO vive en este secreto: tiene el suyo propio
+# -grafana_logs_access_key- y por eso este no se reescribe y la version se queda
+# donde estaba. Es justo la ventaja de separarlos: los secretos de GitHub son de
+# solo escritura, asi que anadir una clave aqui obligaba a reescribir a ciegas
+# unas credenciales OTLP que ya funcionan.
 variable "grafana_secret_version" {
   type    = number
   default = 1
@@ -239,6 +248,22 @@ variable "grafana_secrets_json" {
       false
     )
     error_message = "grafana_secrets_json debe incluir OTEL_EXPORTER_OTLP_HEADERS para exportación directa."
+  }
+
+  # El sidecar no usa la cabecera OTLP ya construida: se autentica con la
+  # extension basicauth, que quiere usuario y contrasena por separado. Son las
+  # dos claves que ya viven en este secreto -OTLP_USERNAME es el numeric ID de la
+  # instancia, OTLP_API_KEY el token- y de las que sale precisamente el Basic de
+  # OTEL_EXPORTER_OTLP_HEADERS. Si faltan, el colector arranca, encola en disco y
+  # cada entrega rebota con 401: un fallo que solo se ve en su propio log group,
+  # nunca en la aplicacion, y que ademas llena la cola hasta empezar a descartar.
+  validation {
+    condition = !var.telemetry_sidecar_enabled || try(
+      length(jsondecode(var.grafana_secrets_json).OTLP_USERNAME) > 0 &&
+      length(jsondecode(var.grafana_secrets_json).OTLP_API_KEY) > 0,
+      false
+    )
+    error_message = "Con telemetry_sidecar_enabled, grafana_secrets_json debe incluir OTLP_USERNAME y OTLP_API_KEY: el sidecar se autentica con basicauth, no con la cabecera ya construida."
   }
 }
 
@@ -306,9 +331,17 @@ variable "recaptcha_enabled" {
   default = true
 }
 
+# 0,25 -> 1,0. Muestrear en el emisor era la unica defensa cuando cada span
+# viajaba directo a Grafana Cloud, y costaba caro: tres de cada cuatro trazas no
+# existian, incluidas las que documentaban un error. Medido en el stack real, el
+# pico fue de 0,225 spans/s al 25 %, o sea ~0,9 spans/s al 100 %, contra un
+# limite de ~1.250 spans/s: tres ordenes de magnitud de margen. Lo que conservar
+# lo decide despues Adaptive Traces en Grafana Cloud, que ve la traza entera; el
+# emisor no puede decidirlo porque no la ve.
 variable "tracing_sampling" {
-  type    = number
-  default = 0.25
+  description = "Probabilidad de muestreo de trazas en el emisor; 1,0 delega la decision en Adaptive Traces."
+  type        = number
+  default     = 1.0
 
   validation {
     condition     = var.tracing_sampling >= 0 && var.tracing_sampling <= 1
@@ -460,4 +493,117 @@ variable "backend_stop_schedule" {
 variable "database_stop_schedule" {
   type    = string
   default = "cron(15 20 ? * MON-FRI *)"
+}
+
+# El log group del backend deja de ser un buffer de depuracion y pasa a ser la
+# frontera de durabilidad del envio a Grafana Cloud: si Firehose se atasca, el
+# original tiene que seguir aqui cuando alguien lo vaya a buscar. Se declara
+# aparte de log_retention_days a proposito -esa la comparten flow logs, RDS,
+# account_baseline y el informe de costos, y el contrato afirma que RDS retiene
+# tres dias-.
+variable "backend_log_retention_days" {
+  description = "Retencion del log group del contenedor backend, origen del envio durable de logs."
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = var.backend_log_retention_days >= var.log_retention_days
+    error_message = "backend_log_retention_days no puede ser menor que la retencion general del entorno."
+  }
+}
+
+variable "log_shipping_enabled" {
+  description = "Activa el envio durable de logs del backend a Grafana Cloud por Kinesis Firehose."
+  type        = bool
+  default     = true
+}
+
+# La clave de acceso del endpoint de logs, en su propio secreto y no dentro de
+# grafana_secrets_json. Va aparte porque AWS solo documenta que Firehose "falla al
+# conectar si el secreto no tiene el formato JSON correcto", sin aclarar si
+# tolera claves hermanas, y ese fallo es silencioso y en tiempo de entrega.
+#
+# El formato NO es el token a secas. La plantilla oficial de CloudFormation de
+# Grafana Labs lo compone como '${LogsInstanceID}:${LogsWriteToken}', y para este
+# stack el instance ID de Loki es 1706326: el valor correcto es
+# "1706326:glc_...". Con solo el token el apply sale verde, el stream se crea y
+# no entrega absolutamente nada.
+variable "grafana_logs_access_key" {
+  description = "Clave de acceso del endpoint de logs de Grafana Cloud, con formato <loki_instance_id>:<token>; inyectar mediante TF_VAR."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  default     = null
+
+  validation {
+    condition     = !var.log_shipping_enabled || can(regex("^[0-9]+:.+$", var.grafana_logs_access_key))
+    error_message = "Con log_shipping_enabled, grafana_logs_access_key debe ser <loki_instance_id>:<token> -para dev, 1706326:glc_...-; solo el token no entrega nada y no da error."
+  }
+}
+
+variable "grafana_logs_secret_version" {
+  description = "Incremente para rotar la clave de acceso del envio durable de logs."
+  type        = number
+  default     = 1
+}
+
+# El endpoint es especifico del stack de Grafana Cloud y no es un secreto. Se fija
+# aqui como unica fuente de verdad porque este entorno ya arrastro una vez tres
+# endpoints distintos entre el plan, el apply y la documentacion.
+variable "grafana_logs_firehose_endpoint" {
+  description = "Endpoint de ingesta de logs por Firehose del stack de Grafana Cloud."
+  type        = string
+  default     = "https://aws-logs-prod-042.grafana.net/aws-logs/api/v1/push"
+
+  validation {
+    condition     = can(regex("^https://[a-z0-9.-]+/aws-logs/api/v1/push$", var.grafana_logs_firehose_endpoint))
+    error_message = "grafana_logs_firehose_endpoint debe ser el endpoint HTTPS terminado en /aws-logs/api/v1/push."
+  }
+}
+
+variable "log_shipping_backup_retention_days" {
+  description = "Dias que sobreviven en S3 los logs que Firehose no logro entregar a Grafana Cloud."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.log_shipping_backup_retention_days >= 7
+    error_message = "log_shipping_backup_retention_days debe ser al menos 7 dias."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Sidecar colector de trazas y metricas
+#
+# SE ENTREGA APAGADO, y el motivo no es prudencia generica. RemoteConnectionValidator
+# -VetSoftware, @Profile({"dev","prod"}), BeanFactoryPostProcessor con
+# HIGHEST_PRECEDENCE- rechaza localhost, 127.0.0.1, 0.0.0.0 y ::1 en
+# management.otlp.metrics.export.url y en
+# management.opentelemetry.tracing.export.otlp.endpoint, que son exactamente las
+# dos propiedades que alimentan OTEL_EXPORTER_OTLP_{METRICS,TRACES}_ENDPOINT.
+# Encender esto contra la imagen actual del backend no degrada la telemetria:
+# impide arrancar la aplicacion, y lo hace antes de crear el DataSource.
+#
+# El sidecar es, por definicion, un destino local: esa validacion tiene que
+# aprender a permitir loopback para las dos rutas OTLP antes de que este
+# interruptor se pueda poner en true. Ese cambio vive en el repositorio de la
+# aplicacion y queda fuera del alcance de este.
+# ---------------------------------------------------------------------------
+
+variable "telemetry_sidecar_enabled" {
+  description = "Enruta trazas y metricas por el sidecar colector con cola en disco en lugar de exportarlas directo."
+  type        = bool
+  default     = false
+}
+
+variable "telemetry_sidecar_memory" {
+  description = "Memoria en MiB reservada al sidecar colector dentro de la tarea."
+  type        = number
+  default     = 256
+}
+
+variable "telemetry_sidecar_cpu" {
+  description = "Unidades de CPU reservadas al sidecar colector dentro de la tarea."
+  type        = number
+  default     = 64
 }
