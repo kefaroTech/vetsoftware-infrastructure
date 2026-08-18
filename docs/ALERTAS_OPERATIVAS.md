@@ -78,6 +78,35 @@ si cambia el nombre; `backend-image.ps1` lee `events_topic_arn` del output
 `alerting`. La Lambda del informe **recibe el ARN por variable de entorno** desde
 Terraform, así que no depende de ninguna convención de nombres.
 
+### Dos reglas que aplican a todas las alarmas
+
+**No se notifica la recuperación.** Ninguna alarma del entorno tiene
+`ok_actions`. A un canal que lee una persona no se le manda el "ya pasó": es el
+default de Alertmanager para Slack y correo (`send_resolved = false`, verdadero
+solo para PagerDuty y webhooks, que sí llevan estado de incidente que cerrar), y
+en la taxonomía de Google —*Alerts* / *Tickets* / *Logging*— la recuperación es
+Logging: no pide ninguna acción. El OK sigue existiendo, donde se consulta: en el
+historial de la alarma y en el panel.
+
+La única alarma del módulo cuya acción **no** es una notificación es
+`alloy-*-system-recovery`, que dispara `arn:aws:automate:...:ec2:recover`. Es la
+excepción que la doctrina admitiría —una remediación automática sí tiene estado
+que cerrar— pero no hace falta usarla: `ec2:recover` no tiene semántica de
+"resuelto", así que tampoco lleva `ok_actions`.
+
+**La severidad no va en el texto.** CloudWatch no tiene plantillas:
+`AlarmDescription` viaja **idéntico** en el disparo y en la recuperación. Un
+texto que empezaba por `CRITICO ·` producía en Slack un ✅ que decía CRITICO. No
+era un accidente, era determinista. Los textos son ahora neutros respecto al
+estado —qué mide la alarma y **dónde mirar**— y la severidad viaja donde se puede
+leer por separado: en `tags.Severity` y en la elección de topic, que es lo único
+que enruta. Es la misma separación que hace Prometheus por diseño: *labels* para
+enrutar, *annotations* para informar.
+
+Las dos reglas están fijadas por el run
+`recovery_is_not_notified_and_severity_is_not_in_the_text` y por
+`output.alerting.notify_on_recovery`.
+
 ## 2. Backend en ECS Fargate
 
 | Alarma | Señal | Umbral | Severidad |
@@ -91,6 +120,11 @@ Terraform, así que no depende de ninguna convención de nombres.
 | `backend-spot-interruptions` | `SpotInterruptions` | ≥ 2 en 15 min | advertencia |
 | `cloudflare-tunnel-errors` | errores del conector en logs | ≥ 1 en 5 min | crítico |
 | `backend-degraded` (compuesta) | CPU alta **y** memoria alta | ambas en ALARM | crítico |
+
+Ninguna de estas sabe si el servicio **está**: todas miden un umbral sobre una
+tarea que suponen presente. Eso lo cubriría `backend-service-down`, el
+interruptor de hombre muerto descrito en §6, que hoy **no existe** porque depende
+de Container Insights. Es deuda conocida y está en §9.
 
 ### Por qué 92 % de memoria
 
@@ -345,15 +379,125 @@ Amazon Q Developer (`version: "1.0"`, `source: "custom"`,
 recibe un mensaje redactado con causa y pasos siguientes en vez de un volcado
 JSON, y no hace falta un Lambda intermedio.
 
-## 6. El apagado programado no despierta a nadie
+## 6. El apagado programado no despierta a nadie, y el manual tampoco
 
 Dev apaga ECS a las 20:00 y RDS a las 20:15 de lunes a viernes. RDS deja de
 publicar métricas cuando está detenida.
 
-**Ninguna alarma usa `treat_missing_data = "breaching"`.** La alarma de memoria
-de RDS lo hacía y disparaba una alerta diaria a las 20:15, que es la forma más
-rápida de enseñarle a un equipo a ignorar el canal. Hay un test que lo impide
-volver a introducir: `scheduled_shutdown_does_not_page`.
+**Y dev también se apaga a mano, en horario hábil.** No es una excepción rara:
+es un patrón de uso normal del entorno. No es un detalle de color, es el hecho
+que gobierna todo lo que sigue —ninguna alarma de este módulo puede tratar un
+apagado deliberado como un incidente, y ninguna ventana programada puede prever
+un apagado que no tiene hora—.
+
+Durante mucho tiempo ese silencio se compró con
+`treat_missing_data = "notBreaching"` en 33 de 35 alarmas. Funcionaba, pero el
+precio no era el que parecía: **ese ajuste no silencia una ventana, silencia la
+ausencia de datos las 24 horas**. Una alarma que trata la ausencia como buena no
+distingue "todo bien" de "muerto". Se pagaba ceguera todo el día para no recibir
+una notificación a las 20:15.
+
+### La ventana de mantenimiento
+
+`aws_cloudwatch_alarm_mute_rule` separa las dos cosas. La alarma sigue evaluando
+y cambiando de estado —se ve en el panel y en el historial—, pero **no ejecuta
+sus acciones** dentro de la ventana. Al cerrarse, CloudWatch re-evalúa y
+re-notifica lo que siga mal: callar no equivale a perder.
+
+Dev declara dos ventanas, en `America/Bogota`:
+
+| Ventana | Expresión | Duración | Cubre |
+| --- | --- | --- | --- |
+| `nightly` | `cron(55 19 ? * * *)` | `PT12H10M` | 19:55 → 08:05, todos los días |
+| `weekend` | `cron(0 8 ? * SAT,SUN *)` | `PT12H` | 08:00 → 20:00 de sábado y domingo |
+
+La unión deja a dev notificando **solo de lunes a viernes entre 08:05 y 19:55**,
+que es cuando hay alguien que puede actuar. La ventana nocturna empieza cinco
+minutos antes del primer schedule para no depender del segundo exacto en que ECS
+baja a cero, y se declara todos los días —no `MON-FRI`— porque el fin de semana
+el ambiente está apagado entero: el encendido es el workflow *Start dev
+environment* y nadie lo ejecuta un sábado.
+
+La regla cubre las alarmas de `modules/monitoring` **y las tres de
+`modules/log_shipping`**, que vigilan el mismo entorno que se apaga. Se pasan por
+nombre desde `environments/dev/main.tf` (`additional_muted_alarm_names`) para no
+invertir la dependencia entre módulos. Límite del servicio: 100 alarmas por
+regla; el inventario de dev ronda las 35 y el contrato lo afirma.
+
+`alloy-*-system-recovery` queda **fuera** de la ventana a propósito. Su acción no
+es una notificación sino `arn:aws:automate:...:ec2:recover`: silenciarla no
+callaría un mensaje, cancelaría la remediación.
+
+Verificación: `terraform output maintenance_mute`.
+
+### Qué `treat_missing_data` quedó, y por qué
+
+Con la ventana en su sitio, el criterio pasa a ser el que documenta AWS:
+`breaching` para métricas que **fluyen continuamente**, `notBreaching` solo para
+las que **por diseño solo existen cuando hay error**.
+
+| Familia | Valor | Motivo |
+| --- | --- | --- |
+| CPU, memoria, conexiones, disco, latencia, cola, créditos EBS de RDS; CPU y memoria del servicio ECS; ocupación y ECPU del cache | `var.continuous_metric_missing_data`, hoy `notBreaching` | fluyen continuamente, pero ver la advertencia de abajo |
+| `ConnectorErrors`, `UnexpectedTaskStops`, `SpotInterruptions`, `ThrottledCmds`, `AuthenticationFailures`, `TelemetrySidecar*` | `notBreaching` **fijo** | solo existen cuando pasa lo que cuentan. Es el caso del ejemplo de AWS (`ThrottledRequests` de DynamoDB) |
+| `RunningTaskCount` (`backend-no-running-tasks`) | `breaching`, pero **sin notificar** | señal interna del interruptor de hombre muerto del backend; ver más abajo |
+| `DesiredTaskCount` (`backend-tasks-wanted`) | `notBreaching`, **sin notificar** | la compuerta: el hueco significa "nadie está pidiendo tareas" |
+| `CPUCreditBalance` | `ignore` | parar una instancia de clase t borra el saldo; con `notBreaching` el apagado la resolvía en falso. Ver §3 |
+
+**La advertencia, y es la razón por la que la primera fila no se movió a
+`breaching`:** la ventana cubre el apagado **programado**, y dev también se apaga
+**a mano en horario hábil**. Un apagado manual no tiene hora, así que ninguna
+expresión cron puede preverlo. Con `breaching`, ese caso produce **doce alarmas a
+la vez para una sola condición** ("dev está apagado"), que rompe el ratio 1:1
+alerta/incidente y reintroduce exactamente el ruido que este cambio quita.
+
+Es una decisión consciente, no un descuido. **Quien quiera cambiarla no debe
+tocar `treat_missing_data`: debe montar antes la compuerta.** La forma canónica
+está a la vista dos secciones más abajo y en §6.bis —`síntoma AND
+entorno-debería-estar-arriba`—, y es la única formulación que distingue "el
+recurso no está porque falló" de "el recurso no está porque lo apagaron".
+
+### El interruptor de hombre muerto del backend
+
+Es la aplicación de esa misma forma a ECS, y sustituye a una versión anterior de
+`backend-no-running-tasks` que era una sola alarma sobre `RunningTaskCount` con
+`breaching` y notificación directa. El razonamiento era correcto —su propósito es
+detectar ausencia— y la construcción no: **habría sonado cada vez que alguien
+apaga dev a mano**.
+
+```
+ALARM(backend-no-running-tasks)  AND  ALARM(backend-tasks-wanted)
+        RunningTaskCount < 1              DesiredTaskCount >= 1
+        breaching                         notBreaching
+        no notifica                       no notifica
+                          ↓
+              backend-service-down  (crítico, la única que avisa)
+```
+
+Un apagado —programado o manual— pone `desired` en 0, la compuerta se cierra sola
+y no suena nada. Un fallo real —imagen rota, sin capacidad Spot, crash loop en el
+arranque— deja `desired > 0` con `running` en 0, y ahí sí hay incidente.
+
+Mismo invariante de tiempos que en §6.bis: la compuerta evalúa **2 × 60 s** y la
+señal de fallo **5 × 60 s**, así que la compuerta cierra tres minutos antes de
+que la otra se abra. Si algún día llega un aviso justo después de un apagado, la
+corrección es ampliar la señal de fallo, **nunca alargar la compuerta**.
+
+Las tres piezas viven detrás de `container_insights_enabled`, hoy `false` en dev
+y en prod: **no existen todavía**. El run
+`the_backend_dead_mans_switch_ignores_a_deliberate_shutdown` las planifica con la
+bandera encendida a propósito, porque una construcción inerte que nadie ejercita
+es exactamente como se cuela una bomba de relojería para el día que alguien
+active la bandera.
+
+`continuous_metric_missing_data` existe precisamente para que esa decisión sea
+por entorno y explícita. **Prod es el candidato natural a ponerla en
+`breaching`**: no tiene apagado programado, heredó el `notBreaching` de dev sin
+que la justificación le aplicara nunca, y allí sí la ausencia de métricas de RDS
+significa algo. Queda como pendiente declarado en §9.
+
+Hay un test que impide reintroducir el problema original por descuido:
+`scheduled_shutdown_does_not_page`.
 
 ## 6.bis El envío de logs a Grafana Cloud
 
@@ -371,6 +515,9 @@ el cambio.
 | `logs-delivery-failing` | `DeliveryToHttpEndpoint.Success` | < 1 durante 10 min | crítico · el endpoint rechaza. Clave de acceso sin el `1706326:` delante, token sin `logs:write`, 429, endpoint del stack equivocado o petición por encima de 5 MiB |
 | `logs-in-error-bucket` | `DeliveryToS3.Records` | ≥ 1 en 5 min | crítico · Firehose agotó los reintentos y depositó registros en `s3://vetsoftware-dev-logs-backup-.../errors/`. Eso **no** está en Loki |
 | `logs-delivery-stalled` | `DeliveryToHttpEndpoint.DataFreshness` | > 15 min | advertencia · sigue reintentando. Loki va con retraso, todavía no hay pérdida |
+| `logs-no-delivery` | `DeliveryToHttpEndpoint.Records` (Sum) | < 1 durante 10 min, **`breaching`** | señal interna · **no notifica**. Traduce a CloudWatch el `absent()` de PromQL: aquí el silencio es la señal |
+| `logs-source-active` | `IncomingLogEvents` del log group de origen | ≥ 1 en 5 min | señal interna · **no notifica**. Invertida a propósito: en ALARM significa "el origen está produciendo logs", o sea que hay algo que entregar |
+| `logs-not-shipping` | compuesta: `ALARM(no-delivery) AND ALARM(source-active)` | — | crítico · **la única de las tres últimas que avisa**. No llega nada a Grafana Cloud teniendo algo que enviar |
 
 `DeliveryToS3.Records` se usa como medida de "hay objetos bajo el prefijo de
 error" a propósito: con `s3_backup_mode = "FailedDataOnly"` lo único que Firehose
@@ -378,8 +525,41 @@ escribe en ese bucket son los registros que no pudo entregar, y las métricas de
 S3 por prefijo son métricas de petición y se facturan. Esta es gratuita y llega
 antes.
 
-Las tres usan `treat_missing_data = "notBreaching"` por la misma razón que el
-resto: dev se apaga cada noche y sin tráfico Firehose no publica métrica.
+### El interruptor de hombre muerto, y su invariante de tiempos
+
+Las tres primeras alarmas son de proporción y de latencia: **las tres necesitan
+que Firehose intente algo para existir**. Si el stream muere, si la suscripción
+se borra o si el rol pierde el permiso, no hay intentos, no hay datapoints, y con
+`notBreaching` se quedan en un OK indistinguible del OK correcto. Ese es
+exactamente el modo de fallo que el módulo vino a cerrar.
+
+Por eso `logs-no-delivery` mide **volumen** en vez de proporción y trata el hueco
+como falla (`breaching`). Sola sonaría todas las noches, así que no notifica: la
+decisión de avisar la toma la compuesta, que además sabe si había algo que
+entregar. `delivery_failing` se queda en `notBreaching` a propósito —es una
+proporción, y su punto ciego lo cubre la compuesta—.
+
+**El invariante que hay que conservar si alguien toca los periodos:**
+`logs-source-active` evalúa **1 × 5 min** y `logs-no-delivery` **2 × 5 min**. La
+señal de vivacidad tiene que volver a OK —y cerrar la compuerta— **antes** de que
+la de volumen entre en ALARM. Con esos números quedan cinco minutos de margen.
+Si algún día llega un aviso a las 20:10, la corrección es **ampliar la de volumen
+a tres periodos, nunca alargar la vivacidad**: alargarla retrasaría también la
+detección del fallo real. Hay un assert del contrato de dev que compara las dos
+ventanas y falla si se invierten.
+
+Ese invariante importa aunque la ventana de mantenimiento cubra las 19:55–08:05 y
+haría invisible ese aviso: es la segunda línea de defensa, no la primera, y deja
+de haber red el día que alguien ponga `scheduled_shutdown_enabled = false` o
+lleve este módulo a un entorno sin ventana.
+
+Las seis alarmas **entran en la misma ventana de mantenimiento** que las de
+`modules/monitoring`: se pasan por nombre desde `environments/dev/main.tf`.
+Incluidas las dos señales internas, aunque no notifiquen — una ventana que sólo
+silenciara la compuesta dejaría a sus hijas cambiando de estado por debajo. Una
+alarma de este módulo fuera de la ventana devolvería el ruido nocturno desde un
+sitio que nadie revisa al mirar el módulo de monitoreo, así que el contrato del
+entorno lo afirma.
 
 ## 6.ter El sidecar de trazas y métricas
 
@@ -513,13 +693,15 @@ arrancar si está vacía.
 | `logs-delivery-failing` | `/aws/kinesisfirehose/vetsoftware-dev-logs`, flujo `HttpEndpointDelivery` | ahí está la respuesta literal del endpoint. Un 401 casi siempre es la clave de acceso pegada sin el `1706326:` delante, o un token sin `logs:write`; un 502, una petición por encima de 5 MiB |
 | `logs-in-error-bucket` | prefijo `errors/` del bucket de respaldo | los objetos son los eventos que faltan en Loki; el original sigue 14 días en `/ecs/vetsoftware-dev-backend/backend` |
 | `logs-delivery-stalled` | `DeliveryToHttpEndpoint.Success` de la misma ventana | si Success sigue en 1, es lentitud del endpoint y se resuelve solo dentro de las dos horas de reintento |
+| `logs-not-shipping` | que el stream y la suscripción `vetsoftware-dev-backend-to-grafana-cloud` existan y estén habilitados | es el único aviso que se activa por **ausencia**: no llega nada a Loki teniendo el origen logs que enviar. Si llega justo después de un apagado, es el invariante de tiempos de §6.bis y la corrección es ampliar `logs-no-delivery`, no la señal de vivacidad |
 
 ## 8. Verificación
 
 ```powershell
-# Contratos del módulo (8 runs) y del entorno
-cd modules/monitoring ; terraform test
-cd environments/dev   ; terraform test
+# Contratos: monitoreo (13 runs), envio de logs (7) y el entorno (5)
+cd modules/monitoring   ; terraform test
+cd modules/log_shipping ; terraform test
+cd environments/dev     ; terraform test
 
 # Gate completo antes de integrar
 ./scripts/quality/terraform-gate.ps1 -Mode full
@@ -548,9 +730,50 @@ contenedor.
   al que notificar. Es el hallazgo INF-37 de la auditoría y queda fuera del
   alcance de este cambio, que era el backend de dev. Habilitarlo es pasar los
   mismos inputs que dev.
-- **`RunningTaskCount` requiere Container Insights**, que en dev está apagado por
-  costo. La alarma `backend-no-running-tasks` existe detrás de
-  `container_insights_enabled` y se crea sola al encenderlo.
+- **Falta una compuerta de vivacidad para las alarmas de RDS y del backend.** Doce
+  alarmas de RDS y cuatro del servicio ECS vigilan umbrales sobre un recurso que
+  **suponen presente**, y ninguna sabe si lo está.
+
+  Ojo con cómo se formula la deuda, porque la formulación obvia es la
+  equivocada. **No falta una señal que avise de que dev no está**: dev se apaga a
+  voluntad, también en horario hábil, así que esa señal no debe alertar nunca. Lo
+  que falta es una señal de vivacidad que sirva de **compuerta**, para poder
+  escribir cada alarma como `síntoma AND entorno-debería-estar-arriba` en vez de
+  como `síntoma` a secas.
+
+  Con esa compuerta montada, `continuous_metric_missing_data` podría pasar a
+  `breaching` sin producir una tormenta: la ausencia de métricas dejaría de ser
+  ambigua porque habría algo que distinga "apagado" de "caído". Sin ella,
+  cambiar `treat_missing_data` es sustituir ceguera conocida por ruido diario.
+
+  Las dos vías, en orden de coste:
+
+  1. **Encender Container Insights.** Publica `DesiredTaskCount`, que es la
+     compuerta natural del backend y ya está cableada en
+     `backend-service-down`. Cuesta la ingesta de Container Insights, que es
+     justo lo que se apagó por presupuesto. No resuelve RDS.
+  2. **Una compuerta propia sin Container Insights.** El patrón está probado en
+     `modules/log_shipping`: `IncomingLogEvents` del log group del backend es
+     gratuito, no depende de Container Insights y significa literalmente "el
+     entorno está produciendo trabajo". Serviría de compuerta tanto para el
+     backend como para RDS.
+
+  Lo que **no** hay que hacer es tocar `treat_missing_data` directamente. Hay
+  aserciones en los contratos de dev y del módulo que lo impiden precisamente
+  para que esta decisión pase por aquí.
+- **Prod sigue con el `notBreaching` que heredó de dev.** Prod no tiene apagado
+  programado ni ventana de mantenimiento, así que la justificación nunca le
+  aplicó. `continuous_metric_missing_data = "breaching"` en
+  `environments/prod/main.tf` es un cambio de una línea, pero toca un root que no
+  entró en el alcance de este cambio.
+- **La ventana cubre el apagado programado, no el manual.** Dev se apaga a mano
+  en horario hábil y se enciende con el workflow *Start dev environment*; ninguna
+  expresión cron puede prever un apagado que no tiene hora. Por eso la ventana
+  resuelve el ruido nocturno pero no habilita `breaching` por sí sola.
+- **El formato exacto de la expresión de la mute rule no está verificado contra
+  la API.** El proveedor no valida `expression` ni `duration` en el lado cliente,
+  así que `plan` acepta cualquier cadena bien formada. La primera aplicación es
+  la que confirma que `cron(...)` y `PT12H10M` son lo que espera CloudWatch.
 - **Sin SLO ni error budget.** No hay latencia ni tasa de error por endpoint
   publicadas como métrica; todo lo anterior alerta sobre síntomas de
   infraestructura, no sobre experiencia de usuario.

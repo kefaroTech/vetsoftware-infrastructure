@@ -61,6 +61,25 @@ output "alerting" {
   value       = module.monitoring.alerting
 }
 
+# Cobertura del silencio programado. Se expone aparte del contrato de alertas
+# porque la pregunta que responde es distinta: no "que se vigila" sino "que se
+# calla y cuando". El numero de alarmas cubiertas tiene que incluir las de
+# log_shipping; si no las incluye, el apagado nocturno vuelve a producir ruido
+# desde un modulo que nadie mira al revisar el de monitoreo.
+output "maintenance_mute" {
+  description = "Ventanas de silencio programado de dev, alarmas cubiertas y reglas creadas."
+  value = {
+    enabled      = module.monitoring.alerting.maintenance_mute.enabled
+    timezone     = module.monitoring.alerting.maintenance_mute.timezone
+    windows      = module.monitoring.alerting.maintenance_mute.windows
+    muted_alarms = module.monitoring.alerting.maintenance_mute.muted_alarms
+    excluded     = module.monitoring.alerting.maintenance_mute.excluded_alarms
+    rule_arns    = module.monitoring.maintenance_mute_rule_arns
+    alarm_names  = module.monitoring.muted_alarm_names
+    log_shipping = var.log_shipping_enabled ? module.log_shipping[0].alarm_names : []
+  }
+}
+
 output "cost_profile" {
   value = {
     backend_cpu_mib    = var.backend_cpu

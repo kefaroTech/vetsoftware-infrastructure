@@ -512,3 +512,86 @@ variable "telemetry_sidecar_error_threshold" {
     error_message = "telemetry_sidecar_error_threshold debe ser al menos 1."
   }
 }
+
+# ---------------------------------------------------------------------------
+# Higiene de alertas: silencio programado y tratamiento de la ausencia de datos
+# ---------------------------------------------------------------------------
+
+# CloudWatch no tiene plantillas: AlarmDescription viaja identico en el disparo y
+# en la recuperacion, asi que la severidad NO puede vivir en el texto -de ahi
+# salio el ✅ que decia "CRITICO"-. Viaja en tags.Severity y en la eleccion de
+# topic, que es lo unico que enruta. El texto solo dice que se mide y donde
+# mirar.
+
+# Como tratar la ausencia de datos en las alarmas cuya metrica fluye de forma
+# continua mientras el recurso existe -CPU, memoria, conexiones, disco, latencia,
+# ocupacion del cache-. Las metricas que por diseno solo existen cuando hay error
+# -paradas de tarea, comandos rechazados, errores de log- NO usan esta variable:
+# quedan fijas en notBreaching, que es el criterio literal de AWS para ellas.
+#
+# El default se queda en notBreaching a proposito. "breaching" solo es honesto
+# cuando el recurso esta encendido siempre o cuando TODA su ventana de apagado
+# esta cubierta por una mute rule. En dev no se cumple: el apagado de las 20:00
+# esta programado, pero el encendido es manual -workflow "Start dev
+# environment"-, asi que el entorno puede pasar horas habiles apagado sin que
+# ninguna ventana lo prevea. Ver docs/ALERTAS_OPERATIVAS.md.
+variable "continuous_metric_missing_data" {
+  description = "Tratamiento de la ausencia de datos en las alarmas de metricas de flujo continuo; breaching solo si el recurso nunca se apaga fuera de una ventana silenciada."
+  type        = string
+  default     = "notBreaching"
+
+  validation {
+    condition     = contains(["notBreaching", "breaching", "ignore", "missing"], var.continuous_metric_missing_data)
+    error_message = "continuous_metric_missing_data debe ser notBreaching, breaching, ignore o missing."
+  }
+}
+
+# Ventanas de mantenimiento planificado en las que las alarmas del entorno no
+# notifican. Es el recurso `aws_cloudwatch_alarm_mute_rule`, disponible desde el
+# proveedor AWS 6.x, cuyo escenario documentado es exactamente este: silenciar un
+# apagado programado sin apagar la alarma. Al terminar la ventana CloudWatch
+# vuelve a evaluar y re-notifica lo que siga mal.
+#
+# Vacio -el default- no crea ninguna regla: prod no tiene apagado programado y no
+# debe heredar silencio que nadie pidio.
+variable "maintenance_mute_windows" {
+  description = "Ventanas de silencio programado por nombre; vacio no crea ninguna regla y deja todas las alarmas notificando siempre."
+  type = map(object({
+    expression  = string
+    duration    = string
+    description = optional(string, "")
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for window in var.maintenance_mute_windows :
+      can(regex("^(cron|rate)\\(.+\\)$", window.expression))
+    ])
+    error_message = "La expresion de cada ventana debe ser cron(...) o rate(...), el mismo formato que usa scheduled_shutdown."
+  }
+
+  validation {
+    condition = alltrue([
+      for window in var.maintenance_mute_windows :
+      can(regex("^P(T?[0-9]+[DHMS])+$", window.duration))
+    ])
+    error_message = "La duracion de cada ventana debe ser ISO-8601 -por ejemplo PT12H10M-."
+  }
+}
+
+variable "maintenance_mute_timezone" {
+  description = "Zona horaria de las ventanas de silencio; debe coincidir con la del apagado programado o la ventana se corre."
+  type        = string
+  default     = "America/Bogota"
+}
+
+# Alarmas de otros modulos que comparten la misma ventana de mantenimiento. Se
+# reciben por nombre y no por referencia para no invertir la dependencia: quien
+# cablea el entorno sabe que log_shipping vigila el mismo ambiente que se apaga,
+# el modulo de monitoreo no tiene por que saberlo.
+variable "additional_muted_alarm_names" {
+  description = "Alarmas ajenas al modulo que deben silenciarse en las mismas ventanas -por ejemplo las de log_shipping-."
+  type        = list(string)
+  default     = []
+}
