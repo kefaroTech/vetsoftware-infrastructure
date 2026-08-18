@@ -48,6 +48,10 @@ jobs:
       TF_VAR_login_url: ${{ vars.LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      # El circuito de imagen ejecuta plan y apply completos del root de dev, asi
+      # que tambien pasa por la validacion de grafana_logs_access_key. Secret de
+      # repositorio, el mismo que usan plan, apply y drift.
+      TF_VAR_grafana_logs_access_key: ${{ secrets.TF_VAR_GRAFANA_LOGS_ACCESS_KEY }}
 
     steps:
       - name: Check out immutable IaC revision
@@ -60,6 +64,12 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
+
+      # El circuito de imagen planifica el root completo: si su endpoint no es el
+      # canonico, el plan diverge del que se aprobo en el PR.
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment dev -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-dev)'
 
       - name: Validate AWS plan configuration
         shell: pwsh
@@ -106,6 +116,10 @@ jobs:
       TF_VAR_login_url: ${{ vars.LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      # El circuito de imagen ejecuta plan y apply completos del root de dev, asi
+      # que tambien pasa por la validacion de grafana_logs_access_key. Secret de
+      # repositorio, el mismo que usan plan, apply y drift.
+      TF_VAR_grafana_logs_access_key: ${{ secrets.TF_VAR_GRAFANA_LOGS_ACCESS_KEY }}
 
     steps:
       - name: Check out immutable IaC revision
@@ -118,6 +132,10 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
+
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment dev -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-dev)'
 
       - name: Validate AWS apply configuration
         shell: pwsh

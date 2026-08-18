@@ -38,6 +38,9 @@ jobs:
       TF_VAR_login_url: ${{ vars.LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      # El drift ejecuta un plan completo: la validacion de grafana_logs_access_key
+      # tambien lo detiene. Secret de repositorio, compartido con plan y apply.
+      TF_VAR_grafana_logs_access_key: ${{ secrets.TF_VAR_GRAFANA_LOGS_ACCESS_KEY }}
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 
@@ -46,6 +49,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Un endpoint divergente aqui no rompe el ciclo: produce deriva que no existe,
+      # que es peor porque parece un hallazgo. Se verifica antes de tocar AWS.
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment dev -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-dev)'
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1

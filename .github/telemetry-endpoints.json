@@ -1,0 +1,32 @@
+{
+  "$schema_note": "Valor canonico y versionado del endpoint OTLP de Grafana Cloud por ambiente. Lo consume .github/scripts/assert-telemetry-endpoint.ps1 en todo job que exporte TF_VAR_grafana_otlp_endpoint. Este archivo es la unica fuente revisable en pull request; las variables de GitHub no lo son.",
+  "why": "El plan de un PR corre SIN environment y lee variables de repositorio con prefijo (DEV_GRAFANA_OTLP_ENDPOINT); apply, drift y el circuito de imagen corren CON environment y leen GRAFANA_OTLP_ENDPOINT sin prefijo. Son dos origenes independientes que ya divergieron una vez (us-east-0 frente a us-east-3): lo aprobado en el plan no era lo que se aplicaba, y el workflow de drift reportaba deriva falsa.",
+  "normalization": "La barra final es irrelevante: el root de dev aplica trimsuffix(var.grafana_otlp_endpoint, \"/\") en locals.tf y el de prod en main.tf. El verificador normaliza igual antes de comparar.",
+  "environments": {
+    "dev": {
+      "otlp_endpoint": "https://otlp-gateway-prod-us-east-3.grafana.net/otlp",
+      "grafana_stack": "vastcoyote3439",
+      "grafana_cluster": "prod-us-east-3",
+      "verified_on": "2026-08-18",
+      "verified_with": "gh variable list (repositorio y environments iac-plan-dev / iac-apply-dev)",
+      "sources": [
+        "vars.DEV_GRAFANA_OTLP_ENDPOINT (repositorio) - lo lee el plan de un pull request, que corre sin environment",
+        "vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-dev) - drift y la fase de plan del circuito de imagen",
+        "vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-dev) - apply y la fase de apply del circuito de imagen",
+        "environments/dev/terraform.tfvars.example - referencia para el ciclo local"
+      ]
+    },
+    "prod": {
+      "otlp_endpoint": null,
+      "grafana_stack": null,
+      "grafana_cluster": null,
+      "verified_on": "2026-08-18",
+      "verified_with": "gh variable list - no existe ninguna variable PROD_*",
+      "note": "No hay stack productivo de Grafana Cloud ni variables PROD_* configuradas. Sin valor canonico el verificador avisa y deja pasar el job: fallar aqui bloquearia el ciclo de prod por algo que todavia no se ha decidido. Al crear el stack, fijar el endpoint aqui y el check pasa a ser bloqueante solo. environments/prod/terraform.tfvars.example conserva un us-east-0 de marcador que hay que corregir en ese mismo momento.",
+      "sources": [
+        "vars.PROD_GRAFANA_OTLP_ENDPOINT (repositorio) - sin definir",
+        "vars.GRAFANA_OTLP_ENDPOINT (environments iac-plan-prod / iac-apply-prod) - sin definir"
+      ]
+    }
+  }
+}

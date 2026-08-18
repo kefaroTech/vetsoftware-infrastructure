@@ -143,6 +143,14 @@ valores distintos: `DEV_AWS_ACCOUNT_ID`, `PROD_AWS_ACCOUNT_ID`, y asi con el res
 Son una copia de las del Environment, que siguen sirviendo a drift, costos y
 despliegue de imagen: **al cambiar un valor hay que actualizar los dos sitios**.
 
+Nada en GitHub obliga a que las dos copias coincidan, y `GRAFANA_OTLP_ENDPOINT` ya
+divergió una vez: el plan aprobaba un endpoint y el apply escribía otro, ademas de
+producir deriva falsa. Por eso su valor canonico esta versionado en
+`.github/telemetry-endpoints.json` y todo job que lo consuma ejecuta
+`.github/scripts/assert-telemetry-endpoint.ps1` justo despues del checkout, antes de
+configurar credenciales de AWS. El detalle, el valor correcto y el procedimiento para
+cambiar de stack estan en [Endpoint OTLP de Grafana Cloud](TELEMETRIA_OTLP.md).
+
 Configure en plan y apply del ambiente correspondiente:
 
 - `AWS_ACCOUNT_ID`
@@ -185,6 +193,36 @@ Configure unicamente en los Environments de apply:
 - `APPLICATION_SECRETS_JSON`
 - `CLOUDFLARE_TUNNEL_TOKEN`
 - `GRAFANA_SECRETS_JSON`
+
+### El unico secret que va a nivel de repositorio: `TF_VAR_GRAFANA_LOGS_ACCESS_KEY`
+
+El envio durable de logs viene encendido en dev (`log_shipping_enabled = true`) y la
+validacion de `grafana_logs_access_key` —formato `<loki_instance_id>:<token>`— corre
+**en tiempo de plan**, no de apply. Sin ese valor, el ciclo muere con
+`Invalid value for variable` antes de leer nada de AWS: no es un fallo del apply que
+se pueda dejar para despues, tumba el plan del pull request.
+
+A diferencia de los tres anteriores, **este secret va en el scope de repositorio, no
+en un Environment**. El motivo es el mismo que obliga a prefijar las variables del
+plan: en un `pull_request` el job corre sin Environment y no puede leer los secrets de
+`iac-plan-dev`. Un secret de repositorio si lo ven los cinco jobs de dev que ejecutan
+Terraform —plan, apply, drift y las dos fases de `deploy-backend-dev`—, porque los
+jobs con Environment tambien heredan los del repositorio.
+
+No lleva prefijo `DEV_` porque prod no tiene envio durable de logs: no hay con que
+chocar en un scope plano.
+
+```powershell
+gh secret set TF_VAR_GRAFANA_LOGS_ACCESS_KEY --repo kefaroTech/vetsoftware-infrastructure
+```
+
+**Debe existir antes de mergear el trabajo de log shipping.** El valor no es el token
+a secas; su formato exacto, el instance ID de Loki y el scope de la Cloud Access
+Policy estan en [Gestion de secretos](GESTION_DE_SECRETOS.md).
+
+El gate local no detecta que falte, porque el ciclo local toma el valor de
+`environments/dev/terraform.tfvars` en disco. El primer sitio donde se nota es el plan
+del pull request.
 
 ## Primera ejecucion
 
