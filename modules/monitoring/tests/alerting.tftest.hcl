@@ -82,6 +82,26 @@ variables {
   cache_maximum_data_storage_gb    = 1
   cache_maximum_ecpu_per_second    = 1000
   alloy_instance_ids               = []
+
+  # Las mismas dos ventanas que cablea environments/dev. Sin ellas la regla de
+  # silencio no se crea y las afirmaciones de higiene no verificarian nada.
+  maintenance_mute_windows = {
+    nightly = {
+      expression = "cron(55 19 ? * * *)"
+      duration   = "PT12H10M"
+    }
+    weekend = {
+      expression = "cron(0 8 ? * SAT,SUN *)"
+      duration   = "PT12H"
+    }
+  }
+
+  # Las tres alarmas de log_shipping, que vigilan el mismo entorno que se apaga.
+  additional_muted_alarm_names = [
+    "vetsoftware-dev-logs-delivery-failing",
+    "vetsoftware-dev-logs-in-error-bucket",
+    "vetsoftware-dev-logs-delivery-stalled",
+  ]
 }
 
 // La autorizacion de publicacion de los topics se verifica en
@@ -134,6 +154,12 @@ run "severity_routing_is_separated" {
 # como falla. El apagado programado detiene la instancia cada noche entre
 # semana, asi que esa configuracion disparaba una alerta diaria a las 20:15 y
 # entrenaba al equipo a ignorar el canal.
+#
+# El silencio de esa ventana ya NO se compra con treat_missing_data: lo compra
+# una mute rule. Lo que este run sigue impidiendo es que alguien mueva a
+# "breaching" una alarma de metrica continua sin resolver antes el problema de
+# fondo, que es que dev tambien pasa horas habiles apagado -el arranque es
+# manual- y ninguna ventana programada puede preverlo.
 run "scheduled_shutdown_does_not_page" {
   command = plan
 
@@ -146,7 +172,7 @@ run "scheduled_shutdown_does_not_page" {
       aws_cloudwatch_metric_alarm.database_connections_critical.treat_missing_data == "notBreaching",
       aws_cloudwatch_metric_alarm.backend_memory_critical.treat_missing_data == "notBreaching",
     ])
-    error_message = "Ninguna alarma puede tratar la falta de datos como falla: el entorno se apaga cada noche a proposito."
+    error_message = "Ninguna alarma de metrica continua puede tratar la falta de datos como falla mientras dev pueda estar apagado fuera de una ventana silenciada."
   }
 
   # La de creditos de CPU es la excepcion deliberada. Parar la instancia borra el
@@ -156,6 +182,132 @@ run "scheduled_shutdown_does_not_page" {
   assert {
     condition     = aws_cloudwatch_metric_alarm.database_cpu_credits.treat_missing_data == "ignore"
     error_message = "La alarma de creditos de CPU debe usar ignore: con notBreaching el apagado nocturno la resuelve en falso."
+  }
+
+  # Las metricas que solo existen cuando hay error no dependen de la variable:
+  # es el criterio literal de AWS para ellas y no debe poder cambiarse desde el
+  # root por accidente.
+  assert {
+    condition = alltrue([
+      aws_cloudwatch_metric_alarm.cloudflare_tunnel_errors.treat_missing_data == "notBreaching",
+      aws_cloudwatch_metric_alarm.backend_task_restarts[0].treat_missing_data == "notBreaching",
+      aws_cloudwatch_metric_alarm.backend_crash_loop[0].treat_missing_data == "notBreaching",
+      aws_cloudwatch_metric_alarm.backend_spot_interruptions[0].treat_missing_data == "notBreaching",
+      aws_cloudwatch_metric_alarm.cache_throttled[0].treat_missing_data == "notBreaching",
+      aws_cloudwatch_metric_alarm.cache_authentication_failures[0].treat_missing_data == "notBreaching",
+    ])
+    error_message = "Las metricas que por diseno solo existen cuando hay error deben quedar fijas en notBreaching."
+  }
+}
+
+# Higiene de alertas. Las tres reglas de esta seccion son las que se degradan
+# solas: se copia un recurso existente y con el viajan el ok_actions y el
+# prefijo de severidad.
+run "recovery_is_not_notified_and_severity_is_not_in_the_text" {
+  command = plan
+
+  # CloudWatch no tiene plantillas: AlarmDescription viaja identico en el disparo
+  # y en la recuperacion. Un texto que empieza por "CRITICO ·" produce un ✅ que
+  # dice CRITICO, que es lo que llego a Slack. La severidad viaja en el tag y en
+  # la eleccion de topic, que es lo unico que enruta.
+  assert {
+    condition = !anytrue([
+      for description in [
+        aws_cloudwatch_metric_alarm.database_cpu.alarm_description,
+        aws_cloudwatch_metric_alarm.database_cpu_critical.alarm_description,
+        aws_cloudwatch_metric_alarm.database_memory_critical.alarm_description,
+        aws_cloudwatch_metric_alarm.database_cpu_credits.alarm_description,
+        aws_cloudwatch_metric_alarm.backend_memory_critical.alarm_description,
+        aws_cloudwatch_metric_alarm.cloudflare_tunnel_errors.alarm_description,
+        aws_cloudwatch_metric_alarm.backend_crash_loop[0].alarm_description,
+        aws_cloudwatch_metric_alarm.cache_throttled[0].alarm_description,
+        aws_cloudwatch_composite_alarm.database_saturated[0].alarm_description,
+        aws_cloudwatch_composite_alarm.backend_degraded[0].alarm_description,
+        ] : anytrue([
+          strcontains(description, "CRITICO"),
+          strcontains(description, "ADVERTENCIA"),
+      ])
+    ])
+    error_message = "El texto de una alarma no puede llevar severidad: viaja identico en el OK y produce un ✅ que dice CRITICO."
+  }
+
+  # La severidad sigue existiendo, solo que donde si se puede leer por separado.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.database_cpu_critical.tags["Severity"] == "critical" &&
+      aws_cloudwatch_metric_alarm.database_cpu.tags["Severity"] == "warning"
+    )
+    error_message = "La severidad debe seguir viajando en tags.Severity, que es lo que no se confunde con el estado."
+  }
+
+  # A los canales que lee una persona no se manda la recuperacion: es el default
+  # de Alertmanager para Slack y correo, y en la taxonomia de Google la
+  # recuperacion es Logging, no Alert. El OK sigue en el historial y en el panel.
+  assert {
+    condition = alltrue([
+      try(length(aws_cloudwatch_metric_alarm.database_cpu.ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.database_memory_critical.ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.database_cpu_credits.ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.backend_memory_critical.ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.cloudflare_tunnel_errors.ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.backend_crash_loop[0].ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_metric_alarm.cache_authentication_failures[0].ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_composite_alarm.database_saturated[0].ok_actions), 0) == 0,
+      try(length(aws_cloudwatch_composite_alarm.backend_degraded[0].ok_actions), 0) == 0,
+    ])
+    error_message = "Ninguna alarma puede notificar su recuperacion a un canal que lee una persona."
+  }
+
+  assert {
+    condition     = output.alerting.notify_on_recovery == false
+    error_message = "El contrato debe declarar que la recuperacion no se notifica."
+  }
+}
+
+# El silencio del apagado deja de ser un efecto colateral de treat_missing_data y
+# pasa a ser una ventana explicita. Lo que hay que impedir es que la ventana se
+# quede corta: una alarma nueva fuera de la regla vuelve a producir el ruido
+# nocturno, y una alarma de log_shipping fuera de la regla lo produce desde un
+# modulo que nadie mira al revisar este.
+run "maintenance_window_silences_the_whole_environment" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_alarm_mute_rule.maintenance) == 2 &&
+      aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].name == "vetsoftware-dev-mute-nightly" &&
+      aws_cloudwatch_alarm_mute_rule.maintenance["weekend"].name == "vetsoftware-dev-mute-weekend"
+    )
+    error_message = "Deben existir las dos ventanas: la nocturna y la del fin de semana, que la nocturna no cubre."
+  }
+
+  # Sin zona horaria la ventana se evalua en UTC y en Bogota silenciaria de 15:00
+  # a 03:00: justo la jornada laboral y nada del apagado.
+  assert {
+    condition = alltrue([
+      for rule in aws_cloudwatch_alarm_mute_rule.maintenance :
+      rule.rule[0].schedule[0].timezone == "America/Bogota"
+    ])
+    error_message = "Las ventanas deben declarar America/Bogota; en UTC silencian la jornada laboral y no el apagado."
+  }
+
+  # La alarma de recuperacion de EC2 dispara arn:aws:automate:...:ec2:recover.
+  # Silenciarla no callaria un mensaje: cancelaria la remediacion.
+  assert {
+    condition = alltrue([
+      contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), "vetsoftware-dev-database-memory-exhausted"),
+      contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), "vetsoftware-dev-backend-crash-loop"),
+      contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), "vetsoftware-dev-database-saturated"),
+      contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), "vetsoftware-dev-logs-delivery-failing"),
+      !contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), "vetsoftware-dev-alloy-0-system-recovery"),
+    ])
+    error_message = "La ventana debe cubrir alarmas, compuestas y las de log_shipping, y dejar fuera la que dispara la recuperacion automatica de EC2."
+  }
+
+  # Limite duro del servicio. Pasarlo no se ve en plan, se ve en el apply.
+  assert {
+    condition     = output.alerting.maintenance_mute.muted_alarms <= 100
+    error_message = "Una mute rule admite como maximo 100 alarmas; hay que partirla en varias reglas antes de llegar ahi."
   }
 }
 
@@ -333,5 +485,79 @@ run "cache_alarms_derive_from_the_configured_limits" {
   assert {
     condition     = aws_cloudwatch_metric_alarm.cache_throttled[0].dimensions["clusterId"] == "vetsoftware-dev-valkey"
     error_message = "Las alarmas del cache serverless deben usar la dimension clusterId."
+  }
+}
+
+# El interruptor de hombre muerto del backend vive detras de Container Insights,
+# que en dev y en prod esta apagado por costo. Es decir: hoy no se crea, y sin un
+# run que lo encienda explicitamente nada verificaria que esta bien construido.
+#
+# Importa mas de lo normal porque su version anterior era una sola alarma sobre
+# RunningTaskCount con treat_missing_data = "breaching", que habria sonado cada
+# vez que alguien apaga dev a mano -algo deliberado y frecuente-. Estaba inerte y
+# por eso no dolia; encender la bandera la habria convertido en ruido diario.
+run "the_backend_dead_mans_switch_ignores_a_deliberate_shutdown" {
+  command = plan
+
+  variables {
+    container_insights_enabled = true
+  }
+
+  # Ninguna de las dos senales notifica por su cuenta. Si alguien le devuelve las
+  # acciones a la de tareas corriendo, cada apagado vuelve a sonar.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.backend_no_running_tasks[0].actions_enabled == false &&
+      aws_cloudwatch_metric_alarm.backend_tasks_wanted[0].actions_enabled == false &&
+      aws_cloudwatch_composite_alarm.backend_service_down[0].actions_enabled == true
+    )
+    error_message = "Solo la compuesta puede notificar: sus dos hijas por separado confundirian un apagado deliberado con una caida."
+  }
+
+  # La oposicion de los dos treat_missing_data ES el mecanismo. El hueco de
+  # tareas corriendo significa "no hay backend"; el de tareas pedidas significa
+  # "nadie las esta pidiendo", que es exactamente lo que pasa en un apagado.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.backend_no_running_tasks[0].treat_missing_data == "breaching" &&
+      aws_cloudwatch_metric_alarm.backend_tasks_wanted[0].treat_missing_data == "notBreaching" &&
+      aws_cloudwatch_metric_alarm.backend_tasks_wanted[0].metric_name == "DesiredTaskCount"
+    )
+    error_message = "El interruptor exige que el hueco de tareas corriendo sea falla y el de tareas pedidas sea calma; invertirlos hace sonar cada apagado."
+  }
+
+  # La compuerta tiene que cerrarse ANTES de que se abra la senal de falla, o el
+  # apagado produce un aviso en la transicion. Dos periodos contra cinco dejan
+  # tres minutos de margen. Si algun dia llega ese aviso, la correccion es
+  # ampliar la senal de falla, nunca alargar la compuerta.
+  assert {
+    condition = (
+      output.alerting.backend_dead_mans_switch.wanted_range_seconds <
+      output.alerting.backend_dead_mans_switch.running_range_seconds
+    )
+    error_message = "La ventana de la compuerta debe ser mas corta que la de la senal de falla o el apagado produce un aviso en la transicion."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_cloudwatch_composite_alarm.backend_service_down[0].alarm_rule, "AND") &&
+      strcontains(aws_cloudwatch_composite_alarm.backend_service_down[0].alarm_rule, "vetsoftware-dev-backend-no-running-tasks") &&
+      strcontains(aws_cloudwatch_composite_alarm.backend_service_down[0].alarm_rule, "vetsoftware-dev-backend-tasks-wanted")
+    )
+    error_message = "La compuesta debe exigir las dos senales con AND: sin la compuerta vuelve a ser una alarma sobre la ausencia."
+  }
+
+  # Las tres entran en la ventana de mantenimiento. La compuerta ya las callaria
+  # sola durante el apagado programado, pero una ventana que las omitiera dejaria
+  # a las hijas cambiando de estado por debajo.
+  assert {
+    condition = alltrue([
+      for alarm in [
+        "vetsoftware-dev-backend-no-running-tasks",
+        "vetsoftware-dev-backend-tasks-wanted",
+        "vetsoftware-dev-backend-service-down",
+      ] : contains(tolist(aws_cloudwatch_alarm_mute_rule.maintenance["nightly"].mute_targets[0].alarm_names), alarm)
+    ])
+    error_message = "Las tres piezas del interruptor deben entrar en la ventana de mantenimiento."
   }
 }

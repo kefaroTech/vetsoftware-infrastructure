@@ -20,9 +20,13 @@
 # durable que todo lo demas. Sus expresiones exactas estan en
 # docs/ALERTAS_OPERATIVAS.md y viven como reglas de Grafana Cloud, no aqui.
 #
-# treat_missing_data es "notBreaching" en las dos, como en el resto del entorno:
-# dev se apaga cada noche y una alarma que lea "sin datos" como falla se
-# convierte en una pagina diaria que nadie atiende.
+# treat_missing_data queda fijo en "notBreaching" en las dos, y aqui si es el
+# criterio literal de AWS y no un parche por el apagado nocturno: las dos
+# metricas nacen de un filtro de log y de un archivo de eventos, o sea que por
+# diseno solo existen cuando pasa lo que cuentan.
+#
+# Sin `ok_actions` y sin severidad en el texto: ver la cabecera de
+# alarms_database.tf.
 
 locals {
   telemetry_alarms_enabled = (
@@ -139,7 +143,7 @@ resource "aws_cloudwatch_metric_alarm" "telemetry_sidecar_stopped" {
   count = local.telemetry_alarms_enabled ? 1 : 0
 
   alarm_name          = "${var.name}-telemetry-sidecar-stopped"
-  alarm_description   = "CRITICO · El sidecar colector se detuvo con la tarea todavia corriendo. Las trazas y metricas dejaron de tener cola durable y ECS no va a reemplazarlo: hay que forzar un despliegue. La causa esta en ${var.telemetry_sidecar_log_group_name}."
+  alarm_description   = "El sidecar colector se detuvo con la tarea todavia corriendo: las trazas y metricas dejaron de tener cola durable y ECS no va a reemplazarlo, hay que forzar un despliegue. Mirar ${var.telemetry_sidecar_log_group_name}."
   namespace           = var.custom_metric_namespace
   metric_name         = "TelemetrySidecarStopped"
   statistic           = "Sum"
@@ -149,7 +153,6 @@ resource "aws_cloudwatch_metric_alarm" "telemetry_sidecar_stopped" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   tags = merge(var.tags, { Severity = "critical" })
 }
@@ -183,7 +186,7 @@ resource "aws_cloudwatch_metric_alarm" "telemetry_sidecar_errors" {
   count = local.telemetry_alarms_enabled ? 1 : 0
 
   alarm_name          = "${var.name}-telemetry-sidecar-errors"
-  alarm_description   = "ADVERTENCIA · El sidecar colector lleva ${var.telemetry_sidecar_error_threshold} o mas errores en diez minutos. Sigue vivo y reintentando, pero la cola en disco esta creciendo: revise ${var.telemetry_sidecar_log_group_name}."
+  alarm_description   = "El sidecar colector lleva ${var.telemetry_sidecar_error_threshold} o mas errores en diez minutos: sigue vivo y reintentando, pero la cola en disco esta creciendo. Mirar ${var.telemetry_sidecar_log_group_name}."
   namespace           = var.custom_metric_namespace
   metric_name         = "TelemetrySidecarErrors"
   statistic           = "Sum"
@@ -194,7 +197,6 @@ resource "aws_cloudwatch_metric_alarm" "telemetry_sidecar_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   tags = merge(var.tags, { Severity = "warning" })
 }

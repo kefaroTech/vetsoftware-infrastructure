@@ -607,3 +607,50 @@ variable "telemetry_sidecar_cpu" {
   type        = number
   default     = 64
 }
+
+# Ventanas en las que las alarmas de dev no notifican. No apagan la alarma: la
+# alarma sigue evaluando y se ve en el panel, lo que se suspende son sus
+# acciones. Al cerrarse la ventana CloudWatch re-evalua y re-notifica lo que siga
+# mal, asi que callar no equivale a perder.
+#
+# El reparto sale del apagado real del entorno -ECS a las 20:00 y RDS a las
+# 20:15, de lunes a viernes- mas el hecho de que dev no se enciende solo: el
+# encendido es el workflow "Start dev environment", asi que los fines de semana
+# el ambiente esta apagado entero.
+#
+#   nightly : 19:55 -> 08:05 del dia siguiente, todos los dias. Empieza cinco
+#             minutos antes del primer schedule para no depender del segundo
+#             exacto en que ECS baja a cero.
+#   weekend : 08:00 -> 20:00 de sabado y domingo, que es el hueco que la ventana
+#             nocturna no cubre.
+#
+# Union: dev solo notifica de lunes a viernes entre las 08:05 y las 19:55, que es
+# cuando alguien lo esta usando y puede actuar. Fuera de ahi el estado sigue
+# siendo visible en CloudWatch, simplemente no despierta a nadie.
+#
+# Lo que estas ventanas NO cubren, y hay que tenerlo presente antes de mover
+# ninguna alarma a treat_missing_data = "breaching": dev apagado en horario
+# habil. Pasa -el arranque es manual- y ninguna ventana programada puede
+# preverlo.
+variable "maintenance_mute_windows" {
+  description = "Ventanas de silencio programado de las alarmas de dev; se aplican solo si scheduled_shutdown_enabled es true."
+  type = map(object({
+    expression  = string
+    duration    = string
+    description = optional(string, "")
+  }))
+
+  default = {
+    nightly = {
+      expression  = "cron(55 19 ? * * *)"
+      duration    = "PT12H10M"
+      description = "Apagado programado de dev: ECS a las 20:00 y RDS a las 20:15, hasta el arranque manual de la manana."
+    }
+
+    weekend = {
+      expression  = "cron(0 8 ? * SAT,SUN *)"
+      duration    = "PT12H"
+      description = "Fin de semana: dev queda apagado entero porque el arranque es manual y no se ejecuta."
+    }
+  }
+}

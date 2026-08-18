@@ -8,12 +8,15 @@
 # piso es una base que se cae en los proximos minutos.
 #
 # Por eso escalan al topico critico aunque cada hija por separado no lo haga.
+#
+# Sin `ok_actions`: la recuperacion de una correlacion tampoco pide accion, y el
+# texto no lleva severidad porque viajaria identico en el OK.
 
 resource "aws_cloudwatch_composite_alarm" "database_saturated" {
   count = local.notification_topic_enabled ? 1 : 0
 
   alarm_name        = "${var.name}-database-saturated"
-  alarm_description = "CRITICO · Correlacion de saturacion en RDS: dos o mas señales de agotamiento activas a la vez. La base no esta lenta, esta a punto de caerse."
+  alarm_description = "Correlacion de saturacion en RDS: dos o mas senales de agotamiento activas a la vez. La base no esta lenta, esta a punto de caerse. Mirar cual par de alarmas hijas esta en ALARM."
 
   alarm_rule = join(" OR ", [
     "(ALARM(\"${aws_cloudwatch_metric_alarm.database_cpu.alarm_name}\") AND ALARM(\"${aws_cloudwatch_metric_alarm.database_connections.alarm_name}\"))",
@@ -24,7 +27,6 @@ resource "aws_cloudwatch_composite_alarm" "database_saturated" {
 
   actions_enabled = true
   alarm_actions   = local.critical_actions
-  ok_actions      = local.critical_actions
 
   tags = merge(var.tags, { Severity = "critical" })
 }
@@ -36,13 +38,12 @@ resource "aws_cloudwatch_composite_alarm" "backend_degraded" {
   count = local.notification_topic_enabled ? 1 : 0
 
   alarm_name        = "${var.name}-backend-degraded"
-  alarm_description = "CRITICO · CPU y memoria del backend altas a la vez sobre una unica tarea sin capacidad de escalar. El siguiente pico no lo absorbe nadie."
+  alarm_description = "CPU y memoria del backend altas a la vez sobre una unica tarea sin capacidad de escalar: el siguiente pico no lo absorbe nadie. Mirar las dos alarmas hijas y el GC de la JVM en Grafana."
 
   alarm_rule = "ALARM(\"${aws_cloudwatch_metric_alarm.backend_cpu.alarm_name}\") AND ALARM(\"${aws_cloudwatch_metric_alarm.backend_memory.alarm_name}\")"
 
   actions_enabled = true
   alarm_actions   = local.critical_actions
-  ok_actions      = local.critical_actions
 
   tags = merge(var.tags, { Severity = "critical" })
 }

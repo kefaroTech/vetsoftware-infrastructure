@@ -71,4 +71,4 @@ jobs:
         shell: pwsh
         run: >-
           ./scripts/quality/terraform-gate.ps1 -Mode ci
-          -Roots environments/dev,bootstrap,modules/ecr,modules/github_iac_roles
+          -Roots environments/dev,bootstrap,modules/ecr,modules/github_iac_roles,modules/log_shipping

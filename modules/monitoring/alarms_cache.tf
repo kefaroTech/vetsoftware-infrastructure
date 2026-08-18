@@ -7,12 +7,25 @@
 #
 # Los limites de dev son deliberadamente bajos (1 GB y 1.000 ECPU/s) para fijar
 # el costo, lo que hace que tocarlos sea plausible y no teorico.
+#
+# Sin `ok_actions` ni severidad en el texto: ver la cabecera de
+# alarms_database.tf.
+#
+# Nota sobre la ausencia de datos. ElastiCache Serverless NO se apaga con el
+# resto del entorno -no existe stop para serverless-, asi que la justificacion
+# del apagado nocturno nunca aplico a este fichero. Aun asi las dos alarmas de
+# ocupacion siguen `continuous_metric_missing_data` en lugar de forzarse a
+# "breaching": con el trafico practicamente nulo de dev no esta verificado que
+# ElastiCacheProcessingUnits publique ceros en vez de no publicar, y una alarma
+# permanentemente en ALARM seria peor que la ceguera que corrige.
+# ThrottledCmds y AuthenticationFailures si quedan fijas en notBreaching: son
+# metricas que por diseno solo existen cuando hay error.
 
 resource "aws_cloudwatch_metric_alarm" "cache_data_storage" {
   count = local.cache_alarms_enabled && var.cache_maximum_data_storage_gb > 0 ? 1 : 0
 
   alarm_name          = "${var.name}-cache-storage-high"
-  alarm_description   = "ADVERTENCIA · El cache ocupa mas del ${var.cache_utilization_warning_percent}% de su limite de ${var.cache_maximum_data_storage_gb} GB. Al llegar al tope empieza a expulsar claves."
+  alarm_description   = "BytesUsedForCache de ${var.cache_name} por encima del ${var.cache_utilization_warning_percent}% de su limite de ${var.cache_maximum_data_storage_gb} GB; al llegar al tope empieza a expulsar claves. Mirar BytesUsedForCache y Evictions."
   namespace           = "AWS/ElastiCache"
   metric_name         = "BytesUsedForCache"
   statistic           = "Average"
@@ -21,9 +34,8 @@ resource "aws_cloudwatch_metric_alarm" "cache_data_storage" {
   datapoints_to_alarm = 2
   threshold           = local.cache_data_storage_warning_bytes
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     clusterId = var.cache_name
@@ -36,7 +48,7 @@ resource "aws_cloudwatch_metric_alarm" "cache_ecpu" {
   count = local.cache_alarms_enabled && var.cache_maximum_ecpu_per_second > 0 ? 1 : 0
 
   alarm_name          = "${var.name}-cache-ecpu-high"
-  alarm_description   = "ADVERTENCIA · El cache consume mas del ${var.cache_utilization_warning_percent}% de su limite de ${var.cache_maximum_ecpu_per_second} ECPU/s. Pasado el tope, ElastiCache empieza a rechazar comandos."
+  alarm_description   = "ElastiCacheProcessingUnits de ${var.cache_name} por encima del ${var.cache_utilization_warning_percent}% de su limite de ${var.cache_maximum_ecpu_per_second} ECPU/s; pasado el tope ElastiCache empieza a rechazar comandos. Mirar ElastiCacheProcessingUnits y ThrottledCmds."
   namespace           = "AWS/ElastiCache"
   metric_name         = "ElastiCacheProcessingUnits"
   statistic           = "Sum"
@@ -45,9 +57,8 @@ resource "aws_cloudwatch_metric_alarm" "cache_ecpu" {
   datapoints_to_alarm = 2
   threshold           = local.cache_ecpu_warning_per_period
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     clusterId = var.cache_name
@@ -62,7 +73,7 @@ resource "aws_cloudwatch_metric_alarm" "cache_throttled" {
   count = local.cache_alarms_enabled ? 1 : 0
 
   alarm_name          = "${var.name}-cache-throttled"
-  alarm_description   = "CRITICO · ElastiCache esta rechazando comandos por limite de capacidad: el backend ya esta recibiendo errores del cache."
+  alarm_description   = "ElastiCache rechazo comandos de ${var.cache_name} por limite de capacidad: el backend ya esta recibiendo errores del cache. Mirar ElastiCacheProcessingUnits del mismo intervalo."
   namespace           = "AWS/ElastiCache"
   metric_name         = "ThrottledCmds"
   statistic           = "Sum"
@@ -72,7 +83,6 @@ resource "aws_cloudwatch_metric_alarm" "cache_throttled" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     clusterId = var.cache_name
@@ -89,7 +99,7 @@ resource "aws_cloudwatch_metric_alarm" "cache_authentication_failures" {
   count = local.cache_alarms_enabled ? 1 : 0
 
   alarm_name          = "${var.name}-cache-auth-failures"
-  alarm_description   = "CRITICO · Fallos de autenticacion contra Valkey. Si coinciden con un despliegue, revisar valkey_password_version: usuario y secreto pueden haber quedado desincronizados."
+  alarm_description   = "Fallos de autenticacion contra ${var.cache_name}. Si coinciden con un despliegue, revisar valkey_password_version: usuario y secreto pueden haber quedado desincronizados. Mirar ${local.backend_log_group_hint} buscando WRONGPASS."
   namespace           = "AWS/ElastiCache"
   metric_name         = "AuthenticationFailures"
   statistic           = "Sum"
@@ -99,7 +109,6 @@ resource "aws_cloudwatch_metric_alarm" "cache_authentication_failures" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     clusterId = var.cache_name

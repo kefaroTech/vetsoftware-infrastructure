@@ -33,13 +33,18 @@ output "subscription_role_arn" {
   value       = aws_iam_role.subscription.arn
 }
 
+# Metricas y compuesta juntas, y con las dos senales internas dentro: quien
+# consuma esto para silenciar una ventana necesita las cinco hijas ademas de la
+# compuesta, porque silenciar solo la compuesta deja a no_delivery y a
+# source_active cambiando de estado por debajo.
 output "alarm_names" {
-  description = "Alarmas que vigilan el tramo entre CloudWatch Logs y Grafana Cloud."
-  value = [
-    aws_cloudwatch_metric_alarm.delivery_failing.alarm_name,
-    aws_cloudwatch_metric_alarm.records_in_error_prefix.alarm_name,
-    aws_cloudwatch_metric_alarm.delivery_stalled.alarm_name,
-  ]
+  description = "Alarmas que vigilan el tramo entre CloudWatch Logs y Grafana Cloud, incluidas las dos senales internas y la compuesta."
+  value       = local.all_alarm_names
+}
+
+output "composite_alarm_names" {
+  description = "Alarmas compuestas del modulo; son las unicas del interruptor de hombre muerto que notifican."
+  value       = local.composite_alarm_names
 }
 
 # Inventario declarativo del tramo, con el mismo proposito que el output
@@ -78,11 +83,53 @@ output "shipping" {
     cloudwatch_logging    = true
     firehose_log_group    = aws_cloudwatch_log_group.firehose.name
     encrypted_with_cmk    = var.kms_key_arn
-    alarm_names = [
-      aws_cloudwatch_metric_alarm.delivery_failing.alarm_name,
-      aws_cloudwatch_metric_alarm.records_in_error_prefix.alarm_name,
-      aws_cloudwatch_metric_alarm.delivery_stalled.alarm_name,
+    alarm_names           = local.all_alarm_names
+    metric_alarm_names    = local.metric_alarm_names
+    composite_alarm_names = local.composite_alarm_names
+
+    # El contrato del interruptor de hombre muerto, afirmable en plan: la senal
+    # de volumen trata el hueco como falla, la de actividad del origen lo trata
+    # como calma, y la compuesta exige las dos. Si alguien invierte cualquiera de
+    # los dos treat_missing_data, el punto ciego vuelve sin que nada mas cambie.
+    dead_mans_switch = {
+      volume_alarm_name         = aws_cloudwatch_metric_alarm.no_delivery.alarm_name
+      volume_missing_data       = aws_cloudwatch_metric_alarm.no_delivery.treat_missing_data
+      liveness_alarm_name       = aws_cloudwatch_metric_alarm.source_active.alarm_name
+      liveness_metric           = aws_cloudwatch_metric_alarm.source_active.metric_name
+      liveness_missing_data     = aws_cloudwatch_metric_alarm.source_active.treat_missing_data
+      liveness_evaluation_range = aws_cloudwatch_metric_alarm.source_active.evaluation_periods * aws_cloudwatch_metric_alarm.source_active.period
+      volume_evaluation_range   = aws_cloudwatch_metric_alarm.no_delivery.evaluation_periods * aws_cloudwatch_metric_alarm.no_delivery.period
+      composite_alarm_name      = aws_cloudwatch_composite_alarm.not_shipping.alarm_name
+      composite_alarm_rule      = aws_cloudwatch_composite_alarm.not_shipping.alarm_rule
+    }
+
+    # Ninguna alarma del modulo notifica la recuperacion: el destino es un canal
+    # que lee una persona. Se expone para que la prueba lo afirme y no vuelva a
+    # colarse un ok_action.
+    # Sin ok_actions el atributo queda nulo, no vacio: el conteo tiene que
+    # distinguir los dos casos o el propio output revienta el plan.
+    ok_actions_configured = length(flatten([
+      for actions in [
+        aws_cloudwatch_metric_alarm.delivery_failing.ok_actions,
+        aws_cloudwatch_metric_alarm.records_in_error_prefix.ok_actions,
+        aws_cloudwatch_metric_alarm.delivery_stalled.ok_actions,
+        aws_cloudwatch_metric_alarm.no_delivery.ok_actions,
+        aws_cloudwatch_metric_alarm.source_active.ok_actions,
+        aws_cloudwatch_composite_alarm.not_shipping.ok_actions,
+      ] : (actions == null ? [] : tolist(actions))
+    ]))
+
+    # Las descripciones viajan identicas al disparar y al recuperar, asi que no
+    # pueden afirmar severidad ni estado.
+    alarm_descriptions = [
+      aws_cloudwatch_metric_alarm.delivery_failing.alarm_description,
+      aws_cloudwatch_metric_alarm.records_in_error_prefix.alarm_description,
+      aws_cloudwatch_metric_alarm.delivery_stalled.alarm_description,
+      aws_cloudwatch_metric_alarm.no_delivery.alarm_description,
+      aws_cloudwatch_metric_alarm.source_active.alarm_description,
+      aws_cloudwatch_composite_alarm.not_shipping.alarm_description,
     ]
+
     freshness_warning_seconds = var.delivery_freshness_warning_seconds
   }
 }

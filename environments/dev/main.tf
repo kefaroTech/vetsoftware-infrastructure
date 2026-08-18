@@ -389,6 +389,22 @@ module "monitoring" {
   cache_maximum_data_storage_gb = var.valkey_maximum_data_storage_gb
   cache_maximum_ecpu_per_second = var.valkey_maximum_ecpu_per_second
 
+  # El silencio del apagado programado deja de comprarse con
+  # treat_missing_data y pasa a ser una ventana explicita. Solo tiene sentido si
+  # hay apagado: con scheduled_shutdown_enabled en false no se declara ninguna
+  # ventana y las alarmas notifican siempre.
+  #
+  # La ventana no se deriva automaticamente de backend_stop_schedule porque no
+  # son la misma cosa: el apagado tiene hora, el encendido es manual y no la
+  # tiene. Ver la nota de la variable.
+  maintenance_mute_windows  = var.scheduled_shutdown_enabled ? var.maintenance_mute_windows : {}
+  maintenance_mute_timezone = var.schedule_timezone
+
+  # log_shipping vigila el mismo entorno que se apaga: sus tres alarmas entran en
+  # la misma ventana. Se pasan por nombre y no por referencia al recurso para que
+  # el modulo de monitoreo no tenga que conocer al de envio de logs.
+  additional_muted_alarm_names = var.log_shipping_enabled ? module.log_shipping[0].alarm_names : []
+
   alloy_instance_ids = []
   tags               = local.common_tags
 }

@@ -29,6 +29,7 @@ $terraformRoots = @(
     "modules/database",
     "modules/ecr",
     "modules/github_iac_roles",
+    "modules/log_shipping",
     "modules/monitoring"
 )
 $terraformTestRoots = @(
@@ -39,6 +40,7 @@ $terraformTestRoots = @(
     "modules/database",
     "modules/ecr",
     "modules/github_iac_roles",
+    "modules/log_shipping",
     "modules/monitoring"
 )
 $logDirectory = Join-Path $repositoryRoot ".tools/logs/terraform-gate"
@@ -390,12 +392,22 @@ function Get-PreCommitScope {
                     $roots += @("bootstrap", "modules/github_iac_roles")
                     $scanTargets += @("bootstrap", "modules/github_iac_roles")
                 }
-                # log_shipping va solo con dev por ahora: prod exporta a traves de
-                # Alloy y todavia no tiene este tramo. Cuando lo tenga, se anade
-                # aqui su raiz.
-                { $_ -in @("scheduled_shutdown", "log_shipping") } {
+                # scheduled_shutdown no es raiz propia: no tiene contratos y solo
+                # se ejerce desde dev.
+                "scheduled_shutdown" {
                     $roots += "environments/dev"
                     $scanTargets += "environments/dev"
+                }
+                # log_shipping SI es raiz propia desde que tiene sus siete
+                # contratos: sin declararla, sus pruebas no se ejecutaban nunca
+                # -ni en el pre-commit ni en CI- y el interruptor de hombre
+                # muerto quedaba sin verificar. Sigue arrastrando dev porque es
+                # el unico entorno que lo instancia: prod exporta a traves de
+                # Alloy y todavia no tiene este tramo. Cuando lo tenga, se anade
+                # aqui su raiz.
+                "log_shipping" {
+                    $roots += @("environments/dev", "modules/log_shipping")
+                    $scanTargets += @("environments/dev", "modules/log_shipping")
                 }
                 { $_ -in @("ec2_service", "storage_audit") } {
                     $roots += "environments/prod"

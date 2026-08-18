@@ -362,12 +362,67 @@ run "development_cost_profile_plans" {
   }
 
   assert {
+    condition = alltrue([
+      for alarm in [
+        "vetsoftware-dev-database-saturated",
+        "vetsoftware-dev-backend-degraded",
+      ] : contains(output.alerting.composite_alarm_names, alarm)
+    ])
+    error_message = "Deben existir las alarmas compuestas que correlacionan señales sueltas en un incidente."
+  }
+
+  # El interruptor de hombre muerto del backend vive detras de Container
+  # Insights, apagado por costo. Mientras lo siga estando, dev no tiene ninguna
+  # compuerta de vivacidad y las 16 alarmas que suponen el entorno presente
+  # siguen ciegas a su ausencia. Es deuda conocida, no un descuido: ver §9 de
+  # docs/ALERTAS_OPERATIVAS.md.
+  assert {
+    condition     = output.alerting.backend_dead_mans_switch == null
+    error_message = "Con Container Insights apagado no puede existir el interruptor del backend; si se enciende, hay que revisar la ventana de mantenimiento y esta asercion."
+  }
+
+  # La recuperacion no se notifica. CloudWatch manda el mismo AlarmDescription en
+  # el disparo y en el OK, asi que un ok_actions apuntando a Slack producia un ✅
+  # con el texto del incidente -y con la palabra CRITICO dentro-.
+  assert {
+    condition     = output.alerting.notify_on_recovery == false
+    error_message = "Dev no debe notificar la recuperacion a Slack: el canal no tiene estado de incidente que cerrar."
+  }
+
+  # El silencio del apagado programado es una ventana explicita, no un efecto
+  # colateral de treat_missing_data. La ventana tiene que cubrir el entorno
+  # entero, incluidas las tres alarmas de log_shipping: una alarma fuera de la
+  # regla devuelve el ruido nocturno desde un modulo que nadie revisa al mirar el
+  # de monitoreo.
+  assert {
     condition = (
-      length(output.alerting.composite_alarm_names) == 2 &&
-      contains(output.alerting.composite_alarm_names, "vetsoftware-dev-database-saturated") &&
-      contains(output.alerting.composite_alarm_names, "vetsoftware-dev-backend-degraded")
+      output.maintenance_mute.enabled &&
+      output.maintenance_mute.timezone == "America/Bogota" &&
+      length(output.maintenance_mute.rule_arns) == 2
     )
-    error_message = "Deben existir las dos alarmas compuestas que correlacionan señales sueltas en un incidente."
+    error_message = "Dev debe declarar las dos ventanas de silencio -nocturna y fin de semana- en America/Bogota."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in output.maintenance_mute.log_shipping :
+      contains(output.maintenance_mute.alarm_names, alarm)
+    ])
+    error_message = "Las alarmas de log_shipping vigilan el mismo entorno que se apaga: tienen que entrar en la misma ventana."
+  }
+
+  # Limite duro del servicio: 100 alarmas por regla. Pasarlo no se ve en plan.
+  assert {
+    condition     = output.maintenance_mute.muted_alarms <= 100
+    error_message = "Una mute rule admite como maximo 100 alarmas; hay que partirla antes de llegar ahi."
+  }
+
+  # La ceguera que quedaba: mientras dev pueda estar apagado en horario habil
+  # -el arranque es manual- las metricas de flujo continuo no pueden tratar la
+  # ausencia como falla. La ventana cubre el apagado programado, no el manual.
+  assert {
+    condition     = output.alerting.missing_data.continuous_metrics == "notBreaching"
+    error_message = "Dev no puede tratar la ausencia de datos como falla mientras su encendido siga siendo manual."
   }
 
   assert {
@@ -511,14 +566,67 @@ run "durable_log_shipping_contract" {
 
   # Las alarmas son la mitad del valor del cambio: el fallo tiene que dejar de ser
   # invisible.
+  #
+  # Se afirma por NOMBRE y no con un contador. Un `length(...) == n` se rompe cada
+  # vez que alguien anade una alarma legitima -paso al incorporar el interruptor
+  # de hombre muerto- y no dice nada sobre si las que importan siguen ahi. Lo que
+  # hay que fijar es que ninguna de las seis desaparezca.
+  assert {
+    condition = alltrue([
+      for alarm in [
+        # Las tres del tramo de entrega.
+        "vetsoftware-dev-logs-delivery-failing",
+        "vetsoftware-dev-logs-in-error-bucket",
+        "vetsoftware-dev-logs-delivery-stalled",
+        # Las dos senales internas del interruptor de hombre muerto. No notifican
+        # por si solas, pero sin ellas la compuesta no puede activarse nunca.
+        "vetsoftware-dev-logs-no-delivery",
+        "vetsoftware-dev-logs-source-active",
+        # La compuesta, unica de las tres ultimas que avisa.
+        "vetsoftware-dev-logs-not-shipping",
+      ] : contains(output.log_shipping.alarm_names, alarm)
+    ])
+    error_message = "Faltan alarmas del tramo de logs: las tres de entrega, las dos senales internas y la compuesta que las correlaciona."
+  }
+
+  # El aviso sale de la compuesta, nunca de sus hijas. Si alguien le devuelve las
+  # acciones a la senal de volumen, dev recibe un aviso cada noche a las 20:00 y
+  # el canal se vuelve a perder.
   assert {
     condition = (
-      length(output.log_shipping.alarm_names) == 3 &&
-      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-delivery-failing") &&
-      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-in-error-bucket") &&
-      contains(output.log_shipping.alarm_names, "vetsoftware-dev-logs-delivery-stalled")
+      length(output.log_shipping.composite_alarm_names) == 1 &&
+      contains(output.log_shipping.composite_alarm_names, "vetsoftware-dev-logs-not-shipping")
     )
-    error_message = "Deben existir las tres alarmas del tramo: entrega fallando, datos en el prefijo de error y entrega atascada."
+    error_message = "El aviso del interruptor de hombre muerto debe salir de la compuesta, nunca de sus hijas por separado."
+  }
+
+  # Invariante de tiempos del interruptor de hombre muerto. Durante el apagado la
+  # senal de vivacidad tiene que volver a OK -y cerrar la compuerta- ANTES de que
+  # la de volumen entre en ALARM. Con 1x5 min contra 2x5 min quedan cinco minutos
+  # de margen; si se invierte, dev recibe un aviso diario a las 20:10.
+  #
+  # La correccion, si algun dia llega ese aviso, es ampliar la de volumen a tres
+  # periodos, nunca alargar la vivacidad: alargarla retrasa tambien la deteccion
+  # del fallo real.
+  assert {
+    condition = (
+      output.log_shipping.dead_mans_switch.liveness_evaluation_range <
+      output.log_shipping.dead_mans_switch.volume_evaluation_range
+    )
+    error_message = "La ventana de la senal de vivacidad debe ser mas corta que la de volumen o el apagado programado produce un aviso diario."
+  }
+
+  # Los dos treat_missing_data del interruptor son opuestos a proposito y esa
+  # oposicion ES el mecanismo: el hueco de volumen significa falla, el hueco de
+  # actividad significa calma. Invertir cualquiera de los dos devuelve el punto
+  # ciego sin que nada mas cambie.
+  assert {
+    condition = (
+      output.log_shipping.dead_mans_switch.volume_missing_data == "breaching" &&
+      output.log_shipping.dead_mans_switch.liveness_missing_data == "notBreaching" &&
+      output.log_shipping.dead_mans_switch.liveness_metric == "IncomingLogEvents"
+    )
+    error_message = "El interruptor exige que el hueco de volumen sea falla y el de actividad del origen sea calma; invertirlos devuelve el punto ciego."
   }
 
   # El token de la Cloud Access Policy no se declara en Terraform: Firehose lo

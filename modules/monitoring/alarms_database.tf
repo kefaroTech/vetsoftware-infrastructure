@@ -4,14 +4,25 @@
 # del almacenamiento asignado en locals, de modo que cambiar de clase de
 # instancia mueva las alarmas con ella en vez de dejarlas mintiendo.
 #
-# Ninguna usa treat_missing_data = "breaching". El apagado programado detiene la
-# instancia cada noche entre semana, y RDS deja de publicar metricas cuando esta
-# detenida: interpretar ese silencio como falla genera una alarma diaria a las
-# 20:15 que enseña al equipo a ignorar el canal.
+# Dos reglas de higiene que aplican a todo el fichero:
+#
+#   1. Sin `ok_actions`. La recuperacion no exige ninguna accion -en la taxonomia
+#      de Google es Logging, no Alert- y Slack no tiene estado de incidente que
+#      cerrar. Es el mismo default de Alertmanager: send_resolved = false para
+#      los canales que lee una persona. El OK sigue existiendo en el historial de
+#      la alarma y en el panel, que es donde se consulta.
+#   2. Sin severidad en el texto. `AlarmDescription` viaja identico en el disparo
+#      y en la recuperacion, asi que un texto que empieza por "CRITICO ·" produce
+#      un ✅ que dice CRITICO. La severidad viaja en tags.Severity y en el topic.
+#
+# Todas estas metricas fluyen de forma continua mientras la instancia esta
+# disponible, asi que su tratamiento de la ausencia de datos se decide desde el
+# root con `continuous_metric_missing_data`. La unica excepcion es
+# CPUCreditBalance, explicada al final.
 
 resource "aws_cloudwatch_metric_alarm" "database_cpu" {
   alarm_name          = "${var.name}-database-high-cpu"
-  alarm_description   = "ADVERTENCIA · CPU de RDS por encima de ${var.database_cpu_warning_percent}% durante 15 minutos."
+  alarm_description   = "CPUUtilization de RDS ${var.database_identifier} por encima de ${var.database_cpu_warning_percent}% durante 15 minutos. Mirar Performance Insights y las consultas en curso."
   namespace           = "AWS/RDS"
   metric_name         = "CPUUtilization"
   statistic           = "Average"
@@ -20,9 +31,8 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu" {
   datapoints_to_alarm = 3
   threshold           = var.database_cpu_warning_percent
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -33,7 +43,7 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu" {
 
 resource "aws_cloudwatch_metric_alarm" "database_cpu_critical" {
   alarm_name          = "${var.name}-database-cpu-saturated"
-  alarm_description   = "CRITICO · CPU de RDS por encima de ${var.database_cpu_critical_percent}% durante 10 minutos: las consultas se estan encolando y el pool del backend se va a agotar."
+  alarm_description   = "CPUUtilization de RDS ${var.database_identifier} por encima de ${var.database_cpu_critical_percent}% durante 10 minutos: las consultas se encolan y el pool del backend se agota. Mirar Performance Insights y SHOW PROCESSLIST."
   namespace           = "AWS/RDS"
   metric_name         = "CPUUtilization"
   statistic           = "Average"
@@ -42,9 +52,8 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_critical" {
   datapoints_to_alarm = 2
   threshold           = var.database_cpu_critical_percent
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -64,7 +73,7 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_critical" {
 # limite.
 resource "aws_cloudwatch_metric_alarm" "database_connections" {
   alarm_name          = "${var.name}-database-connections-high"
-  alarm_description   = "ADVERTENCIA · ${local.database_connections_warning_threshold} conexiones abiertas de un maximo de ${var.database_max_connections} (${var.database_connections_warning_percent}%). Revisar fugas del pool antes de que llegue al limite."
+  alarm_description   = "DatabaseConnections de ${var.database_identifier} por encima de ${local.database_connections_warning_threshold} de un maximo de ${var.database_max_connections} (${var.database_connections_warning_percent}%). Mirar el pool de Hikari y SHOW PROCESSLIST buscando conexiones sin devolver."
   namespace           = "AWS/RDS"
   metric_name         = "DatabaseConnections"
   statistic           = "Maximum"
@@ -73,9 +82,8 @@ resource "aws_cloudwatch_metric_alarm" "database_connections" {
   datapoints_to_alarm = 2
   threshold           = local.database_connections_warning_threshold
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -86,7 +94,7 @@ resource "aws_cloudwatch_metric_alarm" "database_connections" {
 
 resource "aws_cloudwatch_metric_alarm" "database_connections_critical" {
   alarm_name          = "${var.name}-database-connections-exhausted"
-  alarm_description   = "CRITICO · ${local.database_connections_critical_threshold} conexiones de ${var.database_max_connections}: el proximo cliente recibe Too many connections."
+  alarm_description   = "DatabaseConnections de ${var.database_identifier} por encima de ${local.database_connections_critical_threshold} de ${var.database_max_connections}: el proximo cliente recibe Too many connections. Mirar SHOW PROCESSLIST y el pool de Hikari."
   namespace           = "AWS/RDS"
   metric_name         = "DatabaseConnections"
   statistic           = "Maximum"
@@ -95,9 +103,8 @@ resource "aws_cloudwatch_metric_alarm" "database_connections_critical" {
   datapoints_to_alarm = 2
   threshold           = local.database_connections_critical_threshold
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -108,7 +115,7 @@ resource "aws_cloudwatch_metric_alarm" "database_connections_critical" {
 
 resource "aws_cloudwatch_metric_alarm" "database_storage" {
   alarm_name          = "${var.name}-database-low-storage"
-  alarm_description   = "ADVERTENCIA · Menos de ${var.database_free_storage_warning_percent}% de disco libre en RDS. El autoescalado de almacenamiento esta apagado en dev: ampliar es una accion manual."
+  alarm_description   = "FreeStorageSpace de ${var.database_identifier} por debajo del ${var.database_free_storage_warning_percent}% del volumen. El autoescalado de almacenamiento esta apagado: ampliar database_allocated_storage es una accion manual."
   namespace           = "AWS/RDS"
   metric_name         = "FreeStorageSpace"
   statistic           = "Average"
@@ -116,9 +123,8 @@ resource "aws_cloudwatch_metric_alarm" "database_storage" {
   evaluation_periods  = 1
   threshold           = local.database_free_storage_warning_bytes
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -131,7 +137,7 @@ resource "aws_cloudwatch_metric_alarm" "database_storage" {
 # los datos. Esta alarma es el ultimo aviso util antes de esa parada.
 resource "aws_cloudwatch_metric_alarm" "database_storage_critical" {
   alarm_name          = "${var.name}-database-storage-exhausted"
-  alarm_description   = "CRITICO · Menos de ${var.database_free_storage_critical_percent}% de disco libre. RDS apaga la instancia para evitar corrupcion si sigue bajando."
+  alarm_description   = "FreeStorageSpace de ${var.database_identifier} por debajo del ${var.database_free_storage_critical_percent}%: RDS apaga la instancia para evitar corrupcion si sigue bajando. Ampliar database_allocated_storage y revisar binlogs y tablas temporales."
   namespace           = "AWS/RDS"
   metric_name         = "FreeStorageSpace"
   statistic           = "Minimum"
@@ -139,9 +145,8 @@ resource "aws_cloudwatch_metric_alarm" "database_storage_critical" {
   evaluation_periods  = 1
   threshold           = local.database_free_storage_critical_bytes
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -152,7 +157,7 @@ resource "aws_cloudwatch_metric_alarm" "database_storage_critical" {
 
 resource "aws_cloudwatch_metric_alarm" "database_memory" {
   alarm_name          = "${var.name}-database-low-memory"
-  alarm_description   = "ADVERTENCIA · Memoria libre de RDS por debajo del umbral seguro; el buffer pool empieza a competir con las conexiones."
+  alarm_description   = "FreeableMemory de ${var.database_identifier} por debajo del umbral seguro: el buffer pool empieza a competir con las conexiones. Mirar FreeableMemory y SwapUsage de la ultima hora."
   namespace           = "AWS/RDS"
   metric_name         = "FreeableMemory"
   statistic           = "Average"
@@ -161,9 +166,8 @@ resource "aws_cloudwatch_metric_alarm" "database_memory" {
   datapoints_to_alarm = 2
   threshold           = var.database_freeable_memory_threshold_bytes
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -174,7 +178,7 @@ resource "aws_cloudwatch_metric_alarm" "database_memory" {
 
 resource "aws_cloudwatch_metric_alarm" "database_memory_critical" {
   alarm_name          = "${var.name}-database-memory-exhausted"
-  alarm_description   = "CRITICO · Memoria libre de RDS agotada. El siguiente paso del motor es swap, y despues el reinicio."
+  alarm_description   = "FreeableMemory de ${var.database_identifier} agotada: el siguiente paso del motor es swap y despues el reinicio. Mirar los eventos RDS-EVENT-0403 del mismo intervalo en el historial de la instancia."
   namespace           = "AWS/RDS"
   metric_name         = "FreeableMemory"
   statistic           = "Minimum"
@@ -183,9 +187,8 @@ resource "aws_cloudwatch_metric_alarm" "database_memory_critical" {
   datapoints_to_alarm = 3
   threshold           = var.database_freeable_memory_critical_bytes
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.critical_actions
-  ok_actions          = local.critical_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -200,7 +203,7 @@ resource "aws_cloudwatch_metric_alarm" "database_memory_critical" {
 # se pone el umbral desde el root -dev usa 64 MiB con db.t4g.small-.
 resource "aws_cloudwatch_metric_alarm" "database_swap" {
   alarm_name          = "${var.name}-database-swap-usage"
-  alarm_description   = "ADVERTENCIA · RDS lleva 15 minutos usando swap: hay presion real de memoria, no un pico."
+  alarm_description   = "SwapUsage de ${var.database_identifier} sostenido 15 minutos por encima del umbral: hay presion real de memoria, no un pico. Mirar FreeableMemory y el tamano efectivo del buffer pool."
   namespace           = "AWS/RDS"
   metric_name         = "SwapUsage"
   statistic           = "Average"
@@ -209,9 +212,8 @@ resource "aws_cloudwatch_metric_alarm" "database_swap" {
   datapoints_to_alarm = 3
   threshold           = var.database_swap_warning_bytes
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -226,7 +228,7 @@ resource "aws_cloudwatch_metric_alarm" "database_latency" {
   for_each = toset(["Read", "Write"])
 
   alarm_name          = "${var.name}-database-${lower(each.key)}-latency"
-  alarm_description   = "ADVERTENCIA · Latencia de ${lower(each.key) == "read" ? "lectura" : "escritura"} de RDS por encima de ${var.database_latency_warning_seconds * 1000} ms durante 15 minutos."
+  alarm_description   = "${each.key}Latency de ${var.database_identifier} por encima de ${var.database_latency_warning_seconds * 1000} ms durante 15 minutos. Mirar DiskQueueDepth y los creditos EBS del mismo intervalo."
   namespace           = "AWS/RDS"
   metric_name         = "${each.key}Latency"
   statistic           = "Average"
@@ -235,9 +237,8 @@ resource "aws_cloudwatch_metric_alarm" "database_latency" {
   datapoints_to_alarm = 3
   threshold           = var.database_latency_warning_seconds
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -248,7 +249,7 @@ resource "aws_cloudwatch_metric_alarm" "database_latency" {
 
 resource "aws_cloudwatch_metric_alarm" "database_disk_queue" {
   alarm_name          = "${var.name}-database-disk-queue"
-  alarm_description   = "ADVERTENCIA · Cola de disco de RDS sostenida por encima de ${var.database_disk_queue_warning}: el volumen no absorbe la carga."
+  alarm_description   = "DiskQueueDepth de ${var.database_identifier} sostenida por encima de ${var.database_disk_queue_warning}: el volumen no absorbe la carga. Mirar ReadLatency, WriteLatency y EBSIOBalance%."
   namespace           = "AWS/RDS"
   metric_name         = "DiskQueueDepth"
   statistic           = "Average"
@@ -257,9 +258,8 @@ resource "aws_cloudwatch_metric_alarm" "database_disk_queue" {
   datapoints_to_alarm = 3
   threshold           = var.database_disk_queue_warning
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -271,13 +271,11 @@ resource "aws_cloudwatch_metric_alarm" "database_disk_queue" {
 # Creditos de rafaga. Son especificos de la familia t y son la causa mas comun de
 # una base que "de repente esta lenta" sin que ninguna metrica clasica lo
 # explique: al agotarse, el throughput cae a la linea base sin emitir un error.
-# En estas dos, notBreaching cubre el caso de mover el entorno a una clase que no
-# las publica. La de creditos de CPU usa "ignore" por el motivo explicado abajo.
 resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
   for_each = toset(["EBSIOBalance%", "EBSByteBalance%"])
 
   alarm_name          = "${var.name}-database-${lower(replace(each.key, "%", ""))}-low"
-  alarm_description   = "ADVERTENCIA · Credito ${each.key} por debajo de ${var.database_ebs_balance_warning_percent}%: al agotarse, la E/S baja a la linea base sin devolver ningun error."
+  alarm_description   = "${each.key} de ${var.database_identifier} por debajo de ${var.database_ebs_balance_warning_percent}%: al agotarse, la E/S baja a la linea base sin devolver ningun error. Mirar ReadLatency, WriteLatency y DiskQueueDepth."
   namespace           = "AWS/RDS"
   metric_name         = each.key
   statistic           = "Average"
@@ -286,9 +284,8 @@ resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
   datapoints_to_alarm = 3
   threshold           = var.database_ebs_balance_warning_percent
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = var.continuous_metric_missing_data
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
@@ -297,7 +294,7 @@ resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
   tags = merge(var.tags, { Severity = "warning" })
 }
 
-# Unica alarma con "ignore" en vez de "notBreaching", y es deliberado.
+# Unica alarma con "ignore" fija, y es deliberado.
 #
 # Parar una instancia RDS de clase t borra el saldo de creditos acumulado: al
 # encender arranca en 0. Como el ambiente se apaga cada noche (schedules
@@ -309,16 +306,18 @@ resource "aws_cloudwatch_metric_alarm" "database_ebs_balance" {
 # en ~5 creditos, y transicion a OK a las 05:46 UTC.
 #
 # "ignore" mantiene el ultimo estado conocido mientras no hay datos: la alarma se
-# queda como estaba en vez de fingir recuperacion. No genera ruido extra porque
-# sin cambio de estado no hay notificacion.
+# queda como estaba en vez de fingir recuperacion.
+#
+# Desde este cambio hay ademas dos defensas por encima: ya no tiene `ok_actions`,
+# asi que aunque transitara a OK no habria mensaje que enviar, y la ventana de
+# mantenimiento silencia el tramo del apagado. "ignore" se conserva igual porque
+# es la semantica honesta del estado, no solo un parche de notificacion.
 #
 # Contrapartida: si el entorno se mueve a una clase que no publica
-# CPUCreditBalance estando en ALARM, la alarma queda colgada en ese estado. Ese
-# es el caso que "notBreaching" cubre en las demas de esta familia; aqui se
-# acepta a cambio de no recibir un OK falso cada noche.
+# CPUCreditBalance estando en ALARM, la alarma queda colgada en ese estado.
 resource "aws_cloudwatch_metric_alarm" "database_cpu_credits" {
   alarm_name          = "${var.name}-database-cpu-credits-low"
-  alarm_description   = "ADVERTENCIA · Creditos de CPU de la instancia burstable por debajo de ${var.database_cpu_credit_warning_balance}. Sin creditos, la clase t cae a su linea base o factura sobrecosto."
+  alarm_description   = "CPUCreditBalance de ${var.database_identifier} por debajo de ${var.database_cpu_credit_warning_balance}. Sin creditos, la clase t cae a su linea base o factura sobrecosto. Mirar CPUUtilization y CPUSurplusCreditBalance."
   namespace           = "AWS/RDS"
   metric_name         = "CPUCreditBalance"
   statistic           = "Average"
@@ -329,7 +328,6 @@ resource "aws_cloudwatch_metric_alarm" "database_cpu_credits" {
   comparison_operator = "LessThanThreshold"
   treat_missing_data  = "ignore"
   alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
 
   dimensions = {
     DBInstanceIdentifier = var.database_identifier
