@@ -9,16 +9,16 @@
       "grafana_cluster": "prod-us-east-3",
       "verified_on": "2026-08-18",
       "verified_with": "gh variable list (repositorio y environments iac-plan-dev / iac-apply-dev)",
-      "ruler_url": null,
-      "metrics_tenant_id": null,
-      "ruler_verified_on": null,
-      "ruler_note": "Pendiente de cargar. El stack vastcoyote3439 existe, pero el host del ruler (tarjeta Prometheus del portal, 'Query Endpoint') y el 'Instance ID' numerico no se han copiado aqui ni a las variables del environment iac-apply-dev. Hasta entonces sync-alert-rules-dev avisa y pasa sin sincronizar. Al cargar las variables en GitHub, fijar estos dos campos en el mismo cambio; pasos en docs/ALERTAS_GRAFANA_CLOUD.md.",
+      "ruler_url": "https://prometheus-prod-66-prod-us-east-3.grafana.net",
+      "metrics_tenant_id": "3421302",
+      "ruler_verified_on": "2026-08-19",
+      "ruler_note": "Cargado el 2026-08-19 en vars del environment iac-apply-dev, y fijado aqui en el mismo cambio. El host sale del datasource grafanacloud-prom (url sin el sufijo /api/prom) y el tenant de su basicAuthUser, que coincide con la etiqueta id de las series grafanacloud_instance_*. La forma de la URL se comprobo por HTTP sin credenciales: /prometheus/config/v1/rules responde 401 sobre el host pelado -existe, falta auth- y /config/v1/rules responde 404, que es lo que confirma que mimirtool debe recibir el host SIN path. FALTA el secret GRAFANA_RULER_TOKEN (Access Policy con scopes rules:read y rules:write): hasta que exista, sync-alert-rules-dev avisa y pasa sin sincronizar.",
       "sources": [
         "vars.DEV_GRAFANA_OTLP_ENDPOINT (repositorio) - lo lee el plan de un pull request, que corre sin environment",
         "vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-dev) - drift y la fase de plan del circuito de imagen",
         "vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-dev) - apply y la fase de apply del circuito de imagen",
         "environments/dev/terraform.tfvars.example - referencia para el ciclo local",
-        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-dev) - sync de reglas de alerta al ruler de Mimir; sin definir"
+        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-dev) - sync de reglas de alerta al ruler de Mimir; definidas el 2026-08-19"
       ]
     },
     "prod": {
