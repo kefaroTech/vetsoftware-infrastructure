@@ -1,0 +1,324 @@
+# Alertas SLO como reglas Grafana-managed.
+#
+# CONVERSIÓN de observability/mimir-rules/vetsoftware-slo-alerts.yml. Las alertas del ruler
+# de Mimir evalúan pero NO notifican: en el plan Free el Alertmanager de Mimir no está
+# expuesto (verificado: 10 alertas disparando en el ruler y la API de alertas devolviendo
+# vacío). El único motor con entrega funcionando es el de Grafana, cuyos contact points y
+# notification policy enrutan por el label `severity` — por eso los labels se conservan
+# EXACTAMENTE igual que en el original.
+#
+# Las 57 recording rules `vetsoftware:*` SIGUEN en el ruler (no necesitan Alertmanager);
+# estas reglas consultan las series ya grabadas a través del datasource `grafanacloud-prom`.
+# La semántica de burn rate multiventana y las guardas de volumen están explicadas en el
+# fichero de origen y en VetSoftware/docs/SLO_VETSOFTWARE.md; aquí no se repite.
+#
+# Decisiones de la conversión que no son obvias:
+#
+# 1) Expresiones compuestas (`x > N and y > N and z >= M`): el formato Grafana-managed pide
+#    separar la comparación en una condición `threshold`, pero solo hay UNA condición C por
+#    regla. Se separa el comparador de la ventana LARGA (el umbral con significado: 14.4x,
+#    6x, 3x) hacia C, y las demás comparaciones se quedan como FILTROS PromQL dentro de A
+#    (un comparador sin `bool` filtra series conservando el valor del lado izquierdo). El
+#    resultado dispara exactamente en los mismos casos que el original, serie por serie.
+#
+# 2) `relativeTimeRange.from: 600` en todas: las ventanas ([1h], [6h], [1d], [30d]) viven
+#    DENTRO de las recording rules del ruler, no en estas expresiones — aquí no hay ningún
+#    selector de rango. La consulta es instantánea sobre la serie ya grabada y 600 s cubre
+#    de sobra el lookback de staleness de 5 m. Poner 86400 o 2592000 no cambiaría el
+#    resultado y sugeriría, falsamente, que la ventana se calcula aquí.
+#
+# 3) `noDataState: OK` en TODAS, incluida SeriesAbsent — el razonamiento por regla va en
+#    su comentario. En resumen: en estas expresiones "sin datos" nunca significa "hay un
+#    problema"; la detección de ausencia de medición la hace el `unless` de SeriesAbsent
+#    dentro del propio PromQL, no el estado NoData del motor.
+
+apiVersion: 1
+
+groups:
+  # Misma partición temática que el fichero original: burn-rate / error-budget / integridad.
+  - orgId: 1
+    name: vetsoftware-slo-burn-rate-alerts
+    # La carpeta debe existir en el stack antes de aplicar el fichero.
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      # 14.4x => el presupuesto de 30 días se agotaría en poco más de 2 días.
+      # Equivale a gastar el 2 % del presupuesto en una hora.
+      - uid: vetsw-slo-fast-burn
+        title: VetSoftwareSloFastBurn
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # El comparador `> 14.4` de la ventana de 1 h pasó al threshold C; la ventana
+              # corta y la guarda de volumen quedan como filtros. El valor de la alerta es
+              # el burn rate de 1 h, igual que en el original.
+              expr: |
+                vetsoftware:slo_burn_rate:ratio_rate1h
+                and
+                vetsoftware:slo_burn_rate:ratio_rate5m > 14.4
+                and
+                (vetsoftware:sli_total_events:rate1h * 3600) >= 20
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 14.4
+        # Sin datos = los filtros no dejaron pasar ninguna serie (sistema sano o sin
+        # tráfico suficiente para la guarda de volumen). No es una alarma.
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: critical
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~2 días"
+          description: "El burn rate supera 14.4 en las ventanas de 1 hora y 5 minutos. A este ritmo el presupuesto de error de 30 días se consume en poco más de dos días."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareslofastburn"
+
+      # 6x => el presupuesto se agotaría en ~5 días.
+      # Equivale a gastar el 5 % del presupuesto en seis horas.
+      - uid: vetsw-slo-slow-burn
+        title: VetSoftwareSloSlowBurn
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                vetsoftware:slo_burn_rate:ratio_rate6h
+                and
+                vetsoftware:slo_burn_rate:ratio_rate30m > 6
+                and
+                (vetsoftware:sli_total_events:rate6h * 21600) >= 60
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 6
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~5 días"
+          description: "El burn rate supera 6 en las ventanas de 6 horas y 30 minutos. La degradación es sostenida, no un pico."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloslowburn"
+
+      # 3x => el presupuesto se agotaría en ~10 días. No requiere atención inmediata;
+      # se atiende como trabajo planificado dentro del ciclo.
+      - uid: vetsw-slo-ticket-burn
+        title: VetSoftwareSloTicketBurn
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                vetsoftware:slo_burn_rate:ratio_rate1d
+                and
+                vetsoftware:slo_burn_rate:ratio_rate2h > 3
+                and
+                (vetsoftware:sli_total_events:rate1d * 86400) >= 200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 3
+        noDataState: OK
+        execErrState: Error
+        for: 1h
+        labels:
+          severity: warning
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~10 días"
+          description: "El burn rate supera 3 en las ventanas de 1 día y 2 horas. Corresponde trabajo planificado, no respuesta inmediata."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloticketburn"
+
+  - orgId: 1
+    name: vetsoftware-slo-error-budget
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-slo-error-budget-low
+        title: VetSoftwareSloErrorBudgetLow
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # El original es `x < 0.25 and x >= 0`. El `< 0.25` pasó al threshold C; el
+              # `>= 0` se queda como filtro (delimita con ErrorBudgetExhausted, que cubre
+              # el tramo negativo). Con presupuesto exactamente 0 esta alerta dispara y
+              # Exhausted no — igual que en el original.
+              expr: |
+                vetsoftware:slo_error_budget_remaining:ratio30d >= 0
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 0.25
+        # Sin datos = o el presupuesto es negativo (lo cubre Exhausted) o la serie no
+        # existe (lo cubre SeriesAbsent). Aquí no es una alarma.
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: warning
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "Al SLO {{ $labels.slo }} ({{ $labels.sli }}) le queda menos del 25 % de presupuesto"
+          description: "Según la política de gobierno, los cambios no críticos de este dominio requieren revisión explícita hasta que el presupuesto se recupere."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetlow"
+
+      - uid: vetsw-slo-error-budget-exhausted
+        title: VetSoftwareSloErrorBudgetExhausted
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                vetsoftware:slo_error_budget_remaining:ratio30d
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 0
+        # Sin datos = la serie del presupuesto no existe; eso es un problema de MEDICIÓN,
+        # no de presupuesto, y lo detecta SeriesAbsent. Marcarlo aquí duplicaría la alarma
+        # con la severidad equivocada (critical).
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: critical
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) está incumplido en la ventana de 30 días"
+          description: "El presupuesto de error se agotó. Solo deberían desplegarse correcciones de fiabilidad de este dominio hasta que la ventana rodante lo recupere."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetexhausted"
+
+  - orgId: 1
+    name: vetsoftware-slo-integrity
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      # Un SLO declarado que no produce serie de eventos no se está midiendo. Ver el
+      # comentario completo en el fichero de origen (bordes `le`, selectores de `uri`,
+      # renombres de métricas). ATENCIÓN dev: con el volumen actual dispara de forma
+      # legítima para la mayoría de SLIs — ver README de mimir-rules/.
+      - uid: vetsw-slo-series-absent
+        title: VetSoftwareSloSeriesAbsent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # La detección de ausencia la hace el `unless` DENTRO del PromQL: la
+              # expresión devuelve series (con el valor del objetivo, siempre > 0) solo
+              # para los SLOs que dejaron de medirse. El threshold `> 0` convierte
+              # "devolvió algo" en "dispara".
+              expr: |
+                vetsoftware:slo_objective:ratio
+                unless
+                vetsoftware:sli_total_events:rate1d
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        # Deliberadamente OK, aunque el propósito de la alerta sea detectar ausencia:
+        # aquí NoData significa que el `unless` devolvió VACÍO, es decir, que TODOS los
+        # SLOs declarados están produciendo eventos — el caso sano. Poner Alerting
+        # invertiría la lógica y dispararía justo cuando todo funciona. El único hueco
+        # real de NoData es que `slo_objective:ratio` desaparezca en bloque (el ruler
+        # entero caído o las recording rules borradas); eso tampoco lo cubría el
+        # original y es un fallo de la capa de reglas, no de un SLI.
+        noDataState: OK
+        execErrState: Error
+        for: 1h
+        labels:
+          severity: warning
+          domain: slo
+          service: vetsoftware
+        annotations:
+          summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) no está produciendo datos"
+          description: "El objetivo está declarado pero no existe serie de eventos en las últimas 24 horas. Revisar el selector de la regla de grabación antes que el objetivo. En un entorno local o de desarrollo, una operación que nunca se ejecutó dispara esta alerta de forma legítima."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloseriesabsent"

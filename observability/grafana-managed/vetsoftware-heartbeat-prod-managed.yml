@@ -1,0 +1,78 @@
+# Conversión Grafana-managed de observability/mimir-rules/vetsoftware-heartbeat-prod.yml.
+# SOLO PRODUCCIÓN. NO sincronizar a dev: EventBridge apaga el ambiente dev a las
+# 20:00/20:15 Bogotá de lunes a viernes y los fines de semana completos — esta alerta
+# sonaría cada noche y sería ruido puro. El equivalente dev de «el backend no está» son
+# los eventos de ECS del lado AWS, no este motor.
+#
+# Sustituto de VetSoftwareBackendDown para el mundo OTLP-push: no hay scrape, `up` no
+# existe, y la señal de caída es la AUSENCIA de ingesta sostenida. Se exige la ausencia
+# de DOS series independientes y siempre presentes mientras el proceso vive (target_info
+# viene del recurso OTel en cada export; jvm_threads_live la publica el runtime sin
+# depender de tráfico): así un simple renombre de una métrica no dispara un falso
+# «backend caído».
+#
+# noDataState: OK — y en esta alerta la elección merece explicarse porque es
+# contraintuitiva. La detección de ausencia NO vive en el noDataState: vive en el PromQL.
+# `absent_over_time` invierte la lógica de datos:
+#
+#   - Telemetría AUSENTE (el incidente): ambas absent_over_time devuelven 1, el `and on()`
+#     produce una serie con valor 1, el threshold (> 0) dispara. Hay DATOS cuando hay
+#     incidente, así que el camino de alerta nunca pasa por NoData.
+#   - Telemetría PRESENTE (estado sano): absent_over_time devuelve vector vacío, la regla
+#     queda en NoData. NoData ES el estado sano aquí; mapearlo a Alerting haría que la
+#     alerta disparara precisamente cuando todo funciona.
+#
+# El tercer escenario — Mimir/el datasource no responden y la consulta FALLA (que también
+# es ceguera total) — no es NoData sino error de ejecución, y lo cubre execErrState: Error,
+# que genera su propia alerta con estos mismos labels (severity=critical incluido, así que
+# también enruta a Slack). Cobertura completa sin falsos positivos en el camino sano.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: vetsoftware-heartbeat
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-backend-telemetry-absent
+        title: VetSoftwareBackendTelemetryAbsent
+        condition: C
+        data:
+          - refId: A
+            # 1200 s cubre con margen la ventana [15m] de las dos absent_over_time.
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # La expresión original no tenía comparador final (absent_over_time ya
+              # devuelve 1 o vacío); el threshold > 0 solo traduce ese «existe la serie
+              # sintética» al modelo de dos nodos de Grafana. `and on()` exige que AMBAS
+              # ausencias sean ciertas a la vez, ignorando labels (las series sintéticas
+              # de absent_over_time no comparten etiquetas).
+              expr: |
+                absent_over_time(target_info{job="mainvet/vetsoftware"}[15m])
+                and on()
+                absent_over_time(jvm_threads_live{job="mainvet/vetsoftware"}[15m])
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # Ver el razonamiento completo en la cabecera: NoData = telemetría presente =
+        # estado sano. El incidente produce datos (valor 1), no NoData.
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: availability
+          service: vetsoftware
+        annotations:
+          summary: "El backend de VetSoftware lleva 15 minutos sin enviar telemetría"
+          description: "Ni target_info ni jvm_threads_live han recibido muestras en 15 minutos: o el proceso está caído, o el export OTLP está roto de extremo a extremo. Comprobar primero el servicio ECS y después el pipeline de export (credenciales OTLP, red de salida, estado de Grafana Cloud)."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackenddown"

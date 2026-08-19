@@ -1,21 +1,36 @@
-# Reglas de Prometheus/Mimir para Grafana Cloud
+# Recording rules de Prometheus/Mimir para Grafana Cloud
 
-Este directorio contiene los **gemelos cloud** de los ficheros de reglas locales de
-`VetSoftware/docker/prometheus-*.yml`, en el formato que consume `mimirtool rules sync`
-(cada fichero declara `namespace:` + `groups:`). Se evalúan en el **ruler de Mimir** del
-stack de Grafana Cloud de cada ambiente, no en un Prometheus propio. La sincronización la
-hacen los workflows del repo (fuera del alcance de este directorio).
+Este directorio contiene **solo recording rules**, en el formato que consume
+`mimirtool rules sync` (`namespace:` + `groups:`). Se evalúan en el **ruler de Mimir** del
+stack de Grafana Cloud de cada ambiente. La sincronización la hacen los workflows del repo.
 
 | Fichero | Namespace | Contenido | Ambientes |
 |---|---|---|---|
 | `vetsoftware-slo-rules.yml` | `vetsoftware-slo-rules` | 57 recording rules SLO (cadena completa: objetivos → eventos 5m → ventanas → razones → burn rate → cumplimiento → budget) | dev y prod |
-| `vetsoftware-slo-alerts.yml` | `vetsoftware-slo-alerts` | 6 alertas SLO (3 burn rate multiventana, 2 de budget, 1 de integridad) | dev y prod |
-| `vetsoftware-platform-alerts.yml` | `vetsoftware-platform` | 11 alertas de plataforma portables (HTTP, JVM, HikariCP, tokens) | dev y prod |
-| `vetsoftware-cloud-additions.yml` | `vetsoftware-additions` | 7 reglas: jobs y correo (warning + critical cada una), abuso de login, y Valkey vía Lettuce (fallos + latencia) | dev y prod |
-| `vetsoftware-heartbeat-prod.yml` | `vetsoftware-heartbeat` | 1 alerta de ausencia de ingesta | **solo prod** |
 
-Los nombres de alerta, los `for:`, los labels `severity`/`domain`/`service` y las annotations
-son los mismos que en local; los runbooks siguen apuntando a
+## Aquí NO hay alertas, y ese es el punto
+
+Las 25 alertas vivieron un tiempo en este directorio y se movieron a
+`../grafana-managed/`. El motivo no es de estilo: **en el ruler no notificaban a nadie**.
+
+En Grafana Cloud hay dos motores de alertas y cada uno tiene su propio Alertmanager, que no
+se hablan entre sí. El del ruler de Mimir **no está expuesto en el plan Free**: no aparece
+en el portal, `mimirtool alertmanager get` responde «no Alertmanager config currently
+exists» y `load` da 404 contra el host del ruler. Comprobado en vivo el 2026-08-19 con las
+reglas ya sincronizadas: **10 alertas disparando en el ruler y
+`/api/alertmanager/grafana/api/v2/alerts` devolviendo `[]`**. Disparaban al vacío.
+
+Las recording rules **sí** se quedan aquí, porque no necesitan Alertmanager: solo calculan
+series. Las alertas convertidas las leen a través del datasource `grafanacloud-prom`, que
+apunta a este mismo tenant, así que la cadena SLO sigue entera — solo cambia quién evalúa
+el último escalón.
+
+**Consecuencia práctica al añadir algo nuevo:** una *recording rule* va aquí; una *alerta*
+va en `../grafana-managed/`. Poner una alerta en este directorio la deja evaluando sin
+notificar, que es el fallo silencioso que costó descubrir.
+
+Los `for:`, los labels `severity`/`domain`/`service` y las annotations de las alertas
+migradas se conservaron intactos; los runbooks siguen apuntando a
 `VetSoftware/docs/ALERTAMIENTO_OPERATIVO.md`.
 
 ## Por qué hay dos mundos de métricas

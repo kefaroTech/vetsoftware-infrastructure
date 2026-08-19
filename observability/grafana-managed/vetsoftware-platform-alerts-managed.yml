@@ -1,0 +1,462 @@
+# Alertas de plataforma — versión GRAFANA-MANAGED de observability/mimir-rules/vetsoftware-platform-alerts.yml.
+#
+# POR QUÉ existe este fichero: las alertas del ruler de Mimir evalúan pero NO notifican a nadie
+# en el plan Grafana Cloud Free (el Alertmanager de Mimir no está expuesto; verificado en vivo:
+# 10 alertas disparando en el ruler y /api/alertmanager/grafana/api/v2/alerts devolviendo []).
+# El único motor con contact points y notification policy operativos es el de Grafana, que
+# enruta a Slack por el label `severity`. Las 57 recording rules SIGUEN en el ruler: estas
+# reglas consultan sus series a través del datasource de Prometheus (grafanacloud-prom).
+#
+# Conversión aplicada (misma plantilla que vetsoftware-cost-guard.yml, ya en el stack):
+#   - El PromQL va en refId A SIN el comparador final; la comparación pasa al threshold de refId C.
+#   - En las alertas HTTP, la guarda de volumen (`and sum(increase(...)) >= 20`) se QUEDA dentro
+#     de refId A con su comparador: es un filtro de presencia, no la condición de la alerta.
+#     Sin tráfico suficiente la consulta devuelve vacío → NoData → OK (ver noDataState abajo).
+#   - `noDataState: OK` en TODAS las reglas, decidido por alerta pero con la misma conclusión:
+#     el backend de dev se apaga a las 20:00 por EventBridge, así que cada serie de este fichero
+#     desaparece cada noche; `NoData` como estado de alerta produciría ruido nocturno garantizado.
+#     La ausencia del proceso la vigilan el heartbeat y las alarmas de infraestructura, no estas.
+#   - `for`, labels (severity/domain/service) y annotations (incluida `runbook`) se conservan
+#     EXACTAMENTE como en el original: el enrutado a Slack depende del label `severity`.
+#   - `uid` estable en kebab-case con prefijo vetsw-, derivado del nombre de la alerta. Es la
+#     clave de upsert del pipeline: NO cambiarlo o la regla se duplica en vez de actualizarse.
+#   - `relativeTimeRange.from: 600` en todas: la ventana más larga usada por cualquier expresión
+#     de este fichero es [5m] (rate/increase), y 600 s la cubre con margen. No hay guardas [15m].
+
+apiVersion: 1
+
+groups:
+  # ───────────────────────────── HTTP ─────────────────────────────
+  - orgId: 1
+    name: vetsoftware-http
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-http-5xx-rate-high
+        title: VetSoftwareHttp5xxRateHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # El comparador principal (> 0.05) se movió a C. La guarda de volumen conserva
+              # su comparador porque no es el umbral de la alerta sino un filtro anti-ruido:
+              # con menos de 20 solicitudes en 5 m el `and` vacía el resultado y la regla
+              # queda en NoData→OK en vez de disparar por un único 500 aislado.
+              expr: |
+                (
+                  sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status=~"5.."}[5m]))
+                  /
+                  clamp_min(sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])), 0.001)
+                )
+                and
+                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+        # Sin tráfico no hay tasa de 5xx que medir: eso no es una alarma. Además dev se apaga
+        # a las 20:00, así que NoData nocturno está garantizado.
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "La tasa HTTP 5xx supera el 5 %"
+          description: "El backend superó el 5 % de respuestas 5xx con al menos 20 solicitudes en cinco minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttp5xxratehigh"
+
+      - uid: vetsw-http-p95-latency-high
+        title: VetSoftwareHttpP95LatencyHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                histogram_quantile(
+                  0.95,
+                  sum by (le) (
+                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m])
+                  )
+                )
+                and
+                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                # Timers en milisegundos en el mundo OTLP-push (ver cabecera del fichero origen).
+                - evaluator: { type: gt, params: [1000] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "La latencia HTTP p95 supera un segundo"
+          description: "La latencia p95 agregada permaneció por encima de un segundo (1000 ms) con volumen suficiente."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp95latencyhigh"
+
+      - uid: vetsw-http-p99-latency-critical
+        title: VetSoftwareHttpP99LatencyCritical
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                histogram_quantile(
+                  0.99,
+                  sum by (le) (
+                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m])
+                  )
+                )
+                and
+                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [2000] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "La latencia HTTP p99 supera dos segundos"
+          description: "La latencia p99 agregada permaneció por encima de dos segundos (2000 ms) con volumen suficiente."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp99latencycritical"
+
+  # ─────────────────────────── Runtime JVM ───────────────────────────
+  - orgId: 1
+    name: vetsoftware-runtime
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-jvm-heap-high
+        title: VetSoftwareJvmHeapHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum(jvm_memory_used_bytes{job="mainvet/vetsoftware",area="heap"})
+                /
+                clamp_min(sum(jvm_memory_max_bytes{job="mainvet/vetsoftware",area="heap"}), 1)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        # Gauge de la JVM: desaparece cada noche con el apagado programado de dev.
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: runtime
+          service: vetsoftware
+        annotations:
+          summary: "El uso de heap de la JVM supera el 85 %"
+          description: "El heap se mantuvo por encima del 85 % durante diez minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmheaphigh"
+
+      - uid: vetsw-process-cpu-high
+        title: VetSoftwareProcessCpuHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                process_cpu_usage{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: runtime
+          service: vetsoftware
+        annotations:
+          summary: "El proceso Java supera el 85 % de CPU"
+          description: "El uso de CPU del proceso se mantuvo por encima del 85 % durante diez minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareprocesscpuhigh"
+
+      - uid: vetsw-jvm-gc-overhead-high
+        title: VetSoftwareJvmGcOverheadHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                jvm_gc_overhead{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.20] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: runtime
+          service: vetsoftware
+        annotations:
+          summary: "La JVM dedica demasiado tiempo al recolector de basura"
+          description: "El overhead de GC superó el 20 % durante diez minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmgcoverheadhigh"
+
+      # Renombre cloud conservado del origen: la serie llega como jvm_threads_live
+      # (sin el sufijo _threads del scrape local).
+      - uid: vetsw-jvm-thread-count-high
+        title: VetSoftwareJvmThreadCountHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                jvm_threads_live{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [200] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: runtime
+          service: vetsoftware
+        annotations:
+          summary: "La JVM mantiene más de 200 hilos vivos"
+          description: "El número de hilos vivos se mantuvo por encima del umbral durante diez minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmthreadcounthigh"
+
+  # ─────────────────────────── HikariCP ───────────────────────────
+  - orgId: 1
+    name: vetsoftware-dependencies
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-database-pool-saturated
+        title: VetSoftwareDatabasePoolSaturated
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # División 1:1 por las etiquetas comunes (incluida `pool`), igual que en el ruler.
+              expr: |
+                hikaricp_connections_active{job="mainvet/vetsoftware"}
+                /
+                clamp_min(hikaricp_connections_max{job="mainvet/vetsoftware"}, 1)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: database
+          service: vetsoftware
+        annotations:
+          summary: "El pool de conexiones está saturado"
+          description: "Más del 85 % de las conexiones HikariCP permanecen activas desde hace cinco minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabasepoolsaturated"
+
+      - uid: vetsw-database-connection-pending
+        title: VetSoftwareDatabaseConnectionPending
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                hikaricp_connections_pending{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 3m
+        labels:
+          severity: warning
+          domain: database
+          service: vetsoftware
+        annotations:
+          summary: "Hay solicitudes esperando conexión a la base de datos"
+          description: "HikariCP mantiene solicitudes pendientes desde hace al menos tres minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectionpending"
+
+      - uid: vetsw-database-connection-timeouts
+        title: VetSoftwareDatabaseConnectionTimeouts
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                increase(hikaricp_connections_timeout_total{job="mainvet/vetsoftware"}[5m])
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        labels:
+          severity: critical
+          domain: database
+          service: vetsoftware
+        annotations:
+          summary: "Se agotó el tiempo esperando una conexión"
+          description: "HikariCP registró al menos un timeout de conexión durante los últimos cinco minutos."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectiontimeouts"
+
+  # ─────────────────────── Tokens de seguridad ───────────────────────
+  - orgId: 1
+    name: vetsoftware-security-token-retention
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      # CASO NO MECÁNICO. En el ruler la comparación no es contra una constante sino contra
+      # otra serie (`vetsoftware_security_tokens_rows > on(job, instance) group_left()
+      # vetsoftware_security_tokens_growth_threshold`), y el threshold de Grafana solo compara
+      # contra números. Se consideraron dos modelados:
+      #
+      #   (a) Toda la expresión, comparador incluido, en refId A y C = gt 0 sobre el resultado.
+      #       Funciona, pero cuando la condición NO se cumple PromQL devuelve VACÍO: la regla
+      #       viviría alternando entre Alerting y NoData, nunca en Normal-con-datos, y el
+      #       `for: 30m` se apoyaría en el manejo de NoData en lugar de en datos reales.
+      #
+      #   (b) Convertir la comparación en RESTA — rows - threshold, conservando INTACTO el join
+      #       `on(job, instance) group_left()` que corrige el match many-to-one (rows tiene
+      #       `token_type`, el threshold no) — y C = gt 0. Es matemáticamente equivalente
+      #       (rows > threshold ⟺ rows - threshold > 0), sigue el mismo patrón que el resto del
+      #       fichero (el comparador vive en C), produce estado Normal con valor negativo o cero
+      #       cuando la tabla está sana, y $value pasa a ser el EXCESO de filas sobre el umbral,
+      #       que es informativo en la notificación.
+      #
+      # Se eligió (b). El resultado conserva la etiqueta `token_type` del lado izquierdo, así que
+      # sigue habiendo una instancia de alerta por tabla, igual que en el ruler.
+      - uid: vetsw-security-token-table-growth
+        title: VetSoftwareSecurityTokenTableGrowth
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                vetsoftware_security_tokens_rows{job="mainvet/vetsoftware"}
+                - on(job, instance) group_left()
+                vetsoftware_security_tokens_growth_threshold{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # Ambos gauges los publica el propio backend: con el apagado nocturno de dev desaparecen
+        # a la vez. NoData aquí no significa "la tabla creció", significa "no hay quién la mida".
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: warning
+          domain: database
+          service: vetsoftware
+        annotations:
+          summary: "Una tabla de tokens de seguridad supera el umbral de crecimiento"
+          description: "La tabla indicada por token_type sigue por encima del umbral después de varias ejecuciones de la purga."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresecuritytokentablegrowth"
