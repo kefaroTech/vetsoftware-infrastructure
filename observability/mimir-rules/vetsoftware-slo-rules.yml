@@ -1,0 +1,542 @@
+# Reglas de grabación de SLI, cumplimiento de SLO y error budget — edición Grafana Cloud (Mimir).
+#
+# GEMELO CLOUD de VetSoftware/docker/prometheus-slo-rules.yml. Misma cadena, mismos nombres
+# `vetsoftware:*`; solo cambian las expresiones base porque las métricas llegan por OTLP push
+# y no por scrape: timers en milisegundos, `job="mainvet/vetsoftware"` y bordes `le` enteros.
+# Un cambio en el fichero local debe evaluarse también aquí (ver README.md de este directorio).
+#
+# Diseño (ver VetSoftware/docs/SLO_VETSOFTWARE.md):
+#
+#   1. Objetivos          -> vetsoftware:slo_objective:ratio            (una fila por SLI)
+#   2. Eventos base 5m    -> vetsoftware:sli_{bad,total}_events:rate5m  (una fila por SLI)
+#   3. Ventanas derivadas -> avg_over_time sobre los eventos base       (genéricas, todos los SLI)
+#   4. Razón de malos     -> vetsoftware:sli_bad:ratio_rateXX           (genéricas)
+#   5. Burn rate          -> vetsoftware:slo_burn_rate:ratio_rateXX     (genéricas)
+#   6. Cumplimiento 30d   -> vetsoftware:slo_compliance:ratio30d        (genéricas)
+#   7. Error budget       -> vetsoftware:slo_error_budget_remaining:ratio30d
+#
+# Solo el bloque 2 depende de cada operación crítica. Añadir un journey nuevo son dos reglas;
+# todo lo demás lo sigue automáticamente por los labels `slo`, `sli` y `service`.
+#
+# Las ventanas largas promedian *tasas de eventos*, nunca razones ya calculadas: promediar
+# razones daría el mismo peso a una hora con 5 solicitudes que a una con 5.000.
+#
+# Los umbrales de latencia usan exclusivamente bordes `le` publicados por las series cloud,
+# que van en MILISEGUNDOS y en formato ENTERO (`le="1000"`; `le="1000.0"` NO casa y el SLI
+# desaparecería en silencio). Bordes reales: HTTP 250/500/1000/2000/5000/30000;
+# DIAN 2000/5000/15000/30000/60000.
+#
+# El selector de `uri` acepta el prefijo `/api/v1` de forma opcional: el tag `uri` de Micrometer
+# se construye con el patrón del handler mapping y no incluye el context-path, pero el prefijo
+# opcional mantiene las reglas válidas si la aplicación se despliega sin context-path.
+#
+# Intervalos: el fichero local usa 30 s en varios grupos; aquí todos son 1 m — es el mínimo
+# cómodo del ruler de Grafana Cloud y, con el volumen real de dev, 30 s no aporta nada.
+
+namespace: vetsoftware-slo-rules
+
+groups:
+  # ---------------------------------------------------------------------------
+  # 1. Objetivos declarados. Única fuente de verdad numérica de cada SLO.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-objectives
+    interval: 1m
+    rules:
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.995)
+        labels:
+          slo: api-availability
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: api-latency
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.999)
+        labels:
+          slo: auth-login
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.995)
+        labels:
+          slo: pos-checkout
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: pos-checkout
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.995)
+        labels:
+          slo: clinical-write
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: clinical-write
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: dian-transmission
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.95)
+        labels:
+          slo: dian-transmission
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:slo_objective:ratio
+        expr: vector(0.995)
+        labels:
+          slo: inventory-movement
+          sli: availability
+          service: vetsoftware
+
+  # ---------------------------------------------------------------------------
+  # 2. Eventos base por SLI, ventana de 5 minutos.
+  #    `total` = eventos que cuentan para el SLO. `bad` = eventos que gastan error budget.
+  #    Los eventos excluidos del denominador se documentan en docs/SLO_VETSOFTWARE.md.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-events-5m
+    interval: 1m
+    rules:
+      # --- api-availability: toda la superficie HTTP; solo 5xx gasta budget ---
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m]))
+        labels:
+          slo: api-availability
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status=~"5.."}[5m]))
+        labels:
+          slo: api-availability
+          sli: availability
+          service: vetsoftware
+
+      # --- api-latency: umbral 1 s = 1000 ms sobre respuestas no-5xx (un 500 rápido no es bueno) ---
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status!~"5.."}[5m]))
+        labels:
+          slo: api-latency
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status!~"5.."}[5m]))
+            -
+            sum(rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware",status!~"5..",le="1000"}[5m])),
+            0
+          )
+        labels:
+          slo: api-latency
+          sli: latency
+          service: vetsoftware
+
+      # --- auth-login: credenciales inválidas son 4xx y no gastan budget ---
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~"(/api/v1)?/auth/login/(employee|system)"
+          }[5m]))
+        labels:
+          slo: auth-login
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~"(/api/v1)?/auth/login/(employee|system)",
+            status=~"5.."
+          }[5m]))
+        labels:
+          slo: auth-login
+          sli: availability
+          service: vetsoftware
+
+      # --- pos-checkout: registro de venta POS (RegisterPosSaleService) ---
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~"(/api/v1)?/electronic-documents/from-sale"
+          }[5m]))
+        labels:
+          slo: pos-checkout
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~"(/api/v1)?/electronic-documents/from-sale",
+            status=~"5.."
+          }[5m]))
+        labels:
+          slo: pos-checkout
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~"(/api/v1)?/electronic-documents/from-sale",
+            status!~"5.."
+          }[5m]))
+        labels:
+          slo: pos-checkout
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(http_server_requests_milliseconds_count{
+              job="mainvet/vetsoftware",
+              method="POST",
+              uri=~"(/api/v1)?/electronic-documents/from-sale",
+              status!~"5.."
+            }[5m]))
+            -
+            sum(rate(http_server_requests_milliseconds_bucket{
+              job="mainvet/vetsoftware",
+              method="POST",
+              uri=~"(/api/v1)?/electronic-documents/from-sale",
+              status!~"5..",
+              le="2000"
+            }[5m])),
+            0
+          )
+        labels:
+          slo: pos-checkout
+          sli: latency
+          service: vetsoftware
+
+      # --- clinical-write: creación de registros clínicos del animal ---
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~'(/api/v1)?/(consultations|vaccinations|dewormings|surgeries|hospitalizations|laboratory-tests|diagnostic-imagings|prescriptions|medicament-prescriptions|spas|daycares|animals/\\{animalId\\}/weight-records)'
+          }[5m]))
+        labels:
+          slo: clinical-write
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~'(/api/v1)?/(consultations|vaccinations|dewormings|surgeries|hospitalizations|laboratory-tests|diagnostic-imagings|prescriptions|medicament-prescriptions|spas|daycares|animals/\\{animalId\\}/weight-records)',
+            status=~"5.."
+          }[5m]))
+        labels:
+          slo: clinical-write
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(http_server_requests_milliseconds_count{
+            job="mainvet/vetsoftware",
+            method="POST",
+            uri=~'(/api/v1)?/(consultations|vaccinations|dewormings|surgeries|hospitalizations|laboratory-tests|diagnostic-imagings|prescriptions|medicament-prescriptions|spas|daycares|animals/\\{animalId\\}/weight-records)',
+            status!~"5.."
+          }[5m]))
+        labels:
+          slo: clinical-write
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(http_server_requests_milliseconds_count{
+              job="mainvet/vetsoftware",
+              method="POST",
+              uri=~'(/api/v1)?/(consultations|vaccinations|dewormings|surgeries|hospitalizations|laboratory-tests|diagnostic-imagings|prescriptions|medicament-prescriptions|spas|daycares|animals/\\{animalId\\}/weight-records)',
+              status!~"5.."
+            }[5m]))
+            -
+            sum(rate(http_server_requests_milliseconds_bucket{
+              job="mainvet/vetsoftware",
+              method="POST",
+              uri=~'(/api/v1)?/(consultations|vaccinations|dewormings|surgeries|hospitalizations|laboratory-tests|diagnostic-imagings|prescriptions|medicament-prescriptions|spas|daycares|animals/\\{animalId\\}/weight-records)',
+              status!~"5..",
+              le="2000"
+            }[5m])),
+            0
+          )
+        labels:
+          slo: clinical-write
+          sli: latency
+          service: vetsoftware
+
+      # --- dian-transmission: métrica de negocio, no HTTP.
+      #     `pending` se excluye del denominador: la DIAN todavía no decidió y el backlog
+      #     tiene su propia alerta (VetSoftwareDianBacklogOlderThanOneHour).
+      #     `contingency` cuenta como malo: el documento no llegó a la DIAN.
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(vetsoftware_business_dian_transmissions_total{
+            job="mainvet/vetsoftware",
+            result=~"validated|rejected|contingency|error"
+          }[5m]))
+        labels:
+          slo: dian-transmission
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          sum(rate(vetsoftware_business_dian_transmissions_total{
+            job="mainvet/vetsoftware",
+            result=~"rejected|contingency|error"
+          }[5m]))
+        labels:
+          slo: dian-transmission
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(vetsoftware_business_dian_transmission_duration_milliseconds_count{
+            job="mainvet/vetsoftware",
+            result=~"validated|rejected|contingency|error"
+          }[5m]))
+        labels:
+          slo: dian-transmission
+          sli: latency
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(vetsoftware_business_dian_transmission_duration_milliseconds_count{
+              job="mainvet/vetsoftware",
+              result=~"validated|rejected|contingency|error"
+            }[5m]))
+            -
+            sum(rate(vetsoftware_business_dian_transmission_duration_milliseconds_bucket{
+              job="mainvet/vetsoftware",
+              result=~"validated|rejected|contingency|error",
+              le="15000"
+            }[5m])),
+            0
+          )
+        labels:
+          slo: dian-transmission
+          sli: latency
+          service: vetsoftware
+
+      # --- inventory-movement: solo `error` gasta budget.
+      #     `insufficient_stock` y `validation_error` son rechazos legítimos de negocio
+      #     (equivalen a un 4xx) y tienen su propia alerta de tasa.
+      #     `duplicate_ignored` es idempotencia funcionando: cuenta como bueno.
+      - record: vetsoftware:sli_total_events:rate5m
+        expr: |
+          sum(rate(vetsoftware_business_inventory_movements_total{
+            job="mainvet/vetsoftware",
+            result=~"success|duplicate_ignored|error"
+          }[5m]))
+        labels:
+          slo: inventory-movement
+          sli: availability
+          service: vetsoftware
+
+      - record: vetsoftware:sli_bad_events:rate5m
+        expr: |
+          sum(rate(vetsoftware_business_inventory_movements_total{
+            job="mainvet/vetsoftware",
+            result="error"
+          }[5m]))
+        labels:
+          slo: inventory-movement
+          sli: availability
+          service: vetsoftware
+
+  # ---------------------------------------------------------------------------
+  # 3. Ventanas derivadas. Genéricas: cubren todos los SLI declarados arriba.
+  #    avg_over_time de una tasa da el promedio de eventos por segundo de la ventana.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-windows-short
+    interval: 1m
+    rules:
+      - record: vetsoftware:sli_total_events:rate30m
+        expr: avg_over_time(vetsoftware:sli_total_events:rate5m[30m])
+      - record: vetsoftware:sli_bad_events:rate30m
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate5m[30m])
+
+      - record: vetsoftware:sli_total_events:rate1h
+        expr: avg_over_time(vetsoftware:sli_total_events:rate5m[1h])
+      - record: vetsoftware:sli_bad_events:rate1h
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate5m[1h])
+
+      - record: vetsoftware:sli_total_events:rate2h
+        expr: avg_over_time(vetsoftware:sli_total_events:rate5m[2h])
+      - record: vetsoftware:sli_bad_events:rate2h
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate5m[2h])
+
+      - record: vetsoftware:sli_total_events:rate6h
+        expr: avg_over_time(vetsoftware:sli_total_events:rate5m[6h])
+      - record: vetsoftware:sli_bad_events:rate6h
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate5m[6h])
+
+  # El intervalo NO puede acercarse a `query.lookback-delta` (5 m por defecto). Con un intervalo de
+  # 5 m las muestras quedan exactamente en el borde de la ventana de búsqueda: la serie es visible
+  # casi todo el intervalo y desaparece al final, así que los paneles alternan entre valor y
+  # "No data" y las alertas de presupuesto e integridad oscilan. Se usa 1 m para tener margen.
+  - name: vetsoftware-slo-windows-long
+    interval: 1m
+    rules:
+      - record: vetsoftware:sli_total_events:rate1d
+        expr: avg_over_time(vetsoftware:sli_total_events:rate5m[1d])
+      - record: vetsoftware:sli_bad_events:rate1d
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate5m[1d])
+
+      # La ventana de cumplimiento se encadena desde `rate1d` y no desde `rate5m`: mismo resultado
+      # ponderado por tráfico con la mitad de puntos por evaluación.
+      - record: vetsoftware:sli_total_events:rate30d
+        expr: avg_over_time(vetsoftware:sli_total_events:rate1d[30d])
+      - record: vetsoftware:sli_bad_events:rate30d
+        expr: avg_over_time(vetsoftware:sli_bad_events:rate1d[30d])
+
+  # ---------------------------------------------------------------------------
+  # 4. Razón de eventos malos por ventana. Genéricas.
+  #    El denominador se acota para que una ventana sin tráfico dé 0 y no NaN.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-ratios
+    interval: 1m
+    rules:
+      - record: vetsoftware:sli_bad:ratio_rate5m
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate5m)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate5m), 0.000001)
+
+      - record: vetsoftware:sli_bad:ratio_rate30m
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate30m)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate30m), 0.000001)
+
+      - record: vetsoftware:sli_bad:ratio_rate1h
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate1h)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate1h), 0.000001)
+
+      - record: vetsoftware:sli_bad:ratio_rate2h
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate2h)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate2h), 0.000001)
+
+      - record: vetsoftware:sli_bad:ratio_rate6h
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate6h)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate6h), 0.000001)
+
+      - record: vetsoftware:sli_bad:ratio_rate1d
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate1d)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate1d), 0.000001)
+
+  # ---------------------------------------------------------------------------
+  # 5. Burn rate: cuántas veces más rápido se gasta el budget de lo sostenible.
+  #    1 = se agota exactamente al cerrar la ventana de 30 días.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-burn-rate
+    interval: 1m
+    rules:
+      - record: vetsoftware:slo_burn_rate:ratio_rate5m
+        expr: |
+          vetsoftware:sli_bad:ratio_rate5m
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+      - record: vetsoftware:slo_burn_rate:ratio_rate30m
+        expr: |
+          vetsoftware:sli_bad:ratio_rate30m
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+      - record: vetsoftware:slo_burn_rate:ratio_rate1h
+        expr: |
+          vetsoftware:sli_bad:ratio_rate1h
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+      - record: vetsoftware:slo_burn_rate:ratio_rate2h
+        expr: |
+          vetsoftware:sli_bad:ratio_rate2h
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+      - record: vetsoftware:slo_burn_rate:ratio_rate6h
+        expr: |
+          vetsoftware:sli_bad:ratio_rate6h
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+      - record: vetsoftware:slo_burn_rate:ratio_rate1d
+        expr: |
+          vetsoftware:sli_bad:ratio_rate1d
+          / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+
+  # ---------------------------------------------------------------------------
+  # 6 y 7. Cumplimiento y error budget de la ventana rodante de 30 días.
+  #    En Grafana Cloud la retención de métricas (>= 13 meses en el plan actual) cubre de sobra
+  #    la ventana de 30 días. Mismo motivo que `windows-long` para el intervalo de 1 m.
+  # ---------------------------------------------------------------------------
+  - name: vetsoftware-slo-compliance
+    interval: 1m
+    rules:
+      - record: vetsoftware:sli_bad:ratio_rate30d
+        expr: |
+          sum by (slo, sli, service) (vetsoftware:sli_bad_events:rate30d)
+          / clamp_min(sum by (slo, sli, service) (vetsoftware:sli_total_events:rate30d), 0.000001)
+
+      - record: vetsoftware:slo_compliance:ratio30d
+        expr: 1 - vetsoftware:sli_bad:ratio_rate30d
+
+      # 1 = budget intacto; 0 = agotado; negativo = SLO incumplido y cuánto lo excede.
+      - record: vetsoftware:slo_error_budget_remaining:ratio30d
+        expr: |
+          clamp_max(
+            clamp_min(
+              1 - (
+                vetsoftware:sli_bad:ratio_rate30d
+                / clamp_min(1 - vetsoftware:slo_objective:ratio, 0.000001)
+              ),
+              -1
+            ),
+            1
+          )

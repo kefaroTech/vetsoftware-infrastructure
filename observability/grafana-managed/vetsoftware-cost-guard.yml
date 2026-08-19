@@ -1,0 +1,77 @@
+# Alerta Grafana-managed: guarda de ingesta.
+#
+# NO va por mimirtool y NO puede ir. Ver el README de este directorio: las métricas de uso
+# del stack (`grafanacloud_instance_*`) viven en el datasource `grafanacloud-usage`, que es
+# un tenant distinto del nuestro; una regla del ruler de Mimir solo puede consultar las
+# series de SU propio tenant. Por eso esta alerta usa el motor Grafana-managed, que sí puede
+# apuntar a cualquier datasource.
+#
+# Formato: provisioning de alertas de Grafana (apiVersion 1). Se aplica por la API de
+# provisioning o se importa desde la UI. Instrucciones en el README.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: vetsoftware-cost-guard
+    # La carpeta debe existir en el stack antes de aplicar el fichero.
+    folder: VetSoftware
+    # 5 m es suficiente: las series de uso se publican con baja frecuencia y la cardinalidad
+    # no se dispara en segundos. Evaluar más a menudo solo gasta.
+    interval: 5m
+    rules:
+      - uid: vetsw-ingestion-near-limit
+        title: VetSoftwareIngestionNearLimit
+        condition: C
+        # La condición es la RAZÓN contra el límite publicado, no un número absoluto de series:
+        # así la alerta sigue siendo correcta si algún día se cambia de plan y el techo se mueve.
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: grafanacloud-usage
+            model:
+              refId: A
+              instant: true
+              # `last_over_time([1h])` no es adorno: `grafanacloud_instance_active_series` se
+              # publica de forma dispersa y una consulta instantánea pelada devuelve vacío la
+              # mayor parte del tiempo — la alerta viviría en NoData. Verificado contra el stack.
+              # El `on(id) group_left()` une las dos familias por el id de instancia; el límite
+              # no comparte el resto de etiquetas.
+              expr: |
+                last_over_time(grafanacloud_instance_active_series[1h])
+                  / on(id) group_left()
+                grafanacloud_instance_metrics_limits{limit_name="max_active_series_per_user"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0.8
+        # NoData aquí NO es alarma: si las series de uso no llegan, no significa que la ingesta
+        # esté al límite. OK evita despertar a alguien por un hueco del publicador de Grafana.
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+          domain: observability
+          service: vetsoftware
+        annotations:
+          summary: "La ingesta de métricas supera el 80 % del límite del plan"
+          description: >-
+            Las series activas del stack pasan del 80 % de `max_active_series_per_user`.
+            Al llegar al 100 % Grafana Cloud RECHAZA la ingesta: se pierde telemetría en
+            silencio y con ella la capacidad de ver cualquier otro incidente. Causa más
+            probable: una etiqueta nueva sin acotar en alguna métrica. Contrastar con
+            `topk(10, count by (__name__)({__name__=~".+"}))` y revisar
+            `BusinessMetricCardinalityFilter`, que hoy solo cubre el prefijo
+            `vetsoftware.business.` — las familias `email.*` y `lettuce.*` quedan fuera de
+            esa allowlist.
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareingestionnearlimit"
