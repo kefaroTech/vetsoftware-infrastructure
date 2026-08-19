@@ -30,8 +30,12 @@ va en `../grafana-managed/`. Poner una alerta en este directorio la deja evaluan
 notificar, que es el fallo silencioso que costó descubrir.
 
 Los `for:`, los labels `severity`/`domain`/`service` y las annotations de las alertas
-migradas se conservaron intactos; los runbooks siguen apuntando a
-`VetSoftware/docs/ALERTAMIENTO_OPERATIVO.md`.
+migradas se conservaron intactos. Los runbooks **no** apuntan al repo del backend: desde el
+PR #82 las 26 anotaciones `runbook` llevan la URL absoluta de
+`docs/ALERTAMIENTO_OPERATIVO.md#<ancla>` **de este repositorio** en GitHub, porque un mensaje de
+Slack necesita un enlace pulsable. (`VetSoftware/docs/ALERTAMIENTO_OPERATIVO.md` existe, pero
+documenta **otro** plano de alertas: el del stack Docker local con Prometheus, Alertmanager y
+Mailpit.)
 
 ## Por qué hay dos mundos de métricas
 

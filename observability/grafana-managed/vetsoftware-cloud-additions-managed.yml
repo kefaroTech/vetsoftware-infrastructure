@@ -69,9 +69,24 @@ groups:
               # Multidimensional a propósito: el threshold se evalúa por serie, así que cada
               # job_name genera su propia instancia de alerta y {{ $labels.job_name }} en las
               # annotations sigue resolviendo igual que en el ruler.
+              #
+              # `partial_failure` SÍ entra aquí. El enum real es
+              # ScheduledJobTelemetry.Outcome = no_work | success | partial_failure | failure |
+              # error (VetSoftware/.../infrastructure/observability/ScheduledJobTelemetry.java:75)
+              # y `partial_failure` significa «algunos elementos fallaron, otros no». Quedaba
+              # fuera de las DOS variantes: un job que falla la mitad de sus elementos para
+              # siempre no emitía ninguna alerta, ni warning ni critical. Es justo el «fallo
+              # parcial» que el comentario de esta regla dice cubrir. En critical NO entra,
+              # porque allí es prueba de que hubo éxitos (ver la regla de abajo).
+              #
+              # `job_name!=""` excluye la serie del publicador que vive FUERA del envoltorio de
+              # telemetría de jobs (code_function="refresh", sin job_name ni job_outcome, ~1.950
+              # incrementos en 7 d). Hoy ya no casa, porque no lleva job_outcome; el matcher es
+              # la garantía de que un cambio futuro en esa etiqueta no la cuele en el
+              # `sum by (job_name)` como job_name="" y produzca un aviso con el nombre en blanco.
               expr: |
                 sum by (job_name) (
-                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[30m])
+                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[30m])
                 )
           - refId: C
             datasourceUid: __expr__
@@ -92,13 +107,21 @@ groups:
           service: vetsoftware
         annotations:
           summary: "El job programado {{ $labels.job_name }} está registrando fallos"
-          description: "El job {{ $labels.job_name }} lleva al menos 30 minutos acumulando ejecuciones con job_outcome failure/error. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
+          description: "El job {{ $labels.job_name }} lleva al menos 30 minutos acumulando ejecuciones con job_outcome failure, partial_failure o error. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
-      # Variante critical: TODAS las ejecuciones de las últimas 2 horas fallaron (ni un
-      # éxito). Fallo determinista y sistémico. Mismo alertname que la warning —el stack
-      # admite duplicados, ver decisión 3 de la cabecera—; lo que las distingue es el uid
-      # (clave de upsert) y el label severity, que es el que enruta.
+      # Variante critical: el job lleva al menos DOS ejecuciones fallidas en 2 horas y ni una
+      # sola en la que procesara bien algún elemento. Fallo determinista, sistémico y repetido.
+      # Mismo alertname que la warning —el stack admite duplicados, ver decisión 3 de la
+      # cabecera—; lo que las distingue es el uid (clave de upsert) y el label severity, que es
+      # el que enruta.
+      #
+      # Solapamiento con la warning: es deliberado y no es redundante. En un fallo total la
+      # warning también casa, pero la notification policy agrupa por (alertname, severity) y
+      # enruta cada severity a un receptor distinto — la warning llega al canal de horario
+      # laboral y la critical al de guardia. Es la escalada idiomática de Prometheus, no un
+      # duplicado: quitar la warning dejaría el fallo parcial sin cubrir, y quitar la critical
+      # mandaría el fallo total al canal equivocado.
       - uid: vetsw-scheduled-job-failing-critical
         title: VetSoftwareScheduledJobFailing
         condition: C
@@ -110,22 +133,64 @@ groups:
               refId: A
               instant: true
               # El `unless` COMPLETO vive dentro de A; al threshold solo se le quita el
-              # comparador final del lado de los fallos. El `> 0` del lado de los éxitos NO
-              # es el comparador final: es el filtro que decide qué series elimina el
-              # `unless`, y existe porque un `== 0` clásico no casaría si la serie de éxitos
-              # no existe — la alerta moriría en silencio justo en el fallo total que debe
-              # cubrir. Semántica resultante, idéntica a la original: A devuelve los fallos
-              # por job_name SALVO los job_name con algún éxito en 2 h; C dispara si el
-              # valor restante > 0. (Precedencia PromQL: `>` liga más fuerte que `unless`,
-              # los paréntesis son solo por legibilidad.)
+              # comparador final del lado de los fallos. Ni el `>= 2` ni el `> 0` son ese
+              # comparador final: son la guarda de repetición y el filtro del `unless`. El
+              # `> 0` existe porque un `== 0` clásico no casaría si la serie de éxitos no
+              # existe — la alerta moriría en silencio justo en el fallo total que debe
+              # cubrir. (Precedencia PromQL: `>=` y `>` ligan más fuerte que `unless`; los
+              # paréntesis son solo por legibilidad.)
+              #
+              # ── FALSO POSITIVO ESTRUCTURAL CORREGIDO (medido en vivo el 2026-08-19) ──
+              #
+              # El defecto: `security.tokens.cleanup` corre cada hora y su resultado NORMAL es
+              # `no_work` — si no hay tokens que purgar, no hay trabajo. Nunca emite `success`.
+              # Con la expresión anterior, «ningún success en 2 h» era su estado permanente, así
+              # que UN SOLO fallo aislado cumplía la condición al instante y mandaba un critical
+              # a Slack. Verificado: 2,02 ejecuciones/2 h, todas `no_work`, cero `success`.
+              #
+              # El arreglo obvio —meter `no_work` en el lado excluido, `job_outcome=~"success|
+              # no_work"`— ESTÁ MAL Y SE PROBÓ QUE ROMPE LA ALERTA. Medido a las 00:47:40Z del
+              # 2026-08-19, con la reconciliación DIAN cayendo al 100 %:
+              #   expresión anterior              -> dian.pending.reconciliation = 6,05  (dispara)
+              #   con `no_work` en el lado excluido -> vacío                            (MUDA)
+              # La razón: `dian.pending.reconciliation` corre cada 10 min y alterna ~6 `failure`
+              # con ~6 `no_work` por cada 2 h — los ciclos en los que no encuentra documentos
+              # pendientes. `no_work` NO es prueba de salud: convive con el fallo total. Meterlo
+              # en el lado excluido habría silenciado el incidente real que esta regla cubre.
+              #
+              # Lo que se hace en su lugar, dos cambios independientes:
+              #
+              # 1) Lado excluido = `success|partial_failure`, NO `no_work`. Solo esos dos
+              #    resultados prueban que ALGÚN elemento se procesó bien: `partial_failure` es
+              #    por construcción `0 < failures < attempted` (Outcome.from), o sea que hubo
+              #    éxitos, y contradice el «sin ningún éxito» del summary. `no_work` queda
+              #    neutro: ni prueba salud ni prueba fallo, y por eso no entra en ningún lado.
+              #
+              # 2) Guarda de repetición `>= 2` en el lado de los fallos. Es lo que de verdad
+              #    mata el falso positivo: el problema de fondo no era `no_work`, era que la
+              #    expresión no distinguía «falló un ciclo suelto» de «lleva 24 h sin acertar».
+              #    El 2 no es arbitrario, es el único valor que sirve, y se midió:
+              #      · un fallo aislado extrapola a ~1,0-1,1  -> queda por debajo, no dispara.
+              #      · `security.tokens.cleanup` es el job MÁS LENTO: 2,02 ejecuciones/2 h. Con
+              #        `>= 3` un cleanup roto al 100 % nunca podría alcanzar el umbral y la
+              #        regla quedaría ciega para él para siempre — cambiar un falso positivo
+              #        por un falso negativo es peor negocio.
+              #      · con `>= 2` ese mismo cleanup roto al 100 % sí dispara (2,02 >= 2).
+              #    Contra-prueba ejecutada inyectando +1 fallo simulado a los tres jobs: solo
+              #    sobrevive `dian.pending.reconciliation` (7,05); `security.tokens.cleanup` y
+              #    `dian.contingency.retry` caen en 1 y quedan filtrados.
+              #
+              # `job_name!=""`: misma razón que en la warning, ver el comentario de arriba.
               expr: |
-                sum by (job_name) (
-                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[2h])
+                (
+                  sum by (job_name) (
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|error"}[2h])
+                  ) >= 2
                 )
                 unless
                 (
                   sum by (job_name) (
-                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome="success"}[2h])
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"success|partial_failure"}[2h])
                   ) > 0
                 )
           - refId: C
@@ -144,8 +209,8 @@ groups:
           domain: backend
           service: vetsoftware
         annotations:
-          summary: "El job programado {{ $labels.job_name }} falla el 100 % de sus ejecuciones"
-          description: "Todas las ejecuciones de {{ $labels.job_name }} en las últimas 2 horas terminaron en failure/error, sin ningún éxito. El fallo es sistémico: ningún ciclo posterior lo va a recuperar solo."
+          summary: "El job programado {{ $labels.job_name }} falla el 100 % de las ejecuciones en las que tuvo trabajo"
+          description: "{{ $labels.job_name }} acumula al menos 2 ejecuciones con job_outcome failure/error en las últimas 2 horas y ninguna con success ni partial_failure: ni un solo elemento procesado bien. Las ejecuciones no_work no cuentan (el job corrió y no había trabajo), por eso no salvan ni condenan. El fallo es sistémico y repetido: ningún ciclo posterior lo va a recuperar solo."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
   # ---------------------------------------------------------------------------------------
@@ -341,10 +406,25 @@ groups:
             model:
               refId: A
               instant: true
+              # Se excluyen las operaciones de PROTOCOLO (saludo, autenticación, selección de
+              # base). Medido: CLIENT y HELLO tardan 60-77 ms —son el establecimiento de la
+              # conexión— frente a 1-5 ms de GET/EVAL/UNLINK. Un p99 global mezcla las dos
+              # poblaciones, así que un reciclado de conexiones perfectamente sano lo empuja
+              # por encima de 50 ms y despierta a alguien sin que haya nada roto.
+              #
+              # El matcher es NEGATIVO a propósito. Una lista blanca de operaciones de datos
+              # dejaría fuera en silencio cada comando nuevo que añada la aplicación, y la
+              # alerta se iría apagando sola sin que nadie lo notara. Al excluir, lo que no
+              # se conoce entra y como mucho sobra ruido: falla del lado seguro.
               expr: |
                 histogram_quantile(
                   0.99,
-                  sum by (le) (rate(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[5m]))
+                  sum by (le) (
+                    rate(lettuce_milliseconds_bucket{
+                      job="mainvet/vetsoftware",
+                      db_operation!~"CLIENT|HELLO|INFO|AUTH|COMMAND|SELECT|SUBSCRIBE|PING"
+                    }[5m])
+                  )
                 )
           - refId: C
             datasourceUid: __expr__
