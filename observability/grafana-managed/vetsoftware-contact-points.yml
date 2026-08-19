@@ -49,6 +49,70 @@
 # vacía). La interpolación `$VARIABLE` de provisioning solo existe en el provisioning por
 # fichero de Grafana self-hosted: si el pipeline aplica esto por API, debe sustituir el
 # valor ANTES de la llamada o Grafana almacenará el literal.
+#
+# ── Mensaje: por qué hay plantillas propias y qué decide cada parte ──────────────────────
+# Las plantillas por defecto de Grafana producen un mensaje que NO dice lo que pasa: ponen
+# en el título el nombre de la regla más un revoltijo de valores de labels sin sus claves,
+# y NO imprimen `summary` ni `description` — que en este proyecto existen en las 26 reglas,
+# están escritas en español y son justamente la explicación del incidente. El valor sale
+# además en crudo, con el ruido de coma flotante del cálculo (`99.99999999999991`). Por eso
+# aquí se fija `title` y `text` a mano:
+#
+#   - TÍTULO = indicador de severidad + `summary` de la PRIMERA alerta del grupo. El nombre
+#     de la regla no informa a las 3 de la mañana; la frase sí. El nombre no se pierde: va
+#     en la primera línea del cuerpo, que es lo que se busca en Grafana o en el runbook.
+#   - El indicador de severidad es obligatorio y no decorativo: HOY los dos contact points
+#     comparten webhook, o sea el MISMO canal, así que el destino no distingue critical de
+#     warning. Si se separan en dos canales, el indicador sigue sin estorbar.
+#   - Se usan códigos de emoji de Slack (`:rotating_light:`) y no el carácter Unicode: el
+#     texto viaja por sustitución de marcadores en PowerShell, yq y JSON antes de llegar a
+#     la API, y un ASCII puro no puede romperse por el camino. Slack los renderiza igual.
+#   - VALOR formateado con `printf "%.2f"`. El ruido de coma flotante no es información y
+#     hace dudar del dato entero.
+#   - Se omite el refId `C` de `.Values`: en las 26 reglas `condition: C` es el umbral
+#     (expresión `threshold`), que vale 1 siempre que la alerta dispara. Imprimirlo es ruido
+#     constante. Si alguna regla futura usa otra letra como condición, aparecerá un `1.00`
+#     de más — molesto, no peligroso.
+#   - Las etiquetas se recorren con `.Labels.SortedPairs` en vez de listarlas una a una, así
+#     que `slo`, `sli`, `job_name` o cualquiera que se añada mañana salen solas y con su
+#     clave delante. Se excluyen `alertname` (ya está en la cabecera), `severity` (ya está
+#     en el título, y la policy agrupa por él, luego es idéntico en todo el grupo) y
+#     `grafana_folder`, que Grafana añade sola y siempre vale lo mismo.
+#   - ENLACES: `.GeneratorURL` (abrir la alerta) y `.SilenceURL` (silenciar con los matchers
+#     ya rellenos). `.DashboardURL` se imprime SOLO si existe: hoy ninguna regla trae las
+#     anotaciones `__dashboardUid__`/`__panelId__`, así que no saldrá — está puesto para que
+#     funcione el día que alguna las lleve, sin tocar la plantilla.
+#   - SIN enlace al runbook, a propósito: las 25 reglas que traen la anotación `runbook`
+#     apuntan a `docs/ALERTAMIENTO_OPERATIVO.md`, fichero que NO EXISTE en el repositorio.
+#     Publicarlo sería un enlace roto en CADA mensaje, y un runbook roto es peor que ninguno
+#     porque se deja de comprobar. Para activarlo hacen falta dos cosas: (1) que el fichero
+#     exista con sus anclas por alerta, y (2) que la anotación sea una URL absoluta (una
+#     ruta relativa no es clicable en Slack). Cuando ambas se cumplan, basta añadir al
+#     bloque de enlaces: `{{ with $a.Annotations.runbook }} · <{{ . }}|Runbook>{{ end }}`.
+#   - La policy agrupa por `alertname`, así que un mensaje puede traer VARIAS instancias (p.
+#     ej. tres `job_name` distintos fallando). La plantilla itera `.Alerts` y corta en 5,
+#     anunciando el total: sin corte, un grupo grande revienta el límite de longitud de
+#     Slack y el mensaje se trunca por la mitad, que es cuando se pierde justo el final.
+#   - Formato: mrkdwn de Slack (`*negrita*`, `_cursiva_`, `<url|texto>`, `>` para el bloque
+#     citado). NO es markdown de GitHub; `**negrita**` saldría literal.
+#
+# VERIFICADO en local el 2026-08-19: las plantillas se renderizaron con el motor real de
+# Grafana (contenedor `grafana/grafana:13.0.1`, endpoint
+# `POST /api/alertmanager/grafana/config/api/v1/templates/test`) con cuatro juegos de datos
+# —una alerta, tres agrupadas, siete agrupadas y una `DatasourceError` sin `summary` ni
+# valores— y salieron sin errores de plantilla. De ahí se confirmó, sobre el motor y no
+# sobre la documentación, que existen `.Status`, `.CommonLabels`, `.Alerts` y, por alerta,
+# `.Status`, `.Labels`, `.Annotations`, `.Values`, `.StartsAt`, `.GeneratorURL`,
+# `.SilenceURL` y `.DashboardURL`, y que la función `tz` está disponible. El stack de Cloud
+# es 13.2.0, o sea igual o más nuevo. Si algún día `tz` desapareciera, el reemplazo sin
+# dependencias es `{{ $a.StartsAt.Format "2006-01-02 15:04:05 MST" }}`, que imprime UTC.
+#
+# DUPLICACIÓN CONOCIDA: las dos plantillas son IDÉNTICAS y están escritas dos veces. La
+# severidad la aporta el label de la alerta, no el contact point, así que no hay diferencia
+# que justifique divergir — si se toca una, hay que tocar la otra. La forma limpia de
+# compartirlas es una plantilla con nombre (`/api/v1/provisioning/templates` + `{{ template
+# "vetsoftware.slack.text" . }}`), pero el script de aplicación no sabe aplicar ese tipo de
+# recurso y no se toca aquí. Queda anotado como mejora, no como deuda silenciosa.
 
 apiVersion: 1
 
@@ -59,10 +123,16 @@ contactPoints:
     receivers:
       - uid: vetsw-cp-critical-slack
         type: slack
-        # false: cuando la condición se resuelve, Slack recibe el aviso de recuperación.
-        # En un canal compartido eso importa más que en un buzón: sin él, el hilo queda
-        # con la alerta abierta para siempre y nadie sabe si sigue viva.
-        disableResolveMessage: false
+        # true: Slack NO recibe el aviso de recuperación. Es una decisión del usuario y
+        # tiene un coste que conviene tener escrito: por Slack nunca se sabrá que una
+        # alerta se cerró. El canal solo cuenta lo que empieza, no lo que termina, así que
+        # el estado real —¿sigue viva?— hay que mirarlo en Grafana (Alerting → Alert
+        # rules), y un hilo antiguo no significa que el problema siga abierto.
+        # A cambio se elimina la mitad del volumen del canal, que era ruido sin acción:
+        # un mensaje de recuperación no pide hacer nada.
+        # Revertirlo es poner false aquí y en la integración de correo de abajo; la
+        # plantilla ya contempla el caso (marca `[RESUELTA]` por instancia).
+        disableResolveMessage: true
         settings:
           # El webhook NO se versiona: quien tenga la URL puede publicar en el canal, así
           # que es un secreto real. El pipeline sustituye este marcador por el valor del
@@ -70,24 +140,51 @@ contactPoints:
           # queda sin resolver (un marcador que llegue a Grafana se guarda y PARECE
           # configurado — notificaciones a ninguna parte, sin error visible).
           url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
-          # Sin title ni text: Grafana usa sus plantillas por defecto, que ya incluyen
-          # nombre de alerta, estado, resumen y enlace. Definir plantillas propias es una
-          # decision aparte y no se toma a ciegas.
-          #
           # El canal lo decide el webhook, no este fichero: un webhook entrante de Slack
           # queda ligado al canal que se elige al crearlo. Para mandar critical y warning
           # a canales distintos hacen falta DOS webhooks — ver la cabecera.
+          #
+          # Plantillas: el porqué de cada decisión está en la cabecera («Mensaje: por qué
+          # hay plantillas propias»). Deben mantenerse idénticas a las de warning.
+          title: |-
+            {{- if eq .Status "resolved" }}:white_check_mark: RESUELTA{{ else if eq .CommonLabels.severity "critical" }}:rotating_light: CRÍTICO{{ else }}:warning: AVISO{{ end }} · {{ if .Alerts }}{{ with index .Alerts 0 }}{{ with .Annotations.summary }}{{ . }}{{ else }}{{ .Labels.alertname }}{{ end }}{{ end }}{{ else }}{{ .CommonLabels.alertname }}{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} instancias{{ end }}
+          text: |-
+            {{- with .CommonLabels.alertname }}`{{ . }}`{{ else }}{{ with $.Alerts }}`{{ (index . 0).Labels.alertname }}`{{ end }}{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} instancias agrupadas{{ end }}
+            {{ range $i, $a := .Alerts }}{{ if lt $i 5 }}
+            {{ if eq $a.Status "resolved" }}:white_check_mark: *[RESUELTA]* {{ end }}*{{ with $a.Annotations.summary }}{{ . }}{{ else }}{{ $a.Labels.alertname }} — la regla no define la anotación summary{{ end }}*
+            {{ with $a.Annotations.description }}{{ . }}
+            {{ end }}
+            {{- with $a.Annotations.Error }}> *error de evaluación:* {{ . }}
+            {{ end }}
+            {{- range $a.Labels.SortedPairs }}{{ if and (ne .Name "alertname") (ne .Name "severity") (ne .Name "grafana_folder") }}> *{{ .Name }}:* {{ .Value }}
+            {{ end }}{{ end }}
+            {{- range $ref, $val := $a.Values }}{{ if ne $ref "C" }}> *valor de la consulta ({{ $ref }}):* {{ printf "%.2f" $val }}
+            {{ end }}{{ end }}
+            {{- with $a.StartsAt }}> *activa desde:* {{ (tz "America/Bogota" .).Format "2006-01-02 15:04:05" }} (Bogotá)
+            {{ end }}
+            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
+            {{ end }}{{ end }}
+            {{- if gt (len .Alerts) 5 }}
+            _Se muestran 5 de {{ len .Alerts }} instancias; el resto, en Grafana._
+            {{- end }}
       # Respaldo por correo, desactivado a propósito. Merece la pena conocer el riesgo que
       # cubre: con un solo canal de entrega, si el webhook se revoca o el canal se archiva,
       # las alertas dejan de notificar EN SILENCIO — la alerta seguirá disparando en la UI
       # y nadie se enterará. Activarlo es descomentar y añadir la variable
       # VETSOFTWARE_ALERT_EMAIL al sub-gate del workflow.
+      # El disableResolveMessage va en true igual que Slack: la decisión es «no se avisa de
+      # la recuperación», y tenerla a false aquí dejaría el correo contradiciendo al canal
+      # —el mismo incidente cerrándose en un sitio y no en el otro—. Si el respaldo llega a
+      # activarse y se prefiere el aviso de cierre en el buzón (donde no molesta a nadie),
+      # es un cambio consciente de UNA línea, no un descuido heredado.
       # - uid: vetsw-cp-critical-email
       #   type: email
-      #   disableResolveMessage: false
+      #   disableResolveMessage: true
       #   settings:
       #     addresses: ${VETSOFTWARE_ALERT_EMAIL}
       #     singleEmail: true
+      #     # Sin plantillas: las de arriba son mrkdwn de Slack (`<url|texto>`, `:emoji:`)
+      #     # y en un correo saldrían literales. El correo usa las de Grafana por defecto.
 
   # ── warning: anomalía con camino de recuperación, se atiende en horario laboral ────────
   - orgId: 1
@@ -95,15 +192,43 @@ contactPoints:
     receivers:
       - uid: vetsw-cp-warning-slack
         type: slack
-        disableResolveMessage: false
+        # Misma decisión que en critical: sin aviso de recuperación. Aquí pesa aún más,
+        # porque las warnings son las que más se abren y se cierran solas: eran las que
+        # más mensajes sin acción generaban.
+        disableResolveMessage: true
         settings:
           # Mismo webhook que critical mientras solo exista uno: los dos van al mismo
-          # canal. La separación real hoy la da el label `severity` en el título y el
+          # canal. La separación real hoy la da el indicador de severidad del título y el
           # ritmo de repetición de la policy, no el destino.
           url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+          # Plantillas IDÉNTICAS a las de critical, y tienen que seguir siéndolo: la
+          # severidad la pone el label de la alerta (`.CommonLabels.severity`), no el
+          # contact point. El porqué de cada parte está en la cabecera; la nota sobre por
+          # qué están duplicadas y cómo se compartirían, también.
+          title: |-
+            {{- if eq .Status "resolved" }}:white_check_mark: RESUELTA{{ else if eq .CommonLabels.severity "critical" }}:rotating_light: CRÍTICO{{ else }}:warning: AVISO{{ end }} · {{ if .Alerts }}{{ with index .Alerts 0 }}{{ with .Annotations.summary }}{{ . }}{{ else }}{{ .Labels.alertname }}{{ end }}{{ end }}{{ else }}{{ .CommonLabels.alertname }}{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} instancias{{ end }}
+          text: |-
+            {{- with .CommonLabels.alertname }}`{{ . }}`{{ else }}{{ with $.Alerts }}`{{ (index . 0).Labels.alertname }}`{{ end }}{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} instancias agrupadas{{ end }}
+            {{ range $i, $a := .Alerts }}{{ if lt $i 5 }}
+            {{ if eq $a.Status "resolved" }}:white_check_mark: *[RESUELTA]* {{ end }}*{{ with $a.Annotations.summary }}{{ . }}{{ else }}{{ $a.Labels.alertname }} — la regla no define la anotación summary{{ end }}*
+            {{ with $a.Annotations.description }}{{ . }}
+            {{ end }}
+            {{- with $a.Annotations.Error }}> *error de evaluación:* {{ . }}
+            {{ end }}
+            {{- range $a.Labels.SortedPairs }}{{ if and (ne .Name "alertname") (ne .Name "severity") (ne .Name "grafana_folder") }}> *{{ .Name }}:* {{ .Value }}
+            {{ end }}{{ end }}
+            {{- range $ref, $val := $a.Values }}{{ if ne $ref "C" }}> *valor de la consulta ({{ $ref }}):* {{ printf "%.2f" $val }}
+            {{ end }}{{ end }}
+            {{- with $a.StartsAt }}> *activa desde:* {{ (tz "America/Bogota" .).Format "2006-01-02 15:04:05" }} (Bogotá)
+            {{ end }}
+            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
+            {{ end }}{{ end }}
+            {{- if gt (len .Alerts) 5 }}
+            _Se muestran 5 de {{ len .Alerts }} instancias; el resto, en Grafana._
+            {{- end }}
       # - uid: vetsw-cp-warning-email
       #   type: email
-      #   disableResolveMessage: false
+      #   disableResolveMessage: true
       #   settings:
       #     addresses: ${VETSOFTWARE_ALERT_EMAIL}
       #     singleEmail: true

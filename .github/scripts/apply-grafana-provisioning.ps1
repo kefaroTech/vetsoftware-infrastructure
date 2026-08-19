@@ -72,6 +72,28 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# El contenido de los contact points ya no es solo ASCII: las plantillas Go de
+# `title`/`text` llevan emojis y texto en espanol con tildes. Ese contenido
+# atraviesa un proceso nativo -el pipe de yq de mas abajo- y PowerShell
+# DECODIFICA el stdout de un proceso nativo con [Console]::OutputEncoding, que
+# en Windows es la codepage OEM de la consola (ibm850/437), NO UTF-8. Sin fijar
+# esto, yq emite UTF-8 correcto y PowerShell lo lee como OEM: el texto vuelve
+# convertido en mojibake, se envia asi a la API y QUEDA GUARDADO -el apply diria
+# OK y el canal de Slack recibiria basura-, que es exactamente la clase de fallo
+# silencioso que el control de marcadores sin resolver ya trata de evitar.
+# En los runners ubuntu-24.04 la consola ya es UTF-8 y esto no cambia nada; lo
+# que arregla es la ejecucion local en Windows. El sentido contrario
+# ($OutputEncoding, PS -> stdin del nativo) ya es UTF-8 en pwsh 7, la unica
+# version soportada por este script: SkipHttpErrorCheck no existe en 5.1.
+# En try/catch porque sin consola adjunta la asignacion puede lanzar, y eso no
+# debe convertirse en un modo de fallo nuevo.
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+}
+catch {
+    Write-Host "[grafana-provisioning] Aviso: no se pudo fijar UTF-8 en la salida de consola ($($_.Exception.Message)). Si el entorno no es UTF-8, los emojis y las tildes de las plantillas de los contact points podrian corromperse al pasar por yq."
+}
+
 if ([string]::IsNullOrWhiteSpace($GrafanaApiUrl)) {
     $GrafanaApiUrl = [Environment]::GetEnvironmentVariable("GRAFANA_API_URL")
 }
