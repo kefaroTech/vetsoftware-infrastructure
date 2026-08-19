@@ -1,5 +1,5 @@
 {
-  "$schema_note": "Valores canonicos y versionados de la telemetria de Grafana Cloud por ambiente. otlp_endpoint lo consume .github/scripts/assert-telemetry-endpoint.ps1 en todo job que exporte TF_VAR_grafana_otlp_endpoint; ruler_url y metrics_tenant_id los consume .github/scripts/assert-ruler-endpoint.ps1 en los workflows sync-alert-rules-*. Este archivo es la unica fuente revisable en pull request; las variables de GitHub no lo son.",
+  "$schema_note": "Valores canonicos y versionados de la telemetria de Grafana Cloud por ambiente. otlp_endpoint lo consume .github/scripts/assert-telemetry-endpoint.ps1 en todo job que exporte TF_VAR_grafana_otlp_endpoint; ruler_url y metrics_tenant_id los consume .github/scripts/assert-ruler-endpoint.ps1 en los workflows sync-alert-rules-*; grafana_api_url lo consume .github/scripts/assert-grafana-api-endpoint.ps1 en el paso de provisioning de Grafana de esos mismos workflows. Este archivo es la unica fuente revisable en pull request; las variables de GitHub no lo son.",
   "why": "El plan de un PR corre SIN environment y lee variables de repositorio con prefijo (DEV_GRAFANA_OTLP_ENDPOINT); apply, drift y el circuito de imagen corren CON environment y leen GRAFANA_OTLP_ENDPOINT sin prefijo. Son dos origenes independientes que ya divergieron una vez (us-east-0 frente a us-east-3): lo aprobado en el plan no era lo que se aplicaba, y el workflow de drift reportaba deriva falsa.",
   "normalization": "La barra final es irrelevante: el root de dev aplica trimsuffix(var.grafana_otlp_endpoint, \"/\") en locals.tf y el de prod en main.tf. Los verificadores normalizan igual antes de comparar; el tenant del ruler se compara como texto exacto.",
   "environments": {
@@ -13,12 +13,16 @@
       "metrics_tenant_id": "3421302",
       "ruler_verified_on": "2026-08-19",
       "ruler_note": "Cargado el 2026-08-19 en vars del environment iac-apply-dev, y fijado aqui en el mismo cambio. El host sale del datasource grafanacloud-prom (url sin el sufijo /api/prom) y el tenant de su basicAuthUser, que coincide con la etiqueta id de las series grafanacloud_instance_*. La forma de la URL se comprobo por HTTP sin credenciales: /prometheus/config/v1/rules responde 401 sobre el host pelado -existe, falta auth- y /config/v1/rules responde 404, que es lo que confirma que mimirtool debe recibir el host SIN path. FALTA el secret GRAFANA_RULER_TOKEN (Access Policy con scopes rules:read y rules:write): hasta que exista, sync-alert-rules-dev avisa y pasa sin sincronizar.",
+      "grafana_api_url": "https://vastcoyote3439.grafana.net",
+      "grafana_api_verified_on": "2026-08-18",
+      "grafana_api_note": "Host de la instancia de Grafana del stack, derivado del nombre del stack (vastcoyote3439.grafana.net) y comprobado por HTTP sin credenciales: /api/health responde 200 con la version (13.2.0). Es DISTINTO del ruler_url: aquel es el host de Mimir/Prometheus, este el de la UI y su API. Ojo: este stack responde 401 ANTES de rutear (una ruta inventada bajo /api/v1/provisioning/ tambien da 401), asi que la existencia de las rutas de provisioning NO pudo verificarse; solo el host. Probado ademas con el token glc_ del ruler (2026-08-18): la instancia lo rechaza como clave -cuerpo api-key.invalid, frente a auth.unauthorized sin token-, lo que confirma que el provisioning necesita un SERVICE ACCOUNT TOKEN (glsa_...) creado dentro de la instancia, no un token de Access Policy del portal. FALTAN vars.GRAFANA_API_URL, vars.VETSOFTWARE_ALERT_EMAIL y el secret GRAFANA_PROVISIONING_TOKEN en iac-apply-dev: hasta entonces el tramo de provisioning avisa y pasa sin aplicar.",
       "sources": [
         "vars.DEV_GRAFANA_OTLP_ENDPOINT (repositorio) - lo lee el plan de un pull request, que corre sin environment",
         "vars.GRAFANA_OTLP_ENDPOINT (environment iac-plan-dev) - drift y la fase de plan del circuito de imagen",
         "vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-dev) - apply y la fase de apply del circuito de imagen",
         "environments/dev/terraform.tfvars.example - referencia para el ciclo local",
-        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-dev) - sync de reglas de alerta al ruler de Mimir; definidas el 2026-08-19"
+        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-dev) - sync de reglas de alerta al ruler de Mimir; definidas el 2026-08-19",
+        "vars.GRAFANA_API_URL, vars.VETSOFTWARE_ALERT_EMAIL y secret GRAFANA_PROVISIONING_TOKEN (environment iac-apply-dev) - provisioning de alertas Grafana-managed, contact points y notification policy; pendientes de definir"
       ]
     },
     "prod": {
@@ -32,10 +36,14 @@
       "metrics_tenant_id": null,
       "ruler_verified_on": null,
       "ruler_note": "No hay stack productivo de Grafana Cloud, igual que con el endpoint OTLP. Sin valores canonicos el verificador del ruler avisa y pasa; sync-alert-rules-prod ademas omite la sincronizacion mientras las variables del environment iac-apply-prod esten vacias. Al crear el stack, fijar aqui ruler_url y metrics_tenant_id junto con el otlp_endpoint.",
+      "grafana_api_url": null,
+      "grafana_api_verified_on": null,
+      "grafana_api_note": "No hay stack productivo de Grafana Cloud. Sin valor canonico el verificador de la API avisa y pasa, y el sub-gate de provisioning de sync-alert-rules-prod omite el paso mientras vars.GRAFANA_API_URL del environment iac-apply-prod este vacia. Al crear el stack, fijar aqui https://<stack-prod>.grafana.net junto con el resto de valores.",
       "sources": [
         "vars.PROD_GRAFANA_OTLP_ENDPOINT (repositorio) - sin definir",
         "vars.GRAFANA_OTLP_ENDPOINT (environments iac-plan-prod / iac-apply-prod) - sin definir",
-        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-prod) - sync de reglas de alerta al ruler de Mimir; sin definir"
+        "vars.GRAFANA_RULER_URL y vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-prod) - sync de reglas de alerta al ruler de Mimir; sin definir",
+        "vars.GRAFANA_API_URL, vars.VETSOFTWARE_ALERT_EMAIL y secret GRAFANA_PROVISIONING_TOKEN (environment iac-apply-prod) - provisioning de alertas Grafana-managed, contact points y notification policy; sin definir"
       ]
     }
   }

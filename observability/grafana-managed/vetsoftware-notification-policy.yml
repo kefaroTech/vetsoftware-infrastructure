@@ -1,0 +1,84 @@
+# Notification policy (árbol de enrutado) del stack de Grafana Cloud.
+#
+# Formato: provisioning de alerting de Grafana (`apiVersion: 1` + `policies:`), el mismo que
+# emite `/api/v1/provisioning/policies/export`. Igual que con los contact points: Grafana
+# Cloud no tiene provisioning por fichero, así que el pipeline traduce esto a
+# `PUT /api/v1/provisioning/policies` — y esa llamada REEMPLAZA el árbol completo, incluido
+# el receptor por defecto `grafana-default-email` que trae el stack. Es lo deseado: el árbol
+# versionado aquí es la única verdad.
+#
+# El enrutado se decide por el label `severity`, que TODAS las alertas del proyecto llevan
+# (`critical` o `warning`) — tanto las 24 del ruler de Mimir (`observability/mimir-rules/`)
+# como la Grafana-managed de este directorio. Cada alerta recorre el árbol con sus labels y
+# se queda en la primera route que casa; la raíz es la red de seguridad para cualquier cosa
+# sin `severity` (p. ej. las alertas autogeneradas DatasourceError/DatasourceNoData).
+#
+# ── Tiempos elegidos, y por qué ──────────────────────────────────────────────────────────
+# Semántica: `group_wait` = espera antes de la PRIMERA notificación de un grupo (compra
+# agrupar instancias que llegan juntas); `group_interval` = espera antes de notificar
+# CAMBIOS en un grupo ya notificado (nueva instancia, resolución); `repeat_interval` =
+# recordatorio de un grupo que sigue firing sin cambios (debe ser ≥ group_interval).
+# El grupo es (alertname, severity): cada nombre de alerta notifica por separado, y varias
+# instancias del mismo nombre (varios `job_name` de VetSoftwareScheduledJobFailing, por
+# ejemplo) se compactan en una sola notificación.
+#
+# critical — 30s / 5m / 4h:
+#   Un fallo terminal debe llegar rápido: 30 s solo compra compactar instancias simultáneas
+#   del mismo alertname. El recordatorio cada 4 h es presión deliberada: un critical sin
+#   resolver no debe poder olvidarse un día entero. Contexto conocido: al activarse esto,
+#   dos criticals estarán firing de inmediato (VetSoftwareEmailSendFailing por el 403 de
+#   Resend y VetSoftwareScheduledJobFailing por la reconciliación DIAN). Al ser alertnames
+#   distintos son DOS notificaciones a los ~30 s y un recordatorio de cada una cada 4 h —
+#   no es una tormenta, es la señal correcta sobre dos incidentes reales. Si se decide
+#   convivir con ellos un tiempo, la herramienta es un SILENCIO CON VENCIMIENTO
+#   (runbook, «Acciones comunes» §6), nunca estirar repeat_interval: eso degradaría el
+#   canal para todos los criticals futuros por culpa de dos conocidos.
+#
+# warning — 5m / 30m / 24h:
+#   Una warning tiene camino de recuperación y se atiende en horario laboral: 5 m de
+#   group_wait compacta las que caen en cascada por la misma causa raíz, y un recordatorio
+#   DIARIO basta — una warning que se repite cada hora entrena a ignorar el canal, que es
+#   peor que no tenerla.
+#
+# raíz — 1m / 10m / 24h:
+#   Valores intermedios para lo que no trae `severity`. Si algo notifica por aquí, el
+#   hallazgo no es el tiempo: es que hay una alerta sin el label obligatorio.
+#
+# NO VERIFICADO (revisar antes del PR):
+#   1. La forma `object_matchers: [['severity','=','critical']]` y las claves snake_case
+#      (`group_by`, `group_wait`, …) vienen de la documentación de provisioning de
+#      Grafana; no había policy existente en el stack contra la que contrastar el export.
+#   2. La entrega de las alertas del RULER: este fichero configura el Alertmanager DE
+#      GRAFANA. En stacks recientes de Grafana Cloud el ruler de Mimir entrega ahí por
+#      defecto — y este stack no tiene datasource de Alertmanager de Mimir aparte, lo que
+#      apunta en esa dirección — pero hay que confirmarlo tras aplicar: forzar/observar una
+#      alerta del ruler y verla llegar al correo. Si NO llegara, el ruler estaría entregando
+#      en el Alertmanager de Mimir del tenant y habría que cargar allí una configuración
+#      equivalente en formato Alertmanager clásico (`mimirtool alertmanager load`), no este
+#      fichero.
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    # Red de seguridad: todo lo que no case con una route de abajo cae aquí.
+    receiver: vetsoftware-warning
+    group_by:
+      - alertname
+      - severity
+    group_wait: 1m
+    group_interval: 10m
+    repeat_interval: 24h
+    routes:
+      - receiver: vetsoftware-critical
+        object_matchers:
+          - ["severity", "=", "critical"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+      - receiver: vetsoftware-warning
+        object_matchers:
+          - ["severity", "=", "warning"]
+        group_wait: 5m
+        group_interval: 30m
+        repeat_interval: 24h
