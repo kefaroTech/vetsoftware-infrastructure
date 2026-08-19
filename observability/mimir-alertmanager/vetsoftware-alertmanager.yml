@@ -1,0 +1,107 @@
+# Configuración del Alertmanager de Mimir — la entrega de las alertas del RULER.
+#
+# ── Por qué existe este fichero, que es la parte que cuesta entender ─────────────────────
+#
+# Este stack tiene DOS motores de alertas, y cada uno tiene SU PROPIO Alertmanager:
+#
+#   reglas del ruler de Mimir (24)  →  Alertmanager de MIMIR      →  este fichero
+#   reglas Grafana-managed (1)      →  Alertmanager de GRAFANA    →  ../grafana-managed/
+#
+# No son intercambiables y no se hablan entre sí. Se comprobó en vivo el 2026-08-19, después
+# de aplicar los contact points en el Alertmanager de Grafana:
+#
+#   - el ruler tenía 10 alertas disparando (`ALERTS{alertstate="firing"}`),
+#   - el Alertmanager de Grafana devolvía `[]` en /api/v2/alerts — ni una,
+#   - el Alertmanager de Mimir respondía «no Alertmanager config currently exists»,
+#   - y `/api/v1/ngalert` confirmaba `alertmanagersChoice: "internal"`, 0 externos.
+#
+# Es decir: las alertas del ruler estaban disparando AL VACÍO. Los contact points de Grafana
+# solo sirven a `cost-guard`, que es Grafana-managed porque consulta el datasource de uso
+# (otro tenant) y por eso no podía ser una regla del ruler.
+#
+# La duplicidad no es un descuido: son dos motores distintos por una razón técnica real, y
+# cada uno necesita su configuración de entrega. Lo que sí sería un error es cambiar uno y
+# olvidar el otro — de ahí este comentario.
+#
+# ── Formato ──────────────────────────────────────────────────────────────────────────────
+#
+# Alertmanager clásico (`route` + `receivers`), NO el formato de provisioning de Grafana.
+# Se aplica con `mimirtool alertmanager load` y se valida con `mimirtool alertmanager verify`
+# sin tocar el stack.
+#
+# El webhook va como marcador: el pipeline lo sustituye desde el secret antes de subir, y
+# falla si queda sin resolver. Un marcador literal aquí se guardaría como URL de Slack y las
+# notificaciones no llegarían a ninguna parte sin error visible.
+
+route:
+  # Agrupar por alerta y severidad: dos SLOs degradados a la vez son dos incidentes y
+  # merecen dos mensajes, no uno mezclado. Coherente con el group_by del Alertmanager de
+  # Grafana, para que la experiencia en el canal sea la misma venga de donde venga.
+  group_by: ['alertname', 'severity']
+  # Tiempos de la raíz, que aquí actúa como ruta de warning y como red de seguridad para
+  # cualquier alerta que llegue sin `severity` (no debería haberla: todas la llevan; si
+  # alguna aparece por aquí, el hallazgo es la etiqueta que falta, no el tiempo).
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 24h
+  receiver: vetsoftware-warning
+
+  routes:
+    # critical: fallo terminal, alguien tiene que actuar. Espera corta antes del primer
+    # aviso y repetición cada 4 h mientras siga vivo — lo bastante para no olvidarlo, no
+    # tanto como para que se ignore.
+    - matchers:
+        - severity="critical"
+      receiver: vetsoftware-critical
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+    # warning: anomalía con camino de recuperación. Se atiende en horario laboral, así que
+    # la espera es mayor y la repetición diaria.
+    - matchers:
+        - severity="warning"
+      receiver: vetsoftware-warning
+      group_wait: 5m
+      group_interval: 30m
+      repeat_interval: 24h
+
+receivers:
+  - name: vetsoftware-critical
+    slack_configs:
+      # El canal lo decide el webhook, no este fichero: un webhook entrante de Slack queda
+      # ligado al canal elegido al crearlo. Separar critical y warning en canales distintos
+      # exigiría dos webhooks.
+      - api_url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+        # true: cuando la condición se resuelve, el canal recibe el aviso. Sin él, el hilo
+        # queda con la alerta abierta para siempre y nadie sabe si sigue viva.
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ if .Annotations.description }}{{ .Annotations.description }}
+          {{ end }}{{ if .Annotations.runbook }}Runbook: {{ .Annotations.runbook }}
+          {{ end }}{{ end }}
+
+  - name: vetsoftware-warning
+    slack_configs:
+      - api_url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ if .Annotations.description }}{{ .Annotations.description }}
+          {{ end }}{{ if .Annotations.runbook }}Runbook: {{ .Annotations.runbook }}
+          {{ end }}{{ end }}
+
+inhibit_rules:
+  # Una critical del mismo SLO silencia sus warnings: cuando el presupuesto se está quemando
+  # rápido no hace falta además el aviso de que se está quemando despacio. Replica la
+  # inhibición que el stack local tiene en docker/alertmanager.yml, acotada por `slo` y `sli`
+  # para que dos SLOs degradados a la vez NO se tapen entre sí — el error clásico que la
+  # auditoría encontró en la regla genérica del Alertmanager local.
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname', 'slo', 'sli']

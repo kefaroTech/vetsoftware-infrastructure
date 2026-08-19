@@ -15,6 +15,14 @@ name: Sync alert rules dev
 # stack. Ese tramo tiene su propio sub-gate: puede estar sin configurar sin
 # afectar al sync de reglas. OJO con la asimetria: ese tramo es un UPSERT que
 # no borra, a diferencia de `mimirtool rules sync`.
+#
+# Y aplica la configuracion del Alertmanager de Mimir
+# (observability/mimir-alertmanager/), que es la que ENTREGA las alertas del
+# ruler. Son dos Alertmanager distintos y no se hablan entre si: los contact
+# points de grafana-managed/ solo sirven a las reglas Grafana-managed.
+# Verificado el 2026-08-19 con las reglas ya sincronizadas y los contact points
+# aplicados: el ruler tenia 10 alertas disparando y el Alertmanager de Grafana
+# devolvia 0. Sin este tramo, las alertas del ruler disparan al vacio.
 
 on:
   push:
@@ -23,6 +31,7 @@ on:
     paths:
       - "observability/mimir-rules/**"
       - "observability/grafana-managed/**"
+      - "observability/mimir-alertmanager/**"
       - ".github/workflows/sync-alert-rules-dev.yml"
       - ".github/scripts/assert-ruler-endpoint.ps1"
       - ".github/scripts/assert-grafana-api-endpoint.ps1"
@@ -64,6 +73,11 @@ jobs:
       GRAFANA_API_URL: ${{ vars.GRAFANA_API_URL }}
       # El webhook de Slack NO va aqui: es un secreto y se inyecta solo en el
       # paso que llama a la API, no en el env del job entero.
+      # Configuracion de entrega del Alertmanager de MIMIR (formato clasico),
+      # que sirve a las reglas del RULER. Distinta y complementaria de los
+      # ficheros de provisioning de Grafana de abajo: dos motores de alertas,
+      # dos Alertmanager que no se hablan entre si.
+      ALERTMANAGER_FILE: observability/mimir-alertmanager/vetsoftware-alertmanager.yml
       # Ficheros de provisioning de Grafana (apiVersion 1), comunes a dev y
       # prod: mismo criterio que RULE_FILES, un fichero nuevo se lista aqui y
       # en sync-alert-rules-prod.yml. El script detecta el tipo de cada uno
@@ -176,6 +190,58 @@ jobs:
           set -euo pipefail
           mimirtool rules sync $RULE_FILES \
             --address="$GRAFANA_RULER_URL" --id="$GRAFANA_METRICS_TENANT_ID"
+
+      # ── Entrega de las alertas DEL RULER ──────────────────────────────────
+      # El ruler de Mimir NO entrega en el Alertmanager de Grafana: entrega en
+      # el SUYO. Verificado en vivo el 2026-08-19 con las reglas ya
+      # sincronizadas: 10 alertas disparando en el ruler, 0 en
+      # /api/alertmanager/grafana/api/v2/alerts, "no Alertmanager config
+      # currently exists" en el de Mimir, y alertmanagersChoice="internal".
+      # Sin este paso las alertas del ruler disparan AL VACIO.
+      #
+      # Los ficheros de observability/grafana-managed/ sirven solo a las reglas
+      # Grafana-managed (hoy cost-guard). Son dos motores con dos Alertmanager
+      # distintos; cambiar uno y olvidar el otro es el error a evitar.
+      - name: Apply the dev Mimir Alertmanager config
+        if: steps.gate.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          MIMIR_API_KEY: ${{ secrets.GRAFANA_RULER_TOKEN }}
+          VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL: ${{ secrets.VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Avisa-y-pasa propio: este paso NO depende del tramo de provisioning
+          # de Grafana (no toca su API ni su token); solo necesita el ruler -ya
+          # comprobado por el gate principal- y el webhook. Sin webhook no hay
+          # a donde entregar, asi que se omite en verde en vez de fallar.
+          if ([string]::IsNullOrWhiteSpace($env:VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL)) {
+            Write-Host "::warning::Sin VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL no hay receptor: se omite la configuracion del Alertmanager de Mimir. Las reglas del ruler quedan sincronizadas pero NO notificaran a nadie."
+            exit 0
+          }
+          # Sustitucion del marcador antes de subir. Un marcador literal se
+          # guardaria como URL de Slack y no notificaria a nadie sin error
+          # visible, asi que uno sin resolver es rojo, no aviso.
+          $rendered = Join-Path ([System.IO.Path]::GetTempPath()) 'vetsoftware-alertmanager.yml'
+          $content = Get-Content -LiteralPath $env:ALERTMANAGER_FILE -Raw
+          # String.Replace y no -replace: es literal, sin regex. En el
+          # reemplazo de .NET el `$` es especial, y una URL con `$` romperia
+          # la sustitucion en silencio.
+          $content = $content.Replace('${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}', $env:VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL)
+          if ($content -match '\$\{[A-Z_]+\}') {
+            Write-Host "::error::Quedaron marcadores sin resolver en $env:ALERTMANAGER_FILE: $($Matches[0])"
+            exit 1
+          }
+          Set-Content -LiteralPath $rendered -Value $content -NoNewline
+          # verify valida el fichero sin tocar el stack; load lo aplica.
+          mimirtool alertmanager verify $rendered
+          if ($LASTEXITCODE -ne 0) { throw "mimirtool alertmanager verify fallo." }
+          mimirtool alertmanager load $rendered --address="$env:GRAFANA_RULER_URL" --id="$env:GRAFANA_METRICS_TENANT_ID"
+          if ($LASTEXITCODE -ne 0) { throw "mimirtool alertmanager load fallo." }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+            "### Alertmanager de Mimir - dev",
+            "",
+            "Configuracion de entrega aplicada: las alertas del ruler ya tienen receptor."
+          )
 
       # ----- Provisioning de Grafana (contact points, notification policy y -
       # ----- alertas Grafana-managed) ---------------------------------------
