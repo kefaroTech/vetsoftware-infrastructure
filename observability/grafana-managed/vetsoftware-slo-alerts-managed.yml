@@ -88,7 +88,7 @@ groups:
         annotations:
           summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~2 días"
           description: "El burn rate supera 14.4 en las ventanas de 1 hora y 5 minutos. A este ritmo el presupuesto de error de 30 días se consume en poco más de dos días."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareslofastburn"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareslofastburn"
 
       # 6x => el presupuesto se agotaría en ~5 días.
       # Equivale a gastar el 5 % del presupuesto en seis horas.
@@ -131,7 +131,7 @@ groups:
         annotations:
           summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~5 días"
           description: "El burn rate supera 6 en las ventanas de 6 horas y 30 minutos. La degradación es sostenida, no un pico."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloslowburn"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloslowburn"
 
       # 3x => el presupuesto se agotaría en ~10 días. No requiere atención inmediata;
       # se atiende como trabajo planificado dentro del ciclo.
@@ -174,7 +174,7 @@ groups:
         annotations:
           summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) agota su presupuesto en ~10 días"
           description: "El burn rate supera 3 en las ventanas de 1 día y 2 horas. Corresponde trabajo planificado, no respuesta inmediata."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloticketburn"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloticketburn"
 
   - orgId: 1
     name: vetsoftware-slo-error-budget
@@ -222,7 +222,7 @@ groups:
         annotations:
           summary: "Al SLO {{ $labels.slo }} ({{ $labels.sli }}) le queda menos del 25 % de presupuesto"
           description: "Según la política de gobierno, los cambios no críticos de este dominio requieren revisión explícita hasta que el presupuesto se recupere."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetlow"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetlow"
 
       # SEVERIDAD `warning` A PROPÓSITO, pese a describir un incumplimiento de SLO.
       #
@@ -274,7 +274,7 @@ groups:
         annotations:
           summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) está incumplido en la ventana de 30 días"
           description: "El presupuesto de error se agotó. Solo deberían desplegarse correcciones de fiabilidad de este dominio hasta que la ventana rodante lo recupere."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetexhausted"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetexhausted"
 
   - orgId: 1
     name: vetsoftware-slo-integrity
@@ -333,4 +333,4 @@ groups:
         annotations:
           summary: "El SLO {{ $labels.slo }} ({{ $labels.sli }}) no está produciendo datos"
           description: "El objetivo está declarado pero no existe serie de eventos en las últimas 24 horas. Revisar el selector de la regla de grabación antes que el objetivo. En un entorno local o de desarrollo, una operación que nunca se ejecutó dispara esta alerta de forma legítima."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloseriesabsent"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloseriesabsent"
