@@ -74,14 +74,20 @@ jobs:
       - name: Decide whether the prod ruler is configured
         id: gate
         shell: pwsh
+        # HAS_TOKEN es un booleano, no el secreto: el gate necesita saber si el
+        # token existe, no cual es, y el guardarrail de paridad corre despues
+        # todavia sin verlo. GitHub evalua la comparacion sin materializar el
+        # valor en el runner.
+        env:
+          HAS_TOKEN: ${{ secrets.GRAFANA_RULER_TOKEN != '' && 'true' || 'false' }}
         run: |
-          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_RULER_URL) -or [string]::IsNullOrWhiteSpace($env:GRAFANA_METRICS_TENANT_ID)
+          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_RULER_URL) -or [string]::IsNullOrWhiteSpace($env:GRAFANA_METRICS_TENANT_ID) -or ($env:HAS_TOKEN -ne 'true')
           if ($missing) {
-            Write-Host "::warning::El environment iac-apply-prod no tiene GRAFANA_RULER_URL / GRAFANA_METRICS_TENANT_ID: se omite la sincronizacion de reglas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
+            Write-Host "::warning::El environment iac-apply-prod no tiene GRAFANA_RULER_URL / GRAFANA_METRICS_TENANT_ID / GRAFANA_RULER_TOKEN: se omite la sincronizacion de reglas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
               "### Sync de reglas de alerta - prod",
               "",
-              "OMITIDO: faltan ``GRAFANA_RULER_URL`` / ``GRAFANA_METRICS_TENANT_ID`` en el environment ``iac-apply-prod``.",
+              "OMITIDO: faltan ``GRAFANA_RULER_URL`` / ``GRAFANA_METRICS_TENANT_ID`` / ``GRAFANA_RULER_TOKEN`` en el environment ``iac-apply-prod``.",
               "",
               "Como cargarlos: ``docs/ALERTAS_GRAFANA_CLOUD.md``."
             )
