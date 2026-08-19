@@ -103,33 +103,6 @@ groups:
           runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
 
   # ---------------------------------------------------------------------------------------
-  # Salud del proceso. Sustituye por otra vía lo que el stack local cubría con `up`, que en
-  # ingesta push OTLP no existe: aquí la señal no es "el scrape falla" sino "el proceso se
-  # reinicia una y otra vez". Un backend en crash loop se ve desde fuera como lentitud, no
-  # como caída — el heartbeat de prod no lo caza porque entre reinicio y reinicio sí emite.
-  # ---------------------------------------------------------------------------------------
-  - name: vetsoftware-process-health
-    interval: 1m
-    rules:
-      # `process_start_time_milliseconds` es el instante de arranque: cambia SOLO al reiniciar,
-      # así que contar sus cambios cuenta reinicios. El umbral de 3 en 1 hora es lo que separa
-      # el crash loop del arranque legítimo: en dev, EventBridge apaga a las 20:00 y arranca por
-      # la mañana (1 cambio al día, jamás 3 en una hora), así que la regla es segura en los dos
-      # ambientes sin excepciones horarias.
-      - alert: VetSoftwareBackendRestartLoop
-        expr: |
-          changes(process_start_time_milliseconds{job="mainvet/vetsoftware"}[1h]) >= 3
-        for: 5m
-        labels:
-          severity: critical
-          domain: backend
-          service: vetsoftware
-        annotations:
-          summary: "El backend se ha reiniciado {{ $value | humanize }} veces en la última hora"
-          description: "Reinicios repetidos apuntan a OOM kill, fallo de arranque o un health check matando la task. Revisar los eventos de la task de ECS y la memoria del contenedor antes que el código: un crash loop consume la ventana de despliegue y deja peticiones sin atender entre reinicio y reinicio."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackendrestartloop"
-
-  # ---------------------------------------------------------------------------------------
   # Seguridad. Cierra el hallazgo TEL-36: las sondas anti-enumeración y los fallos de login
   # solo existían como log INFO/WARN, sin ninguna tasa sobre la que alertar. Un ataque de
   # fuerza bruta o de enumeración de códigos de empleado era invisible por diseño.

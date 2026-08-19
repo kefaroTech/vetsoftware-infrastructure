@@ -11,7 +11,7 @@ hacen los workflows del repo (fuera del alcance de este directorio).
 | `vetsoftware-slo-rules.yml` | `vetsoftware-slo-rules` | 57 recording rules SLO (cadena completa: objetivos → eventos 5m → ventanas → razones → burn rate → cumplimiento → budget) | dev y prod |
 | `vetsoftware-slo-alerts.yml` | `vetsoftware-slo-alerts` | 6 alertas SLO (3 burn rate multiventana, 2 de budget, 1 de integridad) | dev y prod |
 | `vetsoftware-platform-alerts.yml` | `vetsoftware-platform` | 11 alertas de plataforma portables (HTTP, JVM, HikariCP, tokens) | dev y prod |
-| `vetsoftware-cloud-additions.yml` | `vetsoftware-additions` | 8 reglas: jobs y correo (warning + critical cada una), crash loop del proceso, abuso de login, y Valkey vía Lettuce (fallos + latencia) | dev y prod |
+| `vetsoftware-cloud-additions.yml` | `vetsoftware-additions` | 7 reglas: jobs y correo (warning + critical cada una), abuso de login, y Valkey vía Lettuce (fallos + latencia) | dev y prod |
 | `vetsoftware-heartbeat-prod.yml` | `vetsoftware-heartbeat` | 1 alerta de ausencia de ingesta | **solo prod** |
 
 Los nombres de alerta, los `for:`, los labels `severity`/`domain`/`service` y las annotations
@@ -116,6 +116,34 @@ stdout → CloudWatch → Firehose → Loki, y lo vigilan las alarmas CloudWatch
 freshness, bucket de errores y el dead-man compuesto; no hay alarma dedicada de throttling).
 Son capas **complementarias**, no duplicadas: Mimir vigila lo que la aplicación emite;
 CloudWatch vigila el transporte que Mimir no puede ver.
+
+### `VetSoftwareBackendRestartLoop`: retirada porque AWS ya lo cubría, y mejor
+
+Existió brevemente (grupo `vetsoftware-process-health`, agosto de 2026): contaba los cambios
+de `process_start_time_milliseconds` para detectar un crash loop. Se retiró porque **duplicaba
+una alarma CloudWatch que ya existía y que es superior en las dos dimensiones que importan**:
+`aws_cloudwatch_metric_alarm.backend_crash_loop` (`VetSoftwareIaC/modules/monitoring/alarms_ecs.tf`,
+3 o más paradas inesperadas de task en 15 minutos, Severity critical, enrutada a Slack por
+`critical_actions`).
+
+- **Ve la causa, no solo el síntoma**: se alimenta de los eventos de task-state de ECS y
+  conserva el `stoppedReason` (OOM kill, health check fallido, contenedor esencial caído) en
+  `/aws/events/<name>/ecs-task-state`. La regla de Mimir solo podía decir «el proceso arrancó
+  otra vez», sin el porqué.
+- **Cuenta solo paradas *inesperadas***: la métrica `UnexpectedTaskStops` excluye las paradas
+  pedidas (despliegues, scale-in, el apagado programado de dev). La regla de Mimir contaba
+  *cualquier* cambio del instante de arranque, así que tres despliegues en una hora la
+  disparaban en falso — escenario perfectamente plausible en dev con una sola task.
+
+La lección general, que es el motivo de dejar esto escrito en vez de borrar la regla sin
+rastro: **antes de añadir una alerta aquí, comprobar si el hallazgo ya está cubierto desde el
+lado AWS** (`modules/monitoring/`, `modules/log_shipping/`). El reparto sano es el mismo que
+el de la nota sobre el transporte de logs: Mimir vigila lo que la aplicación emite sobre sí
+misma; CloudWatch vigila el ciclo de vida del proceso y la infraestructura, que la aplicación
+no puede narrar mientras se está muriendo. Una señal que nace de eventos de la plataforma
+(paradas de task, interrupciones Spot, entrega de logs) pertenece al lado AWS; duplicarla en
+el ruler no añade cobertura, añade una segunda alerta que mantener y la posibilidad de que las
+dos cuenten historias distintas.
 
 ### Las cuatro alertas de negocio: excluidas por decisión, no por imposibilidad
 

@@ -12,6 +12,14 @@ name: Sync alert rules prod
 # El repositorio es la fuente de verdad: `mimirtool rules sync` crea, actualiza
 # y BORRA en el tenant todo lo que no este en los ficheros enviados. Ninguna
 # regla del ruler debe crearse a mano por consola.
+#
+# Despues del sync del ruler, aplica ademas los ficheros de
+# observability/grafana-managed/ (contact points, notification policy y
+# alertas Grafana-managed) contra la API de provisioning de Grafana del mismo
+# stack. Ese tramo tiene su propio sub-gate: mientras prod no tenga stack (y
+# por tanto GRAFANA_API_URL este vacia) se omite sin afectar al resto. OJO con
+# la asimetria: ese tramo es un UPSERT que no borra, a diferencia de
+# `mimirtool rules sync`.
 
 on:
   workflow_dispatch:
@@ -58,6 +66,25 @@ jobs:
         observability/mimir-rules/vetsoftware-platform-alerts.yml
         observability/mimir-rules/vetsoftware-cloud-additions.yml
         observability/mimir-rules/vetsoftware-heartbeat-prod.yml
+      # Host de la API de Grafana (https://<stack>.grafana.net), distinto del
+      # host del ruler. Lo consume el tramo de provisioning; su ausencia solo
+      # apaga ese tramo (sub-gate propio), nunca el sync del ruler. Hoy prod
+      # no tiene stack, asi que estara vacia y el tramo se omite.
+      GRAFANA_API_URL: ${{ vars.GRAFANA_API_URL }}
+      # Destino de correo de los contact points. Variable y no secreto: es un
+      # destino, no una credencial. El script de provisioning la inyecta donde
+      # el fichero trae el marcador ${VETSOFTWARE_ALERT_EMAIL} y falla si un
+      # marcador queda sin resolver.
+      VETSOFTWARE_ALERT_EMAIL: ${{ vars.VETSOFTWARE_ALERT_EMAIL }}
+      # Ficheros de provisioning de Grafana (apiVersion 1), comunes a dev y
+      # prod: mismo criterio que RULE_FILES, un fichero nuevo se lista aqui y
+      # en sync-alert-rules-dev.yml. El script detecta el tipo de cada uno por
+      # sus claves (contactPoints / policies / groups) y aplica siempre en ese
+      # orden, asi que el orden de esta lista no importa.
+      PROVISIONING_FILES: >-
+        observability/grafana-managed/vetsoftware-contact-points.yml
+        observability/grafana-managed/vetsoftware-notification-policy.yml
+        observability/grafana-managed/vetsoftware-cost-guard.yml
 
     steps:
       - name: Check out authorized IaC revision
@@ -152,3 +179,66 @@ jobs:
           set -euo pipefail
           mimirtool rules sync $RULE_FILES \
             --address="$GRAFANA_RULER_URL" --id="$GRAFANA_METRICS_TENANT_ID"
+
+      # ----- Provisioning de Grafana (contact points, notification policy y -
+      # ----- alertas Grafana-managed) ---------------------------------------
+      #
+      # Sub-gate PROPIO, separado a proposito del gate del ruler: si estas
+      # condiciones entraran en el $missing de arriba, su ausencia apagaria
+      # tambien el sync de mimirtool. Con dos gates cada tramo vive o muere
+      # solo. El token de provisioning NO es el del ruler: la API de la
+      # instancia de Grafana rechaza los tokens de Access Policy como clave
+      # ("api-key.invalid", verificado 2026-08-18 en dev); necesita un service
+      # account token creado dentro de la instancia. Por eso es un secret
+      # aparte.
+      - name: Decide whether Grafana provisioning is configured
+        id: provisioning-gate
+        if: steps.gate.outputs.skip != 'true'
+        shell: pwsh
+        # Mismo patron que HAS_TOKEN en el gate principal: booleano, no el
+        # secreto; GitHub evalua la comparacion sin materializar el valor en
+        # el runner.
+        env:
+          HAS_PROVISIONING_TOKEN: ${{ secrets.GRAFANA_PROVISIONING_TOKEN != '' && 'true' || 'false' }}
+        run: |
+          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_API_URL) -or [string]::IsNullOrWhiteSpace($env:VETSOFTWARE_ALERT_EMAIL) -or ($env:HAS_PROVISIONING_TOKEN -ne 'true')
+          if ($missing) {
+            Write-Host "::warning::El environment iac-apply-prod no tiene GRAFANA_API_URL / VETSOFTWARE_ALERT_EMAIL / GRAFANA_PROVISIONING_TOKEN: se omite el provisioning de Grafana (contact points, notification policy y alertas Grafana-managed). Las reglas del ruler SI quedaron sincronizadas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+              "### Provisioning de Grafana - prod",
+              "",
+              "OMITIDO: faltan ``GRAFANA_API_URL`` / ``VETSOFTWARE_ALERT_EMAIL`` / ``GRAFANA_PROVISIONING_TOKEN`` en el environment ``iac-apply-prod``. El sync del ruler no se ve afectado.",
+              "",
+              "Como cargarlos: ``docs/ALERTAS_GRAFANA_CLOUD.md``."
+            )
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+          else {
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      # Paridad canonica de la API de Grafana, DESPUES del sync del ruler a
+      # proposito: un mismatch aqui debe cortar solo el provisioning y poner el
+      # job en rojo, no impedir que las reglas -que ya pasaron su propia
+      # paridad- lleguen al ruler.
+      - name: Verify Grafana API endpoint parity
+        if: steps.gate.outputs.skip != 'true' && steps.provisioning-gate.outputs.skip != 'true'
+        shell: pwsh
+        run: ./.github/scripts/assert-grafana-api-endpoint.ps1 -Environment prod -Source 'vars.GRAFANA_API_URL (environment iac-apply-prod)'
+
+      # Convierte los ficheros apiVersion 1 a llamadas JSON de la API de
+      # provisioning y hace upsert (crea/actualiza, NO borra). Antes de
+      # convertir sustituye los marcadores ${NOMBRE} por variables de entorno
+      # (VETSOFTWARE_ALERT_EMAIL, del env del job) y FALLA si alguno queda sin
+      # resolver: un marcador literal guardado en Grafana parece configurado y
+      # no notifica a nadie. Si la API rechaza el token (401/403), avisa y
+      # pasa; cualquier otro fallo es rojo. Detalle y limites en el propio
+      # script.
+      - name: Apply Grafana-managed provisioning to prod
+        if: steps.gate.outputs.skip != 'true' && steps.provisioning-gate.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          GRAFANA_PROVISIONING_TOKEN: ${{ secrets.GRAFANA_PROVISIONING_TOKEN }}
+        run: |
+          $files = $env:PROVISIONING_FILES -split '\s+' | Where-Object { $_ }
+          ./.github/scripts/apply-grafana-provisioning.ps1 -Files $files -EnvironmentLabel prod

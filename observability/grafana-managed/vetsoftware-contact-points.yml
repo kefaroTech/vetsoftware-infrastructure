@@ -1,0 +1,92 @@
+# Contact points del stack de Grafana Cloud (dev hoy; prod replicará contra su propio stack).
+#
+# Formato: provisioning de alerting de Grafana (`apiVersion: 1` + `contactPoints:`), el mismo
+# que emite el endpoint de export (`/api/v1/provisioning/contact-points/export`). OJO con el
+# camino de aplicación: Grafana Cloud NO tiene provisioning por fichero (no hay filesystem);
+# este YAML es la fuente de verdad versionada y el pipeline lo traduce a llamadas de la API
+# de provisioning (`POST/PUT /api/v1/provisioning/contact-points`, un contact point por
+# llamada, con `X-Disable-Provenance: true` si se quiere que sigan siendo editables en la UI).
+#
+# Diseño: DOS contact points activos (critical y warning), hoy con UNA integración de email
+# cada uno — es la única vía que funciona AHORA MISMO, porque Grafana Cloud envía correo de
+# forma nativa, sin credencial externa. La integración de Slack está escrita y parametrizada
+# dentro de cada contact point, pero COMENTADA hasta que exista el secreto (ver el bloque
+# «Slack: qué falta y quién lo crea»). Se dejó comentada y no activa con un placeholder a
+# propósito: una URL de webhook inválida haría fallar la entrega de Slack en cada
+# notificación, ensuciando el registro de entregas justo cuando se está atendiendo un
+# incidente. Activarla es descomentar + sustituir el secreto: el enrutado de la policy no
+# cambia, porque una route de Grafana apunta a UN contact point y son las integraciones de
+# dentro las que se multiplican.
+#
+# ── Slack: qué falta y quién lo crea ─────────────────────────────────────────────────────
+# Los canales existentes del proyecto son C0BNT7FCWSH (alertas) y C0BNWM8ASAE (infra), en el
+# workspace T0BMM8Y0FC5 — pero esos IDs pertenecen a la integración de AWS Chatbot, y
+# Grafana NO puede usarla: necesita su propio webhook entrante (o un bot token) que hoy no
+# existe. Solo una persona con permisos en el workspace puede crearlo:
+#
+#   1. https://api.slack.com/apps → Create New App (workspace T0BMM8Y0FC5).
+#   2. Incoming Webhooks → activar → «Add New Webhook to Workspace» → elegir el canal de
+#      alertas (el que hay detrás de C0BNT7FCWSH). El webhook queda LIGADO a ese canal: el
+#      canal se decide en Slack, no en este fichero. Si algún día se quiere separar critical
+#      (alertas) de warning (infra), hacen falta dos webhooks, uno por canal.
+#   3. Guardar la URL como secreto del pipeline (VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL).
+#      Es un secreto real: quien tenga la URL puede publicar en el canal. Nunca en claro
+#      en este fichero.
+#
+# Alternativa con bot token (más control, más fricción): settings con `token` + `recipient:
+# C0BNT7FCWSH`. El webhook es suficiente para este caso y no requiere gestionar scopes.
+#
+# NO VERIFICADO (revisar antes del PR): la forma exacta de los `settings` por tipo se tomó
+# de la documentación de provisioning de Grafana (email: `addresses`, `singleEmail`;
+# slack: `url` para webhook o `token`+`recipient` para bot). No se pudo contrastar contra
+# el stack porque no hay contact points existentes que exportar (verificado: la lista está
+# vacía). La interpolación `$VARIABLE` de provisioning solo existe en el provisioning por
+# fichero de Grafana self-hosted: si el pipeline aplica esto por API, debe sustituir el
+# valor ANTES de la llamada o Grafana almacenará el literal.
+
+apiVersion: 1
+
+contactPoints:
+  # ── critical: fallo terminal, alguien tiene que actuar ─────────────────────────────────
+  - orgId: 1
+    name: vetsoftware-critical
+    receivers:
+      - uid: vetsw-cp-critical-email
+        type: email
+        disableResolveMessage: false
+        settings:
+          # El destino NO se versiona. El pipeline sustituye este marcador por el valor de
+          # la variable de environment VETSOFTWARE_ALERT_EMAIL antes de la llamada a la API.
+          # Motivo: una dirección personal en un fichero del repositorio queda en el
+          # historial de git para siempre y se publica con él; además el destinatario de las
+          # alertas cambia (vacaciones, relevo, alias de equipo) sin que cambie la política
+          # de alertado, así que no pertenece al código. Admite varias separadas por «;».
+          addresses: ${VETSOFTWARE_ALERT_EMAIL}
+          # Un solo correo por grupo de notificación aunque haya varias instancias
+          # (p. ej. varios job_name fallando a la vez): menos ruido, misma información.
+          singleEmail: true
+      # Descomentar cuando exista el webhook (ver cabecera). Misma notificación, segundo
+      # canal: email y Slack conviven dentro del mismo contact point.
+      # - uid: vetsw-cp-critical-slack
+      #   type: slack
+      #   disableResolveMessage: false
+      #   settings:
+      #     url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+
+  # ── warning: anomalía con camino de recuperación, se atiende en horario laboral ────────
+  - orgId: 1
+    name: vetsoftware-warning
+    receivers:
+      - uid: vetsw-cp-warning-email
+        type: email
+        disableResolveMessage: false
+        settings:
+          addresses: ${VETSOFTWARE_ALERT_EMAIL}
+          singleEmail: true
+      # - uid: vetsw-cp-warning-slack
+      #   type: slack
+      #   disableResolveMessage: false
+      #   settings:
+      #     # Mismo webhook (mismo canal) que critical mientras solo exista uno; para
+      #     # separar por canal hace falta un segundo webhook — ver cabecera.
+      #     url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
