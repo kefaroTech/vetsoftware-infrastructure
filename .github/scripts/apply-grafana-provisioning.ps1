@@ -34,7 +34,9 @@
 #   ruler -que corre antes- ya quedo aplicado.
 # - Un marcador ${...} sin resolver en el contenido -> exit 1 SIEMPRE: enviar
 #   el literal a la API es peor que fallar, porque queda guardado y parece
-#   configurado (un correo "${VETSOFTWARE_ALERT_EMAIL}" no notifica a nadie).
+#   configurado (un contact point con la cadena
+#   "${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}" de URL no publica en ningun
+#   canal).
 # - Cualquier otro fallo -> exit 1.
 #
 # A diferencia de `mimirtool rules sync`, esto es un UPSERT: crea y actualiza,
@@ -224,8 +226,8 @@ foreach ($file in $Files) {
         exit 1
     }
     # Sustitucion de marcadores ${NOMBRE} por variables de entorno ANTES de
-    # convertir a JSON (p.ej. ${VETSOFTWARE_ALERT_EMAIL} en los contact
-    # points). Solo la forma con llaves: un $ suelto no se toca, que es lo que
+    # convertir a JSON (p.ej. ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL} en los
+    # contact points). Solo la forma con llaves: un $ suelto no se toca, que es lo que
     # protege los $labels del templating de Grafana en las annotations. Un
     # marcador cuya variable no existe se deja tal cual y lo caza el control
     # de abajo.
@@ -246,11 +248,12 @@ foreach ($file in $Files) {
 
     # El control de no-resueltos se hace sobre el JSON y no sobre el texto
     # crudo a proposito: los marcadores en lineas comentadas del YAML (como el
-    # webhook de Slack aun sin activar) desaparecen al convertir y no deben
-    # exigir su variable todavia. Un marcador que sobreviva hasta aqui iria
-    # LITERAL a la API: se guardaria y pareceria configurado (un correo
-    # "${VETSOFTWARE_ALERT_EMAIL}" no notifica a nadie). Ese fallo silencioso
-    # es peor que un rojo, asi que es error SIEMPRE, incluso en avisa-y-pasa.
+    # respaldo por correo, ${VETSOFTWARE_ALERT_EMAIL}, hoy desactivado)
+    # desaparecen al convertir y no deben exigir su variable todavia. Un
+    # marcador que sobreviva hasta aqui iria LITERAL a la API: se guardaria y
+    # pareceria configurado (una URL "${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}"
+    # no publica en ningun canal). Ese fallo silencioso es peor que un rojo,
+    # asi que es error SIEMPRE, incluso en avisa-y-pasa.
     $unresolved = @([regex]::Matches($jsonText, '\$\{([A-Za-z_][A-Za-z0-9_]*)\}') |
             ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
     if ($unresolved.Count -gt 0) {
@@ -353,13 +356,17 @@ if ($policyEntries.Count -gt 0) {
 
 if ($ruleGroupEntries.Count -gt 0) {
     # La carpeta se referencia por NOMBRE en el fichero pero la API exige su
-    # UID. Debe existir de antemano (se crea una vez en la UI: Alerting ->
-    # Alert rules -> New folder); crearla desde aqui pediria otro scope mas en
-    # la Access Policy para un caso que ocurre una sola vez.
-    # INCIERTO: /api/folders es API general de Grafana, no de alert
-    # provisioning; no esta confirmado que el token con scopes
-    # alert.provisioning baste para listarla. Si devuelve 403 el paso queda en
-    # avisa-y-pasa y hay que valorar anadir folders:read a la Access Policy.
+    # UID, asi que hay que resolverla. Si no existe se CREA aqui: es un
+    # contenedor vacio, no configuracion, y exigir un paso manual previo en la
+    # UI convertiria el pipeline en no-autosuficiente -un stack nuevo (prod, o
+    # dev recreado) fallaria el primer apply por algo que la maquina puede
+    # hacer sola-.
+    #
+    # VERIFICADO contra el stack de dev el 2026-08-19 con un service account
+    # token: GET /api/folders responde 200, y una ruta inventada bajo
+    # /api/v1/provisioning responde 404 -o sea, el 200 es ruteo real y no un
+    # comodin-. El token de service account cubre esta llamada sin scopes
+    # adicionales.
     $foldersResponse = Invoke-GrafanaApi -Method GET -Path "/api/folders" -Context "listar carpetas"
     Assert-Success -Response $foldersResponse -Context "listar carpetas"
     $folders = @($foldersResponse.Content | ConvertFrom-Json)
@@ -367,8 +374,13 @@ if ($ruleGroupEntries.Count -gt 0) {
     foreach ($group in $ruleGroupEntries) {
         $folder = $folders | Where-Object { $_.title -eq $group.folder } | Select-Object -First 1
         if ($null -eq $folder) {
-            Write-Annotation -Level error -Message "La carpeta '$($group.folder)' no existe en el stack. Creela una vez en la UI (Alerting -> Alert rules -> New folder) y relance el workflow."
-            exit 1
+            Write-Annotation -Level notice -Message "La carpeta '$($group.folder)' no existe; se crea."
+            $createFolder = Invoke-GrafanaApi -Method POST -Path "/api/folders" -Body @{ title = $group.folder } -Context "crear la carpeta '$($group.folder)'"
+            Assert-Success -Response $createFolder -Context "crear la carpeta '$($group.folder)'"
+            $folder = $createFolder.Content | ConvertFrom-Json
+            # Se anade al cache local para que un segundo grupo con la misma
+            # carpeta no intente crearla de nuevo y choque con un 409.
+            $folders += $folder
         }
         $folderUid = $folder.uid
         $orgId = Get-OptionalProperty -Object $group -Name "orgId"

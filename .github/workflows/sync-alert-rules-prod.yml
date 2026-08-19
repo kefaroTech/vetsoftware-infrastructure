@@ -71,11 +71,8 @@ jobs:
       # apaga ese tramo (sub-gate propio), nunca el sync del ruler. Hoy prod
       # no tiene stack, asi que estara vacia y el tramo se omite.
       GRAFANA_API_URL: ${{ vars.GRAFANA_API_URL }}
-      # Destino de correo de los contact points. Variable y no secreto: es un
-      # destino, no una credencial. El script de provisioning la inyecta donde
-      # el fichero trae el marcador ${VETSOFTWARE_ALERT_EMAIL} y falla si un
-      # marcador queda sin resolver.
-      VETSOFTWARE_ALERT_EMAIL: ${{ vars.VETSOFTWARE_ALERT_EMAIL }}
+      # El webhook de Slack NO va aqui: es un secreto y se inyecta solo en el
+      # paso que llama a la API, no en el env del job entero.
       # Ficheros de provisioning de Grafana (apiVersion 1), comunes a dev y
       # prod: mismo criterio que RULE_FILES, un fichero nuevo se lista aqui y
       # en sync-alert-rules-dev.yml. El script detecta el tipo de cada uno por
@@ -200,14 +197,15 @@ jobs:
         # el runner.
         env:
           HAS_PROVISIONING_TOKEN: ${{ secrets.GRAFANA_PROVISIONING_TOKEN != '' && 'true' || 'false' }}
+          HAS_SLACK_WEBHOOK: ${{ secrets.VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL != '' && 'true' || 'false' }}
         run: |
-          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_API_URL) -or [string]::IsNullOrWhiteSpace($env:VETSOFTWARE_ALERT_EMAIL) -or ($env:HAS_PROVISIONING_TOKEN -ne 'true')
+          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_API_URL) -or ($env:HAS_SLACK_WEBHOOK -ne 'true') -or ($env:HAS_PROVISIONING_TOKEN -ne 'true')
           if ($missing) {
-            Write-Host "::warning::El environment iac-apply-prod no tiene GRAFANA_API_URL / VETSOFTWARE_ALERT_EMAIL / GRAFANA_PROVISIONING_TOKEN: se omite el provisioning de Grafana (contact points, notification policy y alertas Grafana-managed). Las reglas del ruler SI quedaron sincronizadas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
+            Write-Host "::warning::El environment iac-apply-prod no tiene GRAFANA_API_URL / VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL / GRAFANA_PROVISIONING_TOKEN: se omite el provisioning de Grafana (contact points, notification policy y alertas Grafana-managed). Las reglas del ruler SI quedaron sincronizadas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
               "### Provisioning de Grafana - prod",
               "",
-              "OMITIDO: faltan ``GRAFANA_API_URL`` / ``VETSOFTWARE_ALERT_EMAIL`` / ``GRAFANA_PROVISIONING_TOKEN`` en el environment ``iac-apply-prod``. El sync del ruler no se ve afectado.",
+              "OMITIDO: faltan ``GRAFANA_API_URL`` / ``VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL`` / ``GRAFANA_PROVISIONING_TOKEN`` en el environment ``iac-apply-prod``. El sync del ruler no se ve afectado.",
               "",
               "Como cargarlos: ``docs/ALERTAS_GRAFANA_CLOUD.md``."
             )
@@ -229,8 +227,8 @@ jobs:
       # Convierte los ficheros apiVersion 1 a llamadas JSON de la API de
       # provisioning y hace upsert (crea/actualiza, NO borra). Antes de
       # convertir sustituye los marcadores ${NOMBRE} por variables de entorno
-      # (VETSOFTWARE_ALERT_EMAIL, del env del job) y FALLA si alguno queda sin
-      # resolver: un marcador literal guardado en Grafana parece configurado y
+      # (VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL, del env de este paso) y FALLA si
+      # alguno queda sin resolver: un marcador literal guardado en Grafana parece configurado y
       # no notifica a nadie. Si la API rechaza el token (401/403), avisa y
       # pasa; cualquier otro fallo es rojo. Detalle y limites en el propio
       # script.
@@ -239,6 +237,11 @@ jobs:
         shell: pwsh
         env:
           GRAFANA_PROVISIONING_TOKEN: ${{ secrets.GRAFANA_PROVISIONING_TOKEN }}
+          # El webhook se inyecta SOLO aqui, en el unico paso que lo necesita:
+          # el script lo sustituye donde los contact points traen el marcador
+          # ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}. Quien tenga esa URL puede
+          # publicar en el canal, asi que no viaja por el env del job.
+          VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL: ${{ secrets.VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL }}
         run: |
           $files = $env:PROVISIONING_FILES -split '\s+' | Where-Object { $_ }
           ./.github/scripts/apply-grafana-provisioning.ps1 -Files $files -EnvironmentLabel prod
