@@ -75,4 +75,4 @@ groups:
         annotations:
           summary: "El backend de VetSoftware lleva 15 minutos sin enviar telemetría"
           description: "Ni target_info ni jvm_threads_live han recibido muestras en 15 minutos: o el proceso está caído, o el export OTLP está roto de extremo a extremo. Comprobar primero el servicio ECS y después el pipeline de export (credenciales OTLP, red de salida, estado de Grafana Cloud)."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackenddown"
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackendtelemetryabsent"
