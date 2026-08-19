@@ -356,13 +356,17 @@ if ($policyEntries.Count -gt 0) {
 
 if ($ruleGroupEntries.Count -gt 0) {
     # La carpeta se referencia por NOMBRE en el fichero pero la API exige su
-    # UID. Debe existir de antemano (se crea una vez en la UI: Alerting ->
-    # Alert rules -> New folder); crearla desde aqui pediria otro scope mas en
-    # la Access Policy para un caso que ocurre una sola vez.
-    # INCIERTO: /api/folders es API general de Grafana, no de alert
-    # provisioning; no esta confirmado que el token con scopes
-    # alert.provisioning baste para listarla. Si devuelve 403 el paso queda en
-    # avisa-y-pasa y hay que valorar anadir folders:read a la Access Policy.
+    # UID, asi que hay que resolverla. Si no existe se CREA aqui: es un
+    # contenedor vacio, no configuracion, y exigir un paso manual previo en la
+    # UI convertiria el pipeline en no-autosuficiente -un stack nuevo (prod, o
+    # dev recreado) fallaria el primer apply por algo que la maquina puede
+    # hacer sola-.
+    #
+    # VERIFICADO contra el stack de dev el 2026-08-19 con un service account
+    # token: GET /api/folders responde 200, y una ruta inventada bajo
+    # /api/v1/provisioning responde 404 -o sea, el 200 es ruteo real y no un
+    # comodin-. El token de service account cubre esta llamada sin scopes
+    # adicionales.
     $foldersResponse = Invoke-GrafanaApi -Method GET -Path "/api/folders" -Context "listar carpetas"
     Assert-Success -Response $foldersResponse -Context "listar carpetas"
     $folders = @($foldersResponse.Content | ConvertFrom-Json)
@@ -370,8 +374,13 @@ if ($ruleGroupEntries.Count -gt 0) {
     foreach ($group in $ruleGroupEntries) {
         $folder = $folders | Where-Object { $_.title -eq $group.folder } | Select-Object -First 1
         if ($null -eq $folder) {
-            Write-Annotation -Level error -Message "La carpeta '$($group.folder)' no existe en el stack. Creela una vez en la UI (Alerting -> Alert rules -> New folder) y relance el workflow."
-            exit 1
+            Write-Annotation -Level notice -Message "La carpeta '$($group.folder)' no existe; se crea."
+            $createFolder = Invoke-GrafanaApi -Method POST -Path "/api/folders" -Body @{ title = $group.folder } -Context "crear la carpeta '$($group.folder)'"
+            Assert-Success -Response $createFolder -Context "crear la carpeta '$($group.folder)'"
+            $folder = $createFolder.Content | ConvertFrom-Json
+            # Se anade al cache local para que un segundo grupo con la misma
+            # carpeta no intente crearla de nuevo y choque con un 409.
+            $folders += $folder
         }
         $folderUid = $folder.uid
         $orgId = Get-OptionalProperty -Object $group -Name "orgId"

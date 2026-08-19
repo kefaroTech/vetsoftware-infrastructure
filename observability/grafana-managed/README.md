@@ -78,7 +78,9 @@ lectura en la UI — que es lo correcto cuando el pipeline es la única vía de 
 
 Requisitos previos que la API no crea sola:
 
-- La carpeta `VetSoftware` debe existir en el stack (la referencia `folder:` de la cost-guard).
+- La carpeta `VetSoftware` (la referencia `folder:` de la cost-guard) **la crea el script si no
+  existe**: es un contenedor vacío, no configuración, y pedir un paso manual previo dejaría el
+  pipeline sin ser autosuficiente en un stack nuevo.
 - El webhook de Slack **no existe todavía** y es **bloqueante**: Slack es hoy la única
   integración activa de los contact points, y el sub-gate omite el tramo entero mientras el
   secret no esté cargado. Solo puede crearlo una persona con permisos en el workspace

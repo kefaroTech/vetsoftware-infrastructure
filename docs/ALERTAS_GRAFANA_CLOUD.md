@@ -327,10 +327,11 @@ falta, en este orden:
 2. El service account token creado en la instancia y cargado como
    `GRAFANA_PROVISIONING_TOKEN` (paso 5 de la misma sección — **no** es el
    token del ruler ni sale de Access Policies).
-3. La carpeta `VetSoftware` creada una vez en el stack (*Alerting → Alert
-   rules → New folder*): las reglas Grafana-managed la referencian por nombre
-   y el script la resuelve pero **no la crea**, para no pedir más permisos
-   por un paso que ocurre una sola vez.
+La carpeta `VetSoftware` **no hay que crearla a mano**: las reglas
+Grafana-managed la referencian por nombre y el script la resuelve, creándola si
+no existe. Es un contenedor vacío, no configuración, y exigir un paso previo en
+la UI dejaría el pipeline sin ser autosuficiente — un stack nuevo (prod, o dev
+recreado) fallaría su primer apply por algo que la máquina sabe hacer sola.
 
 ### Verificación pendiente de la primera ejecución real
 
