@@ -9,8 +9,8 @@
 #
 # Conversión aplicada (misma plantilla que vetsoftware-cost-guard.yml, ya en el stack):
 #   - El PromQL va en refId A SIN el comparador final; la comparación pasa al threshold de refId C.
-#   - En las alertas HTTP, la guarda de volumen (`and sum(increase(...)) >= 20`) se QUEDA dentro
-#     de refId A con su comparador: es un filtro de presencia, no la condición de la alerta.
+#   - En las alertas HTTP, la guarda de volumen (`and sum by (...) (increase(...)) >= N`) se QUEDA
+#     dentro de refId A con su comparador: es un filtro de presencia, no la condición de la alerta.
 #     Sin tráfico suficiente la consulta devuelve vacío → NoData → OK (ver noDataState abajo).
 #   - `noDataState: OK` en TODAS las reglas, decidido por alerta pero con la misma conclusión:
 #     el backend de dev se apaga a las 20:00 por EventBridge, así que cada serie de este fichero
@@ -27,6 +27,47 @@ apiVersion: 1
 
 groups:
   # ───────────────────────────── HTTP ─────────────────────────────
+  #
+  # POR QUÉ las tres expresiones excluyen `/actuator/**` y agrupan por entorno.
+  #
+  # 1. LA SONDA ERA EL SLI. Medido en dev el 19-08-2026 sobre 24 h de la etiqueta `uri`:
+  #    `/actuator/health/**` = 748 peticiones; TODO el resto junto = 11,4 peticiones. Es decir,
+  #    el 98,5 % del numerador y del denominador de estas tres reglas era la sonda de liveness
+  #    de ECS llamándose a sí misma. Una tasa de error o un percentil calculados así no miden
+  #    la experiencia de nadie: miden si el health check responde, que es justo lo que YA
+  #    vigilan el heartbeat y las alarmas de infraestructura. Peor aún: la sonda es rápida y
+  #    nunca falla, así que diluía cualquier fallo real hasta hacerlo invisible — 1 de cada 2
+  #    peticiones de usuario fallando daba una tasa agregada del 0,6 %, muy por debajo del 5 %.
+  #    Por eso `uri!~"/actuator.*"` va en el numerador Y en el denominador Y en los buckets.
+  #    (El prefijo no lleva el context path `/api/v1`: Micrometer lo quita, valores reales
+  #    observados `/actuator/health` y `/actuator/health/**`.)
+  #
+  # 2. AGRUPADO POR `deployment_environment_name`. Antes era `sum()` global. Con prod desplegado
+  #    bajo el mismo `job`, dev y prod compartirían denominador: el tráfico de prod cumpliría la
+  #    guarda y los 5xx de dev entrarían en el numerador de prod. Es un defecto latente, no un
+  #    refinamiento. Agrupar cuesta como mucho 2 instancias de alerta (dev/prod) y hace que la
+  #    notificación diga de qué entorno habla.
+  #
+  # 3. LA GUARDA DE VOLUMEN SE DERIVA DEL ESTADÍSTICO, no se elige a ojo. Una guarda existe para
+  #    que el cociente no se calcule sobre un denominador ridículo; el mínimo honesto es el
+  #    número de muestras por debajo del cual el estadístico NO EXISTE:
+  #      - tasa de 5xx con umbral 0,05  →  1/0,05      =  20 req/5 min. Con menos, un solo 500
+  #        ya supera el umbral y la alerta se vuelve «hubo un error», no «hay una tasa de error».
+  #      - p95                          →  1/(1-0,95)  =  20 req/5 min.
+  #      - p99                          →  1/(1-0,99)  = 100 req/5 min. Con 20 muestras el p99 es
+  #        literalmente la petición más lenta del lote, no un percentil. Por eso esta guarda SUBE.
+  #
+  # 4. CONSECUENCIA ASUMIDA: EN DEV ESTAS TRES SIGUEN MUDAS, Y ESO ES LO CORRECTO. Verificado:
+  #    `count_over_time((sum(increase(http_server_requests_milliseconds_count{uri!~"/actuator.*"}[5m])) >= 20)[7d:1m])`
+  #    devuelve VACÍO — la guarda no se cumplió ni un minuto en 7 días. No es un umbral mal
+  #    puesto: es que dev recibe ~11 peticiones de usuario AL DÍA. No se puede calcular una tasa
+  #    de error del 5 % ni un p99 con eso, y bajar la guarda para que «suene algo» convertiría
+  #    cada petición fallida suelta en un crítico. Un solo número absoluto NO sirve para dev y
+  #    prod a la vez, y PromQL no permite un umbral por entorno sin duplicar las reglas (lo que
+  #    obligaría a cambiar los `uid`). La calibración de aquí es la de PROD; en dev la cobertura
+  #    de «¿el backend responde?» es del heartbeat, no de estas tres. Si algún día se quiere
+  #    señal HTTP real en dev, se genera tráfico sintético (k6/synthetic monitoring), no se
+  #    rebaja la guarda.
   - orgId: 1
     name: vetsoftware-http
     folder: VetSoftware
@@ -44,16 +85,26 @@ groups:
               instant: true
               # El comparador principal (> 0.05) se movió a C. La guarda de volumen conserva
               # su comparador porque no es el umbral de la alerta sino un filtro anti-ruido:
-              # con menos de 20 solicitudes en 5 m el `and` vacía el resultado y la regla
-              # queda en NoData→OK en vez de disparar por un único 500 aislado.
+              # con menos de 20 solicitudes de USUARIO en 5 m el `and` vacía el resultado y la
+              # regla queda en NoData→OK en vez de disparar por un único 500 aislado.
+              # 20 = 1/0,05: por debajo de eso un solo 500 ya cruza el umbral por sí mismo.
               expr: |
                 (
-                  sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status=~"5.."}[5m]))
+                  sum by (deployment_environment_name) (
+                    rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*",status=~"5.."}[5m])
+                  )
                   /
-                  clamp_min(sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])), 0.001)
+                  clamp_min(
+                    sum by (deployment_environment_name) (
+                      rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+                    ),
+                    0.001
+                  )
                 )
                 and
-                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+                sum by (deployment_environment_name) (
+                  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+                ) >= 20
           - refId: C
             datasourceUid: __expr__
             model:
@@ -73,7 +124,7 @@ groups:
           service: vetsoftware
         annotations:
           summary: "La tasa HTTP 5xx supera el 5 %"
-          description: "El backend superó el 5 % de respuestas 5xx con al menos 20 solicitudes en cinco minutos."
+          description: "El backend superó el 5 % de respuestas 5xx sobre tráfico de usuario (excluido /actuator/**) con al menos 20 solicitudes en cinco minutos, en el entorno indicado por deployment_environment_name."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttp5xxratehigh"
 
       - uid: vetsw-http-p95-latency-high
@@ -86,15 +137,22 @@ groups:
             model:
               refId: A
               instant: true
+              # `le` sobrevive al `sum by` porque histogram_quantile lo necesita; el resto de
+              # etiquetas se agrega salvo el entorno. Los bordes 250/500/1000/2000/5000/30000 ms
+              # siguen publicados tras filtrar `uri` (el filtro es de etiqueta, no de bucket):
+              # verificado, `count by (le)` devuelve los seis. El umbral de C cae sobre uno exacto.
+              # 20 = 1/(1-0,95): mínimo de muestras para que el p95 no sea el máximo del lote.
               expr: |
                 histogram_quantile(
                   0.95,
-                  sum by (le) (
-                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m])
+                  sum by (le, deployment_environment_name) (
+                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
                   )
                 )
                 and
-                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+                sum by (deployment_environment_name) (
+                  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+                ) >= 20
           - refId: C
             datasourceUid: __expr__
             model:
@@ -113,7 +171,7 @@ groups:
           service: vetsoftware
         annotations:
           summary: "La latencia HTTP p95 supera un segundo"
-          description: "La latencia p95 agregada permaneció por encima de un segundo (1000 ms) con volumen suficiente."
+          description: "La latencia p95 del tráfico de usuario (excluido /actuator/**) permaneció por encima de un segundo (1000 ms) con al menos 20 solicitudes en cinco minutos, en el entorno indicado por deployment_environment_name."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp95latencyhigh"
 
       - uid: vetsw-http-p99-latency-critical
@@ -126,15 +184,21 @@ groups:
             model:
               refId: A
               instant: true
+              # Guarda 100 (no 20, como las otras dos): 1/(1-0,99). Un p99 sobre 20 muestras es
+              # la petición más lenta del lote, no un percentil, y hace que un único outlier
+              # —un cold start, una consulta puntual— dispare un CRÍTICO. Es la única de las tres
+              # guardas que sube, y sube porque el estadístico lo exige, no por prudencia.
               expr: |
                 histogram_quantile(
                   0.99,
-                  sum by (le) (
-                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m])
+                  sum by (le, deployment_environment_name) (
+                    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
                   )
                 )
                 and
-                sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+                sum by (deployment_environment_name) (
+                  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+                ) >= 100
           - refId: C
             datasourceUid: __expr__
             model:
@@ -152,7 +216,7 @@ groups:
           service: vetsoftware
         annotations:
           summary: "La latencia HTTP p99 supera dos segundos"
-          description: "La latencia p99 agregada permaneció por encima de dos segundos (2000 ms) con volumen suficiente."
+          description: "La latencia p99 del tráfico de usuario (excluido /actuator/**) permaneció por encima de dos segundos (2000 ms) con al menos 100 solicitudes en cinco minutos, en el entorno indicado por deployment_environment_name."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp99latencycritical"
 
   # ─────────────────────────── Runtime JVM ───────────────────────────
@@ -196,6 +260,33 @@ groups:
           description: "El heap se mantuvo por encima del 85 % durante diez minutos."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmheaphigh"
 
+      # POR QUÉ el gauge se divide antes de comparar. `process_cpu_usage` es
+      # `OperatingSystemMXBean.getProcessCpuLoad()`: tiempo de CPU del proceso dividido por
+      # (tiempo transcurrido × `availableProcessors`). En esta tarea `system_cpu_count = 1`
+      # (medido), porque Java redondea la cuota del contenedor hacia arriba: ceil(0,5) = 1.
+      # Pero la cuota REAL es 0,5 vCPU, así que el proceso no puede consumir más de 0,5 s de
+      # CPU por segundo de reloj y el gauge tiene techo ≈ 0,50. Comparar ese gauge contra 0,85
+      # era pedirle que superara su propio máximo: la regla NO PODÍA DISPARAR NUNCA. Medido en
+      # 7 días: p99 = 0,007–0,029 según versión; sostenido máximo ≈ 0,50.
+      #
+      # De dónde sale el 0,5: `environments/dev/variables.tf` → `backend_cpu = 512` unidades de
+      # CPU de tarea Fargate; 512/1024 = 0,5 vCPU. Se escribe como la fracción `512 / 1024` en
+      # vez de `0.5` para que quien cambie `backend_cpu` vea de dónde viene el número.
+      # CUIDADO al mantenerlo: la fórmula solo vale mientras `backend_cpu` ≤ 1024. Con 1024 o
+      # más la JVM ve `availableProcessors` ≥ 1, el gauge ya viene normalizado sobre la cuota
+      # completa y el divisor pasa a ser 1 (no `cpu/1024`). No hay ninguna métrica publicada que
+      # exponga la cuota, así que esta constante no puede derivarse sola: es acoplamiento
+      # explícito entre el YAML de alertas y el de Terraform, y por eso está comentado aquí.
+      #
+      # Con el divisor puesto, el umbral 0,85 recupera su significado literal —«85 % de la cuota
+      # real»— y `$value` en la notificación es fracción de cuota, no un número sin escala.
+      #
+      # POR QUÉ NO se suaviza con `avg_over_time`. Al arrancar, el primer par de muestras del
+      # gauge llega a 1,0 (artefacto de la primera medición: apenas hay ventana previa contra la
+      # que promediar). Medido en 7 días con `count_over_time((process_cpu_usage > 0.42)[7d:1m])`:
+      # como mucho 3 minutos por versión, todos en el arranque. El `for: 10m` los absorbe. Se
+      # probó `avg_over_time(...[10m])` y EMPEORA: estira el pico a 5 minutos por encima de 0,42.
+      # El gauge crudo con `for: 10m` es la combinación más limpia.
       - uid: vetsw-process-cpu-high
         title: VetSoftwareProcessCpuHigh
         condition: C
@@ -207,7 +298,7 @@ groups:
               refId: A
               instant: true
               expr: |
-                process_cpu_usage{job="mainvet/vetsoftware"}
+                process_cpu_usage{job="mainvet/vetsoftware"} / (512 / 1024)
           - refId: C
             datasourceUid: __expr__
             model:
@@ -215,6 +306,7 @@ groups:
               type: threshold
               expression: A
               conditions:
+                # 0,85 de la CUOTA (≈ 0,425 en el gauge crudo), no 0,85 del gauge.
                 - evaluator: { type: gt, params: [0.85] }
         noDataState: OK
         execErrState: Error
@@ -224,8 +316,8 @@ groups:
           domain: runtime
           service: vetsoftware
         annotations:
-          summary: "El proceso Java supera el 85 % de CPU"
-          description: "El uso de CPU del proceso se mantuvo por encima del 85 % durante diez minutos."
+          summary: "El proceso Java supera el 85 % de su cuota de CPU"
+          description: "El uso de CPU del proceso se mantuvo por encima del 85 % de la cuota de la tarea (0,5 vCPU) durante diez minutos. El valor es fracción de cuota: 1,0 significa cuota agotada."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareprocesscpuhigh"
 
       - uid: vetsw-jvm-gc-overhead-high
@@ -425,6 +517,41 @@ groups:
       #
       # Se eligió (b). El resultado conserva la etiqueta `token_type` del lado izquierdo, así que
       # sigue habiendo una instancia de alerta por tabla, igual que en el ruler.
+      #
+      # ── CORRECCIÓN DEL JOIN (el `on(job, instance)` original se rompía en cada despliegue) ──
+      #
+      # `instance` vale la constante `ecs-fargate-spot` para TODAS las tareas: no identifica una
+      # tarea, así que no es clave de nada. Durante un despliegue rodante conviven dos tareas y,
+      # con ellas, dos series de umbral con el mismo `(job, instance)`. `group_left()` exige UNA
+      # sola serie a la derecha por grupo, y con dos aborta la evaluación. Reproducido en vivo el
+      # 19-08-2026 contra grafanacloud-prom, error literal:
+      #   «found duplicate series for the match group {instance="ecs-fargate-spot",
+      #    job="mainvet/vetsoftware"} on the right side of the operation at timestamp
+      #    2026-08-18T04:50:03.184Z: {... service_version="1.3.4-dev.2"} and
+      #    {... service_version="1.3.7-dev.1"}»
+      # Es decir: la regla dejaba de evaluar justo cuando se despliega, que es el momento en el
+      # que más falta hace que evalúe.
+      #
+      # El arreglo es DOBLE, a propósito:
+      #   1. `service_version` entra en las claves del `on(...)`. Es la etiqueta que de verdad
+      #      distingue dos despliegues, y así cada versión se compara contra SU umbral —correcto
+      #      si una versión futura cambia `growthWarningThreshold`.
+      #   2. El lado derecho se agrega con `max by (...)`. Con (1) ya no hay duplicados hoy, pero
+      #      (1) por sí solo volvería a fallar si algún día corrieran DOS TAREAS DE LA MISMA
+      #      VERSIÓN (desired_count > 1, o un reintento de despliegue sobre la misma etiqueta).
+      #      El `max by` garantiza cardinalidad 1 a la derecha pase lo que pase, así que este
+      #      modo de fallo no puede volver por otra etiqueta. Ante empate se toma el umbral más
+      #      alto, que es la opción conservadora: menos falsos positivos.
+      #
+      # CAUSA RAÍZ, que NO se arregla aquí: `service.instance.id` está fijado al literal
+      # `ecs-fargate-spot`, y las semantic conventions de OpenTelemetry exigen que sea ÚNICO por
+      # instancia dentro de un mismo `service.namespace`/`service.name`. Mientras siga siendo una
+      # constante, ninguna alerta de este stack puede distinguir dos tareas, y toda métrica por
+      # tarea se solapa en silencio. Corregirlo es del backend/colector (variable de entorno
+      # OTEL_RESOURCE_ATTRIBUTES con el ARN o el UUID de la tarea), no de este fichero.
+      #
+      # Verificado tras el arreglo, mismo rango de 7 días donde la expresión anterior abortaba:
+      # devuelve 3 series (una por token_type) y 6 durante los solapes de despliegue, sin error.
       - uid: vetsw-security-token-table-growth
         title: VetSoftwareSecurityTokenTableGrowth
         condition: C
@@ -437,8 +564,10 @@ groups:
               instant: true
               expr: |
                 vetsoftware_security_tokens_rows{job="mainvet/vetsoftware"}
-                - on(job, instance) group_left()
-                vetsoftware_security_tokens_growth_threshold{job="mainvet/vetsoftware"}
+                - on(job, instance, service_version) group_left()
+                max by (job, instance, service_version) (
+                  vetsoftware_security_tokens_growth_threshold{job="mainvet/vetsoftware"}
+                )
           - refId: C
             datasourceUid: __expr__
             model:
@@ -450,7 +579,26 @@ groups:
         # Ambos gauges los publica el propio backend: con el apagado nocturno de dev desaparecen
         # a la vez. NoData aquí no significa "la tabla creció", significa "no hay quién la mida".
         noDataState: OK
+        # SE MANTIENE `Error`, revisado a conciencia. El daño real no era notificar los errores de
+        # evaluación: era notificarlos EN CADA DESPLIEGUE con un texto que hablaba de tokens
+        # cuando lo que había pasado es que la consulta no compiló. Corregido el join, un error de
+        # evaluación aquí ya solo puede significar que cambió el esquema de etiquetas de los dos
+        # gauges — raro, real y accionable, exactamente lo que debe notificarse.
+        # Las alternativas se descartaron por lo mismo: `OK` convierte una regla rota en una regla
+        # que PARECE sana mientras no mide nada (pérdida silenciosa, el peor resultado posible), y
+        # `KeepLast` hereda esa ceguera y además presenta un estado viejo como si fuera fresco.
+        # Lo que sí falta y NO vive en este fichero: una única meta-alerta sobre
+        # `grafana_alerting_rule_evaluation_failures_total` que vigile «mis reglas no evalúan» de
+        # forma agregada. No existe en el repo (verificado). Su sitio es
+        # vetsoftware-cloud-additions-managed.yml. Con ella puesta, este `Error` podría revisarse
+        # de nuevo; sin ella, es la única señal de que la regla dejó de funcionar.
         execErrState: Error
+        # `for: 30m` con `vetsoftware.token-cleanup.interval` por defecto en PT1H madura DENTRO de
+        # un solo ciclo de purga. La descripción decía «después de varias ejecuciones de la purga»
+        # y eso era falso; se corrigió el texto en vez de subir el `for` a 2h, porque el `for` es
+        # el amortiguador del pico entre purgas y alargarlo retrasa la detección de una fuga real
+        # sin comprar nada: la sospecha de «¿la purga corre?» la responde la métrica del job, que
+        # es el paso 2 del runbook.
         for: 30m
         labels:
           severity: warning
@@ -458,5 +606,5 @@ groups:
           service: vetsoftware
         annotations:
           summary: "Una tabla de tokens de seguridad supera el umbral de crecimiento"
-          description: "La tabla indicada por token_type sigue por encima del umbral después de varias ejecuciones de la purga."
+          description: "La tabla indicada por token_type lleva al menos treinta minutos por encima de su umbral de crecimiento; el valor es el exceso de filas sobre el umbral. Si esta notificación llega en estado Error NO habla de tokens: la consulta no pudo evaluarse y el motivo está en la anotación Error."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresecuritytokentablegrowth"

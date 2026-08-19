@@ -25,24 +25,52 @@ AWS; conviene tener los dos a mano.
 
 ## Estado del plano de alertas
 
-Al escribir este runbook se midió cada alerta contra la señal real. **Siete reglas no hacen
-lo que su nombre promete.** Se documentan igual, con la advertencia al principio de su
-sección, porque una alerta rota que aparenta cobertura es más peligrosa que una ausente.
+Al escribir este runbook se midió cada alerta contra la señal real. **Siete reglas no hacían
+lo que su nombre promete. Las siete están corregidas** — pero corregido no es lo mismo que
+vigente, y la diferencia está explicada justo debajo de la tabla. Las corregidas se mantienen
+aquí con su historia porque saber qué medía antes una alerta es lo que permite interpretar un
+panel de hace tres semanas. Una alerta rota que aparenta cobertura es más peligrosa que una
+ausente, y por eso la que todavía no mide va primero.
 
 | Regla | Qué le pasa |
 | --- | --- |
-| `VetSoftwareValkeyLatencyHigh` | **No puede disparar.** `lettuce_milliseconds_bucket` solo publica `le="+Inf"`, así que `histogram_quantile` devuelve `NaN` siempre. Falta activar `percentiles-histogram` para `lettuce` en `application.yml` |
-| `VetSoftwareProcessCpuHigh` | **No puede disparar.** La tarea tiene 0,5 vCPU de cuota y la JVM normaliza sobre `system_cpu_count = 1`: el gauge tiene techo ≈ 0,50 y el umbral es 0,85 |
-| `VetSoftwareHttp5xxRateHigh` | **Muda en dev.** Guarda de volumen ≥ 20 req/5 min sobre una línea base de 10. Ni un fallo total de base de datos la haría disparar |
-| `VetSoftwareHttpP95LatencyHigh` | Misma guarda, mismo silencio. A este volumen p95 y p99 son la misma petición |
-| `VetSoftwareHttpP99LatencyCritical` | Igual. Además, un p99 sobre 20 muestras es la petición más lenta, no un percentil |
-| `VetSoftwareSecurityTokenTableGrowth` | **Se rompe en cada despliegue.** Con dos `service_version` vivas, `group_left()` falla por serie duplicada; y `execErrState: Error` emite un crítico a Slack que no habla de tokens |
-| `VetSoftwareScheduledJobFailing` (critical) | **Falso positivo estructural.** `no_work` no cuenta como éxito, y `security.tokens.cleanup` acumula 21 `no_work` y 0 `success` en 7 días: un solo fallo cumple «ningún éxito en 2 h» al instante |
+| `VetSoftwareValkeyLatencyHigh` | ~~**No puede disparar.** `lettuce_milliseconds_bucket` solo publica `le="+Inf"`, así que `histogram_quantile` devuelve `NaN` siempre~~ → **CORREGIDO 2026-08-19, en dos mitades**: (a) bordes explícitos `slo: lettuce: 1ms,5ms,25ms,50ms,100ms` en el `application.yml` del backend —cinco bordes SLO y **no** `percentiles-histogram`, con la cuenta de series delante— y (b) exclusión de las operaciones de protocolo (`CLIENT`/`HELLO`/…) de la expresión, que mezclaban dos poblaciones de latencia. **Es la única de las siete que no basta con sincronizar: los bordes solo aparecen al desplegar una imagen del backend.** Ver la sección de la alerta |
+| `VetSoftwareProcessCpuHigh` | ~~**No puede disparar.** El gauge tiene techo ≈ 0,50 (cuota de 0,5 vCPU normalizada sobre `system_cpu_count = 1`) y el umbral era 0,85~~ → **CORREGIDO 2026-08-19**: la expresión divide por la cuota real (`512 / 1024`), así que 0,85 significa «85 % de la cuota». Ver la sección de la alerta |
+| `VetSoftwareHttp5xxRateHigh` | ~~**Muda en dev.** Guarda ≥ 20 req/5 min sobre una línea base de 10, de la cual el 98,5 % era la sonda de salud~~ → **CORREGIDO 2026-08-19**: `/actuator/**` fuera del numerador y del denominador, y agrupado por entorno. **Sigue muda en dev, ahora por la razón correcta**: dev recibe ~11 peticiones de usuario **al día** y con eso no existe una tasa de error. La calibración es la de prod |
+| `VetSoftwareHttpP95LatencyHigh` | ~~Misma guarda, mismo silencio~~ → **CORREGIDO 2026-08-19** igual que la anterior. Guarda ≥ 20 = 1/(1−0,95), el mínimo para que el p95 no sea el máximo del lote |
+| `VetSoftwareHttpP99LatencyCritical` | ~~Igual. Además, un p99 sobre 20 muestras es la petición más lenta, no un percentil~~ → **CORREGIDO 2026-08-19**: misma exclusión, y la guarda **sube** a ≥ 100 = 1/(1−0,99) precisamente por eso |
+| `VetSoftwareSecurityTokenTableGrowth` | ~~**Se rompe en cada despliegue.** Con dos `service_version` vivas, `group_left()` falla por serie duplicada~~ → **CORREGIDO 2026-08-19**: el join va por `(job, instance, service_version)` y el lado derecho se agrega con `max by (...)`, así que no puede volver a duplicarse. `execErrState: Error` **se mantiene** deliberadamente, con la descripción corregida para que un estado de Error no se lea como crecimiento de tokens |
+| `VetSoftwareScheduledJobFailing` (critical) | ~~**Falso positivo estructural.** `security.tokens.cleanup` solo emite `no_work` y nunca `success`, así que un fallo aislado cumplía «ningún éxito en 2 h» al instante~~ → **CORREGIDO 2026-08-19** con una guarda de repetición `>= 2`. **Ojo: NO se arregla metiendo `no_work` en el lado excluido** —se probó y deja muda la alerta de la reconciliación DIAN, que alterna `no_work` con `failure`. Ver la sección de la alerta |
 
 Y un punto ciego que no es una regla rota sino una que no puede ver su fallo más probable:
 **`VetSoftwareEmailSendFailing`** no dispara si falta `RESEND_API_KEY`, porque
 `ResendEmailClient.ready()` emite `misconfigured` y nunca llega a `dispatch`: no se registra
 ni un `failure`.
+
+### Corregido no es vigente: dónde está cada mitad
+
+Esta tabla describe **los ficheros del repositorio**. Lo que evalúa Grafana Cloud ahora mismo se
+consulta en Alerting → Alert rules, y hasta que el cambio se publique puede ser la versión
+anterior. Hay dos caminos distintos, con dueños y tiempos distintos:
+
+- **Las seis correcciones de expresión** viven en `observability/grafana-managed/`. Se publican
+  cuando la rama llega a `develop` y corre `sync-alert-rules-dev` (o `-prod`). No necesitan nada
+  del backend: en cuanto el workflow pasa, la regla nueva evalúa.
+- **Los bordes del histograma de `lettuce`** son un cambio del repositorio del **backend**
+  (`VetSoftware/src/main/resources/application.yml`, clave
+  `management.metrics.distribution.slo`), y no llegan a la señal hasta que se construye y
+  despliega una imagen que los lleve. **A 2026-08-19 ese cambio no está en `develop` del
+  backend.** La comprobación cuesta un segundo y no hace falta abrir ninguna consola:
+
+  ```promql
+  count by (le) (count_over_time(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[24h]))
+  ```
+
+  Verificado el 2026-08-19: devuelve **solo `le="+Inf"`**. Cuando devuelva
+  `1, 5, 25, 50, 100, +Inf`, los bordes están desplegados y `VetSoftwareValkeyLatencyHigh` mide
+  de verdad; mientras devuelva un único borde, la alerta sigue sin poder dispararse por muy
+  corregida que esté su expresión. La ventana de 24 h es deliberada: con el apagado nocturno de
+  dev, una consulta instantánea devuelve vacío y se confunde «no hay bordes» con «no hay backend».
 
 ## Cómo está organizado
 
@@ -649,8 +677,11 @@ pérdida de medición. Una hora la distingue de un hueco real. Es `warning`, con
    ```promql
    count by (le) (count_over_time(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[24h]))
    ```
-   Bordes publicados: HTTP `250, 500, 1000, 2000, 5000, 30000`; DIAN duration
-   `2000, 5000, 15000, 30000, 60000`.
+   Bordes utilizables por un SLI: HTTP `250, 500, 1000, 2000, 5000, 30000` (la métrica HTTP
+   lleva además el histograma completo, 74 valores de `le` en total, pero los redondos son
+   estos); DIAN duration `2000, 5000, 15000, 30000, 60000`. `lettuce` publicará
+   `1, 5, 25, 50, 100` **cuando se despliegue** la imagen del backend que declara sus bordes;
+   hoy solo tiene `+Inf`.
 5. **Si es un SLI de negocio** (`dian-transmission`, `inventory-movement`), comprueba que la métrica
    exista:
    ```promql
@@ -752,22 +783,40 @@ la base de datos.
 
 ```promql
 (
-  sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status=~"5.."}[5m]))
+  sum by (deployment_environment_name) (
+    rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*",status=~"5.."}[5m])
+  )
   /
-  clamp_min(sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])), 0.001)
+  clamp_min(
+    sum by (deployment_environment_name) (
+      rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+    ),
+    0.001
+  )
 )
 and
-sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+sum by (deployment_environment_name) (
+  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+) >= 20
 ```
 
-con umbral `> 0.05` en el nodo de comparación. Tres piezas:
+con umbral `> 0.05` en el nodo de comparación. Cuatro piezas:
 
 - **La proporción**: 5xx sobre el total, en ventana móvil de 5 minutos. El
   `clamp_min(..., 0.001)` evita la división por cero cuando no hay tráfico.
-- **La guarda de volumen**: `>= 20` solicitudes en esos 5 minutos. No es el umbral de
-  la alerta, es un filtro de presencia. Si no se cumple, el `and` vacía el resultado,
-  la regla queda en NoData y `noDataState: OK` la deja apagada. Existe porque con
-  denominadores pequeños un único 500 da un porcentaje enorme.
+- **`uri!~"/actuator.*"`, en el numerador y en el denominador** (corregido el
+  2026-08-19). El SLI mide tráfico de **usuario**; la sonda de liveness era el 98,5 %
+  del tráfico de dev y diluía cualquier fallo real hasta hacerlo invisible. Que el
+  health check falle no es este incidente: eso lo cubren el heartbeat y ECS.
+- **`by (deployment_environment_name)`**: dev y prod comparten `job`. Sin agrupar, el
+  tráfico de prod cumpliría la guarda mientras los 5xx de dev entran en el numerador.
+  Con el agrupado, la notificación además dice de qué entorno habla.
+- **La guarda de volumen**: `>= 20` solicitudes de usuario en esos 5 minutos. No es el
+  umbral de la alerta, es un filtro de presencia. Si no se cumple, el `and` vacía el
+  resultado, la regla queda en NoData y `noDataState: OK` la deja apagada. El número
+  no es arbitrario: **20 = 1/0,05**, por debajo de eso un solo 500 ya cruza el umbral
+  del 5 % por sí mismo y la alerta pasa a significar «hubo un error», no «hay una tasa
+  de error».
 - **`for: 5m`** con `interval: 1m` = cinco evaluaciones consecutivas cumpliendo ambas
   condiciones. Cinco minutos sostenidos de 5xx ya es un incidente; menos convertiría
   cada despliegue rodante en una página.
@@ -797,8 +846,10 @@ real.
      increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",status=~"5.."}[15m])
    )
    ```
-4. **Con qué se está comparando** (el denominador incluye la sonda de salud, y eso
-   importa — ver defectos):
+4. **Con qué se está comparando.** El denominador de la alerta ya **no** incluye la
+   sonda de salud, pero esta consulta sí la muestra a propósito: ver cuánta de la
+   actividad es sonda y cuánta es usuario es lo que te dice si el denominador de la
+   alerta era siquiera significativo.
 
    ```promql
    sum by (uri) (increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[15m]))
@@ -863,8 +914,9 @@ real.
 
 *Arreglo de fondo*
 
-- **Excluir `/actuator/**` de la expresión** (ver defectos). Es el cambio que más
-  mejora esta alerta y no cuesta ni una serie.
+- ~~Excluir `/actuator/**` de la expresión~~ → hecho el 2026-08-19. Lo que queda por
+  hacer es **generar tráfico de usuario en dev** (sintético): sin él, la exclusión deja
+  esta alerta correctamente muda en dev, y la cobertura real solo existirá en prod.
 - Los 5xx no distinguen hoy "fallo del backend" de "fallo de un proveedor". Una
   dimensión `error_type` acotada sobre la métrica HTTP sería la señal correcta;
   `exception` es un nombre de clase Java y no es una dimensión estable.
@@ -872,29 +924,38 @@ real.
 **Cuándo NO es un incidente**
 
 - **Nunca por muestra pequeña**: la guarda de 20 lo impide por construcción. Si esta
-  alerta dispara, hubo al menos 20 solicitudes reales en 5 minutos, que en dev es
-  **el doble de la línea base**.
+  alerta dispara, hubo al menos 20 solicitudes **de usuario** en 5 minutos — un volumen
+  que en dev no se alcanza nunca (línea base: ~11 al día). En dev, si esta alerta
+  dispara, sospecha primero de una prueba de carga.
 - Durante una prueba E2E o de carga que provoca errores a propósito.
 - Los 4xx **no** cuentan aquí y no deben: una credencial mala o un 404 son el sistema
   funcionando.
 
 **Defectos conocidos de la señal**
 
-- **La alerta está muda en dev con el tráfico actual.** Medido el 2026-08-19 sobre una
-  ventana de 12 h: `sum(increase(http_server_requests_milliseconds_count[5m]))` vale
-  **10** de forma sostenida —la sonda de salud cada 30 s— frente a una guarda de
-  **20**. La expresión se vacía en cada evaluación y la regla vive en NoData→OK. El
-  caso que esta alerta existe para cubrir es justamente el peor: si la base de datos
-  cae, `/actuator/health` devuelve 503 y **el 100 % de esas 10 peticiones son 5xx**, y
-  aun así no dispara porque no llegan a 20. Es el hallazgo más grave de este bloque.
-  Arreglo: bajar la guarda a un valor coherente con el tráfico real (p. ej. `>= 5`)
-  **después** de excluir `/actuator/**`, o —mejor— sustituir la proporción por una
-  alerta de conteo absoluto de 5xx de negocio, que no necesita denominador.
-- **La sonda de salud está dentro del numerador y del denominador.** `/actuator/health/**`
-  es entre el 90 % y el 100 % del tráfico de dev, así que diluye cualquier tasa de
-  error de usuario y, a la vez, puede ser ella misma la fuente de los 5xx. Un SLI debe
-  medir tráfico de usuario (SRE Workbook). Arreglo: `uri!~"/actuator/.*"` en las dos
-  sumas.
+- ~~**La sonda de salud está dentro del numerador y del denominador.**~~ → **CORREGIDO
+  2026-08-19.** `/actuator/**` está excluido de las dos sumas y de los buckets. Lo que
+  se midió antes de corregirlo, por si hace falta interpretar datos antiguos: sobre 24 h
+  de la etiqueta `uri`, `/actuator/health/**` = **748** peticiones y todo el resto junto
+  = **11,4**. Es decir, el SLI era la sonda de liveness. Un fallo que rompiera la mitad
+  de las peticiones de usuario daba una tasa agregada del 0,6 %, muy por debajo del 5 %.
+- **La alerta sigue muda en dev — y ahora eso es correcto, no un defecto.** Con la sonda
+  fuera, dev recibe ~**11 peticiones de usuario al día**. Verificado el 2026-08-19:
+  `count_over_time((sum(increase(http_server_requests_milliseconds_count{uri!~"/actuator.*"}[5m])) >= 20)[7d:1m])`
+  devuelve **vacío**: la guarda no se cumplió ni un solo minuto en siete días. No se
+  puede calcular una tasa de error del 5 % con ese volumen, y bajar la guarda para «que
+  suene algo» convertiría cada petición fallida suelta en un crítico. **Un solo número
+  no sirve para dev y prod a la vez**, y PromQL no permite un umbral por entorno sin
+  duplicar la regla (lo que obligaría a cambiar el `uid`, que es la clave de upsert del
+  pipeline). La calibración de la regla es la de **prod**. En dev, la pregunta «¿el
+  backend responde?» la contesta el heartbeat, no esta alerta. Si algún día se quiere
+  señal HTTP real en dev, el camino es tráfico sintético (k6 / synthetic monitoring), no
+  rebajar la guarda.
+- **Interacción `for` × guarda, que sigue vigente.** Cualquier evaluación intermedia que
+  no llegue a 20 solicitudes **reinicia** el contador del `for`, no lo pausa. En tráfico
+  irregular la alerta puede no llegar a latchear aunque el fallo sea real. Es el precio
+  de un SLI basado en proporción; la alternativa —conteo absoluto de 5xx— no lo tiene,
+  pero tampoco distingue «diez errores sobre diez peticiones» de «diez sobre un millón».
 - **TEL-03 — el paso 5 (Loki) llega ruidoso.** Unos 35 handlers de dominio del
   `GlobalExceptionHandler` registran 4xx (404, 409, 400) como `WARN`, contradiciendo la
   regla que el propio archivo documenta en `handleExceptionInternal` (líneas 205–218,
@@ -934,10 +995,14 @@ diez minutos. La mayoría de usuarios no lo nota; los que lo notan, lo notan muc
 ```promql
 histogram_quantile(
   0.99,
-  sum by (le) (rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m]))
+  sum by (le, deployment_environment_name) (
+    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+  )
 )
 and
-sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+sum by (deployment_environment_name) (
+  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+) >= 100
 ```
 
 con umbral `> 2000`. **La unidad es milisegundos**, no segundos: el backend exporta por
@@ -950,11 +1015,21 @@ una alerta permanente.
   interpolar alrededor del umbral. **Si alguien mueve el umbral, hay que añadir antes el
   borde**: un umbral entre bordes hace que el SLI se degrade en silencio en vez de
   fallar de forma visible.
+- **El filtro `uri!~"/actuator.*"`** (2026-08-19) saca la sonda de liveness también de
+  aquí. El filtro es de etiqueta, no de bucket: los seis bordes `le`
+  (250/500/1000/2000/5000/30000) siguen publicados después de filtrar — verificado con
+  `count by (le)`. El umbral no se movió y sigue cayendo sobre un borde exacto.
+- **La guarda de esta alerta es ≥ 100, no ≥ 20 como las otras dos.** No es prudencia:
+  **100 = 1/(1−0,99)**. Con menos muestras el "p99" es literalmente la petición más
+  lenta del lote, y un único outlier —un cold start, una consulta puntual— dispararía
+  un **crítico**. La guarda de 20 es la correcta para el p95 (1/(1−0,95)) y para la
+  tasa de 5xx (1/0,05); para el p99 se queda corta por un factor de cinco.
 - **`for: 10m`** con ventana `rate[5m]`: una sola petición lenta influye durante 5
   minutos, así que **no puede latchear sola**. Hacen falta al menos dos episodios
   separados o degradación sostenida. Es la propiedad que hace usable esta alerta con
   poco tráfico.
-- Misma guarda de volumen que la de 5xx, con las mismas consecuencias.
+- **`by (deployment_environment_name)`**, igual que en la de 5xx: dev y prod comparten
+  `job` y no deben compartir percentil.
 
 **Primero mirar**
 
@@ -1030,8 +1105,7 @@ una alerta permanente.
 
 *Arreglo de fondo*
 
-- **Excluir `/actuator/**`** de la expresión. Mezclar la sonda de liveness con el
-  tráfico de usuario en el mismo cuantil no tiene defensa.
+- ~~Excluir `/actuator/**` de la expresión~~ → hecho el 2026-08-19.
 - **La alerta debería llevar `by (uri)`**, o al menos declarar el endpoint en la
   anotación. Hoy el mensaje de Slack dice que algo está lento y nada más.
 - Timeouts explícitos en los clientes HTTP salientes: es lo que convierte un problema
@@ -1049,13 +1123,15 @@ una alerta permanente.
 
 **Defectos conocidos de la señal**
 
-- **Un p99 sobre 20 muestras no es un p99.** La guarda de volumen mínima para que un
-  cuantil 0,99 signifique algo es del orden de **1.000** muestras; con 20, el resultado
-  es el máximo de la ventana interpolado dentro de su bucket. La alerta es en la
-  práctica un detector de "la petición más lenta de los últimos cinco minutos superó
-  2 s, dos veces". Puede ser útil, pero **no lo llames p99 en un informe**. La
-  formulación honesta a este volumen es contar peticiones por encima del umbral:
-  `sum(rate(http_server_requests_milliseconds_count[5m])) - sum(rate(http_server_requests_milliseconds_bucket{le="2000"}[5m]))`.
+- ~~**Un p99 sobre 20 muestras no es un p99.**~~ → **CORREGIDO en parte, 2026-08-19**: la
+  guarda subió a **100 = 1/(1−0,99)**, que es el mínimo por debajo del cual el
+  estadístico directamente no existe. Sigue siendo un mínimo, no un ideal: para que un
+  p99 sea *estable* (poco ruido entre ventanas) el orden de magnitud es **1.000**
+  muestras. Con 100–200 el número es interpretable pero salta. **No lo llames p99 en un
+  informe sin decir cuántas muestras había detrás** — el paso 3 lo responde. La
+  formulación alternativa, que no necesita ninguna guarda porque no es un cociente ni un
+  cuantil, es contar peticiones por encima del umbral:
+  `sum(rate(http_server_requests_milliseconds_count{uri!~"/actuator.*"}[5m])) - sum(rate(http_server_requests_milliseconds_bucket{uri!~"/actuator.*",le="2000"}[5m]))`.
 - **TEL-28 — la correlación métrica→traza está rota en dev.** Los exemplars **sí llegan**
   al stack, pero el datasource de Prometheus de Grafana Cloud (provisionado, `readOnly`)
   espera el campo `traceID` y lo que llega es `trace_id`. Consecuencia práctica: ves el
@@ -1070,13 +1146,16 @@ una alerta permanente.
   tormenta de errores —justo cuando más se loguea— los hilos de request se encolan en
   el lock de logging y la latencia sube por el propio sistema de observación. Con 0,5
   vCPU el efecto es peor. Arreglo: extender `UnsynchronizedAppenderBase`.
-- **La sonda de salud tira del cuantil hacia abajo.** `/actuator/health/**` es rápida y
-  domina el volumen: enmascara un endpoint de negocio lento hasta que el problema es
-  grave. Mismo arreglo que en la alerta de 5xx.
+- ~~**La sonda de salud tira del cuantil hacia abajo.**~~ → **CORREGIDO 2026-08-19**:
+  `uri!~"/actuator.*"` en los buckets y en la guarda. Antes, `/actuator/health/**` era
+  748 de las 759 peticiones de 24 h y su latencia (p95 medido: 5–20 ms) aplastaba el
+  cuantil, enmascarando cualquier endpoint de negocio lento.
 - **La alerta no dice qué endpoint.** `sum by (le)` colapsa `uri`. Es correcto para un
-  SLI global y pésimo para un aviso operativo.
-- **La guarda de 20 deja la alerta muda en el dev actual** (línea base: 10 solicitudes
-  por 5 min, medido 2026-08-19). Mismo hallazgo que en `VetSoftwareHttp5xxRateHigh`.
+  SLI global y pésimo para un aviso operativo. Sigue abierto.
+- **Muda en dev, ahora por la razón correcta.** Con la sonda fuera, dev tiene ~11
+  peticiones de usuario al día: un p99 no existe con eso, y la guarda de 100 no se
+  cumple nunca. La calibración es la de prod. Mismo razonamiento y mismos datos que en
+  `VetSoftwareHttp5xxRateHigh`.
 - **Cardinalidad**: con `percentiles-histogram: true` cada combinación
   (`uri`, `method`, `status`, `outcome`, `exception`, `error`) cuesta **~74 series** de
   bucket. Medido: 74 series de `_bucket` en reposo, 370 en el pico de las últimas 24 h.
@@ -1099,16 +1178,24 @@ pero el sistema responde.
 ```promql
 histogram_quantile(
   0.95,
-  sum by (le) (rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m]))
+  sum by (le, deployment_environment_name) (
+    rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+  )
 )
 and
-sum(increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware"}[5m])) >= 20
+sum by (deployment_environment_name) (
+  increase(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri!~"/actuator.*"}[5m])
+) >= 20
 ```
 
 con umbral `> 1000` (**milisegundos**) y `for: 10m`. Es la misma expresión que
 `VetSoftwareHttpP99LatencyCritical` cambiando el cuantil y el umbral, y **el umbral
 también cae sobre un borde `le` publicado** (`1s` en la lista `slo` de
 `application.yml:167`) — verificado en la señal real.
+
+**La guarda se queda en 20, no sube a 100 como la del p99**: 20 = 1/(1−0,95) es el
+mínimo por debajo del cual el p95 deja de ser un percentil. Las dos guardas se derivan
+de la misma fórmula y salen distintas porque los cuantiles lo son.
 
 Severidad `warning` frente a `critical`: la diferencia no es la gravedad percibida sino
 la accionabilidad. Un p95 por encima de un segundo pide investigar dentro del horario
@@ -1134,18 +1221,20 @@ Los mismos ocho pasos de `VetSoftwareHttpP99LatencyCritical`, cambiando `0.99` p
 Idénticas a las del p99, en el mismo orden. La diferencia es la magnitud, no la
 naturaleza: la latencia raramente se degrada solo en la cola.
 
-Una causa propia del p95 y no del p99: **la sonda de salud dejó de dominar el volumen**.
-Si llega tráfico de usuario real de golpe (una demo, una prueba E2E), el p95 pasa de
-medir health checks a medir peticiones reales y sube sin que nada haya empeorado.
+Una causa propia del p95 y no del p99: **cambia la composición del tráfico de usuario**.
+Si llega de golpe una demo o una prueba E2E con endpoints más pesados que los habituales,
+el p95 sube sin que nada haya empeorado. (Hasta el 2026-08-19 esta causa era mucho más
+frecuente y de otra naturaleza: la sonda de salud estaba dentro del cuantil y cualquier
+tráfico real la desplazaba. Ya no aplica: `/actuator/**` está excluido.)
 
 **Qué hacer**
 
 *Mitigación inmediata* — normalmente ninguna. Un p95 warning que no viene acompañado
 del p99 critical se investiga, no se mitiga a golpes.
 
-*Arreglo de fondo* — los mismos que el p99: excluir `/actuator/**`, añadir `by (uri)`,
-timeouts en los clientes salientes, y `UnsynchronizedAppenderBase` en el appender de
-redacción.
+*Arreglo de fondo* — los mismos que el p99: añadir `by (uri)`, timeouts en los clientes
+salientes, y `UnsynchronizedAppenderBase` en el appender de redacción. (Excluir
+`/actuator/**` ya está hecho, 2026-08-19.)
 
 **Cuándo NO es un incidente**
 
@@ -1158,13 +1247,16 @@ redacción.
 
 **Defectos conocidos de la señal**
 
-- **Todos los del p99, sin excepción**: exemplars rotos (TEL-28), la sonda de salud
-  dentro del cuantil, la alerta sin `by (uri)`, el lock del `RedactingAppender`
-  (TEL-17), la guarda de 20 por encima de la línea base real de dev (10 por 5 min), y
-  las ~74 series por combinación de etiquetas.
-- **Un p95 sobre 20 muestras es la muestra número 19.** Menos absurdo que el p99, pero
-  igual de poco estadístico. Para que un p95 signifique algo hacen falta del orden de
-  200 muestras en la ventana.
+- **Los del p99 que siguen abiertos**: exemplars rotos (TEL-28), la alerta sin
+  `by (uri)`, el lock del `RedactingAppender` (TEL-17) y las ~74 series por combinación
+  de etiquetas. La sonda dentro del cuantil está **corregida** (2026-08-19).
+- **Un p95 sobre 20 muestras es la muestra número 19.** La guarda de 20 es el mínimo
+  matemático (1/(1−0,95)), no un objetivo: para que un p95 sea *estable* entre ventanas
+  hacen falta del orden de **200** muestras. Con 20–30, este p95 y el p99 son la misma
+  petición y llegarán juntos.
+- **Muda en dev, por la razón correcta.** Sin la sonda, dev tiene ~11 peticiones de
+  usuario al día. La calibración de la guarda es la de prod; ver el detalle en
+  `VetSoftwareHttp5xxRateHigh`.
 - **Este par de alertas comparte expresión con la cadena de SLO del repo, que evalúa en
   otro sitio.** Las reglas de burn rate multiventana viven en el stack Docker local
   contra `http_server_requests_seconds_*` y no evalúan en dev (TEL-01). Si alguien te
@@ -1563,33 +1655,51 @@ invisible, no.
 ### VetSoftwareProcessCpuHigh
 
 **Qué significa** — El proceso Java lleva diez minutos consumiendo más del 85 % de la
-CPU que tiene asignada. Si es real, todo lo demás va a ir lento.
+**cuota de CPU de la tarea**. Si es real, todo lo demás va a ir lento.
 
 **Qué la dispara**
 
 ```promql
-process_cpu_usage{job="mainvet/vetsoftware"}
+process_cpu_usage{job="mainvet/vetsoftware"} / (512 / 1024)
 ```
 
-con umbral `> 0.85` y `for: 10m`. Es un gauge de Micrometer (`ProcessorMetrics`, sobre
-`OperatingSystemMXBean.getProcessCpuLoad`): una fracción entre 0 y 1 **normalizada por
-el número de procesadores que ve la JVM**. Verificado en la señal real:
-`system_cpu_count = 1`.
+con umbral `> 0.85` y `for: 10m`. El gauge crudo es de Micrometer (`ProcessorMetrics`,
+sobre `OperatingSystemMXBean.getProcessCpuLoad`): una fracción entre 0 y 1 **normalizada
+por el número de procesadores que ve la JVM**, que aquí es `system_cpu_count = 1`
+(verificado en la señal real).
+
+**Por qué se divide** (corregido el 2026-08-19; antes se comparaba el gauge crudo contra
+0,85 y la alerta **no podía disparar nunca**): la cuota real de la tarea es 0,5 vCPU,
+pero Java redondea la cuota hacia arriba para `availableProcessors` —ceil(0,5) = 1— y
+normaliza sobre 1. El proceso no puede consumir más de 0,5 s de CPU por segundo de
+reloj, así que el techo del gauge crudo es **≈ 0,50**: pedirle 0,85 era pedirle que
+superara su propio máximo. Dividiendo por `512 / 1024` = 0,5 el valor pasa a ser
+**fracción de cuota**, `1,0` significa cuota agotada, y el 0,85 del umbral recupera su
+significado literal.
+
+**El `512` sale de `environments/dev/variables.tf` (`backend_cpu = 512`)** y está escrito
+como fracción, no como `0.5`, para que se vea de dónde viene. Es acoplamiento explícito
+entre el YAML de alertas y el de Terraform: **ninguna métrica publicada expone la cuota**,
+así que el divisor no puede derivarse solo. Si alguien cambia `backend_cpu`, hay que
+tocar la alerta. Y ojo: la fórmula `cpu/1024` solo vale mientras `backend_cpu` ≤ 1024;
+con 1024 o más la JVM ve `availableProcessors` ≥ 1, el gauge ya viene normalizado sobre
+la cuota completa y **el divisor pasa a ser 1**.
 
 Sin agregación: una instancia de alerta por serie. `for: 10m` supera de sobra los 180 s
 de `startPeriod`, así que un arranque normal —contexto de Spring, Liquibase, JIT— no la
 dispara.
 
-**Valores reales medidos en dev el 2026-08-19**: entre **0,0003 y 0,0098**, es decir
-entre el 0,03 % y el 1 %.
+**Valores reales medidos en dev el 2026-08-19**: el gauge crudo se mueve entre **0,0003 y
+0,0098** (0,06 %–2 % de la cuota) en régimen permanente. Al arrancar, las primeras
+muestras llegan a **1,0** —artefacto de la primera medición, no consumo real— pero duran
+poco: `count_over_time((process_cpu_usage > 0.42)[7d:1m])` da **1–3 minutos por versión
+en siete días**, muy por debajo del `for: 10m`. Por eso la expresión usa el gauge crudo y
+**no** un `avg_over_time`: se probó con `[10m]` y empeora, estira el pico a 5 minutos.
 
 **Primero mirar**
 
-> Antes de nada, lee el primer defecto conocido de más abajo. **Esta alerta no puede
-> disparar con la configuración actual de la tarea.** Si te ha llegado, lo primero que
-> hay que revisar es si alguien cambió `backend_cpu`.
-
-1. **La serie en 6 h**: `process_cpu_usage{job="mainvet/vetsoftware"}`.
+1. **La serie en 6 h**: `process_cpu_usage{job="mainvet/vetsoftware"}` — ojo, en crudo,
+   sin dividir: los valores que verás son la mitad de los de la alerta.
 2. **¿Es el proceso Java o el resto de la tarea?**
 
    ```promql
@@ -1651,8 +1761,12 @@ entre el 0,03 % y el 1 %.
 
 *Arreglo de fondo*
 
-- **Corregir el umbral** (ver defectos). Un umbral inalcanzable no es una alerta
-  conservadora, es una alerta apagada que aparenta cobertura.
+- ~~Corregir el umbral~~ → hecho el 2026-08-19 normalizando por la cuota. Lo que queda
+  abierto es el **acoplamiento manual** con `backend_cpu`: hoy nada impide que alguien
+  cambie la cuota en Terraform y deje la alerta descalibrada en silencio. La forma
+  robusta de cerrarlo es exportar la cuota como métrica (o pasarla en
+  `OTEL_RESOURCE_ATTRIBUTES` y publicarla como gauge) para que la alerta la lea en vez de
+  suponerla; mientras no exista, el comentario del YAML es toda la defensa que hay.
 - Si el CPU real de la tarea es el cuello de botella, subir `backend_cpu` es una decisión
   de infraestructura con su propio coste; documentarla antes de aplicarla.
 
@@ -1661,25 +1775,23 @@ entre el 0,03 % y el 1 %.
 - **Arranque y despliegue**: cubiertos por el `for: 10m` frente a los 180 s de
   `startPeriod`. Durante un despliegue rodante conviven dos tareas arrancando.
 - Un job por lotes que corre y termina en menos de diez minutos.
-- Con la línea base real (0,03 %–1 %) cualquier valor por encima del 10 % ya sería un
-  cambio de régimen que merece mirarse, mucho antes del 85 %.
+- Con la línea base real (0,06 %–2 % de la cuota) cualquier valor por encima del 20 % ya
+  sería un cambio de régimen que merece mirarse, mucho antes del 85 %.
 
 **Defectos conocidos de la señal**
 
-- **El umbral es inalcanzable: la alerta no puede disparar nunca.** Verificado por dos
-  vías independientes. (a) La tarea declara **512 unidades de CPU** en total
-  (`environments/dev/variables.tf`, `backend_cpu = 512`), es decir **0,5 vCPU** de cuota
-  cgroup para *toda* la tarea, de las que 64 son la reserva de `cloudflared`. (b) La JVM
-  reporta `system_cpu_count = 1` (medido en la señal real), así que `process_cpu_usage`
-  se normaliza sobre **una** CPU mientras el cgroup la limita a **media**. El techo
-  matemático del gauge es ≈ **0,5**, y el umbral está en **0,85**. Ni con el proceso
-  saturado al 100 % de su cuota llegaría. **Este es el hallazgo grave de esta sección**:
-  el arreglo correcto no es cosmético —bajar el umbral— sino decidir primero si la
-  alerta debe medir la cuota de la tarea (y entonces el umbral honesto es del orden de
-  `> 0.45`, o normalizar explícitamente por `backend_cpu/1024`), o si el indicador de
-  saturación de CPU debe ser el `CPUUtilization` de ECS, que ya tiene sus alarmas al
-  85 % y 95 % y **sí** mide contra la cuota real. Duplicar la señal en dos sistemas con
-  dos denominadores distintos es cómo se llega a esta contradicción.
+- ~~**El umbral es inalcanzable: la alerta no puede disparar nunca.**~~ → **CORREGIDO
+  2026-08-19.** Queda documentado porque explica por qué esta alerta no aparece **ni una
+  vez** en el historial anterior a esa fecha: no es que no hubiera picos de CPU, es que
+  el umbral estaba por encima del techo de la métrica. Lo medido entonces, por dos vías
+  independientes: (a) la tarea declara **512 unidades de CPU** en total
+  (`environments/dev/variables.tf`, `backend_cpu = 512`) = **0,5 vCPU** de cuota cgroup
+  para *toda* la tarea, de las que 64 son la reserva de `cloudflared`; (b) la JVM reporta
+  `system_cpu_count = 1`, así que `process_cpu_usage` se normaliza sobre **una** CPU
+  mientras el cgroup la limita a **media**. Techo del gauge ≈ 0,50 contra un umbral de
+  0,85. El arreglo aplicado normaliza por la cuota en vez de bajar el umbral a un número
+  suelto: así el 0,85 sigue significando «85 %» y quien lo lea no tiene que saberse la
+  cuota de memoria.
 - **`instance` y `service_instance_id` valen la constante `ecs-fargate-spot`**, no el ID
   de la tarea, contra `service.instance.id` de OTel semconv. Si dos tareas conviven, sus
   dos instancias de alerta son **indistinguibles** en el mensaje de Slack salvo por
@@ -1690,9 +1802,11 @@ entre el 0,03 % y el 1 %.
   mide la tarea completa. Son señales complementarias, no redundantes: usa las dos.
 - **Solapamiento no coordinado con las alarmas de ECS.** `backend-high-cpu` (85 %,
   2 × 5 min) y `backend-cpu-saturated` (95 %, 3 × 5 min) miden lo mismo desde otro
-  ángulo, con otro denominador y hacia otro canal (SNS → Slack por Amazon Q, no el motor
-  de Grafana). Un incidente de CPU real produce mensajes desde dos sistemas distintos y
-  ninguno menciona al otro.
+  ángulo y hacia otro canal (SNS → Slack por Amazon Q, no el motor de Grafana). Desde el
+  2026-08-19 al menos **los porcentajes son comparables**: esta alerta también mide
+  contra la cuota de la tarea, así que un 85 % aquí y un 85 % allí hablan de lo mismo
+  (antes no). Lo que sigue sin estar coordinado es la notificación: un incidente de CPU
+  real produce mensajes desde dos sistemas distintos y ninguno menciona al otro.
 - **Sin prueba automática** (TEL-30).
 
 ---
@@ -2007,7 +2121,7 @@ El tag `error` lo pone el `DefaultMeterObservationHandler` de Micrometer a parti
 2. **`REDIS_URL` apuntando a un endpoint que ya no existe.** ElastiCache Serverless no se puede parar, así que si alguien lo recreó para ahorrar coste, el endpoint cambió y **la rotura es silenciosa**: nada avisa de que la URL quedó obsoleta.
 3. **Límites de dev alcanzados**: 1 GB de almacenamiento o 1.000 ECPU/s. Se manifiesta como comandos rechazados (`cache-throttled`) antes que como errores del cliente.
 4. **Red**: security group, subred o NAT tras un cambio de infraestructura.
-5. **Timeout de comando** bajo latencia alta, en cuyo caso `VetSoftwareValkeyLatencyHigh` debería acompañar — pero hoy no puede, ver el apartado de defectos de esa alerta.
+5. **Timeout de comando** bajo latencia alta, en cuyo caso `VetSoftwareValkeyLatencyHigh` debería acompañar — **pero no podrá hasta que se despliegue el backend con los bordes del histograma**; comprueba el paso 1 de esa sección antes de deducir nada de su silencio.
 
 **Qué hacer** —
 
@@ -2037,34 +2151,63 @@ Fuera de esas dos franjas, considéralo un incidente real.
 
 **Qué significa** — Los comandos a Valkey están tardando más de lo aceptable. Valkey está en el camino caliente de la autorización: cada milisegundo suyo se le suma a cada petición del usuario.
 
-> **Lee primero el apartado de defectos de la señal: hoy esta alerta no puede dispararse nunca.**
+> **Empieza por el paso 1 de «Primero mirar».** La expresión está corregida, pero los bordes del
+> histograma llegan con una imagen del backend que a 2026-08-19 todavía no está desplegada:
+> mientras `lettuce_milliseconds_bucket` publique un solo `le`, esta alerta no puede dispararse.
 
-**Qué la dispara** — Sobre el papel:
+**Qué la dispara** —
 
 ```promql
 histogram_quantile(
   0.99,
-  sum by (le) (rate(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[5m]))
+  sum by (le) (
+    rate(lettuce_milliseconds_bucket{
+      job="mainvet/vetsoftware",
+      db_operation!~"CLIENT|HELLO|INFO|AUTH|COMMAND|SELECT|SUBSCRIBE|PING"
+    }[5m])
+  )
 )
 ```
 
 con umbral `> 50` (milisegundos, no segundos: en este stack los timers llegan en milisegundos vía OTLP) y `for: 10m`. Diez minutos porque una latencia alta de caché es tolerable en ráfaga y solo importa si se sostiene; es `warning` y no `critical` porque hay degradación, no fallo — los comandos siguen respondiendo.
 
-En la práctica, la expresión devuelve `NaN` de forma permanente. Detalle abajo.
+**Por qué el filtro de `db_operation`: son dos poblaciones, no una.** Medido en dev: `CLIENT` y
+`HELLO` tardan **60–77 ms** —son el saludo y la autenticación de una conexión nueva— frente a
+**1–5 ms** de `GET`, `EVAL` y `UNLINK`, que son el trabajo real. Un p99 sobre la mezcla no
+describe a ninguna de las dos poblaciones: en un sistema casi ocioso, donde cada ráfaga de uso
+reabre conexiones, el establecimiento domina la estadística y empuja el cuantil por encima de
+50 ms sin que nada esté roto. La alerta mide **el uso** de Valkey, no el coste de conectarse a él.
+
+**El matcher es negativo a propósito.** Una lista blanca de operaciones de datos
+(`db_operation=~"GET|EVAL|UNLINK|…"`) dejaría fuera **en silencio** cada comando nuevo que
+introduzca la aplicación, y la alerta se iría apagando sola sin que nadie lo notara. Excluyendo,
+lo desconocido entra y como mucho sobra ruido: falla del lado seguro. Si aparece otra operación
+de protocolo, se añade a la exclusión **con la medición delante**, no por parecido de nombre.
 
 **Primero mirar** —
 
-1. **Antes que nada, comprueba si la señal está viva.** Si esta alerta ha disparado de verdad, alguien ha arreglado el histograma y el resto de este apartado aplica. Si no ha disparado y aun así sospechas latencia, usa la consulta alternativa del punto 3.
+1. **Antes que nada, comprueba que los bordes están desplegados.**
 
    ```promql
-   count by (le) (lettuce_milliseconds_bucket{job="mainvet/vetsoftware"})
+   count by (le) (count_over_time(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[24h]))
    ```
 
-   Si el único `le` que devuelve es `+Inf`, el histograma sigue sin bordes y la alerta está muerta.
+   Esperado tras el despliegue: `1, 5, 25, 50, 100, +Inf`. **Si el único `le` que devuelve es `+Inf` —que es lo que devuelve hoy, verificado el 2026-08-19— la imagen con los bordes aún no está en dev**: `histogram_quantile` sigue dando `NaN`, esta alerta no puede haber disparado y lo que sospechas hay que medirlo a mano con el paso 4. Ventana de 24 h y no consulta instantánea: con el apagado nocturno de dev, lo instantáneo devuelve vacío y se confunde «no hay bordes» con «no hay backend».
 
-2. Estado de ElastiCache en CloudWatch: `cache-ecpu-high` (> 80 % de 1.000 ECPU/s) y `cache-storage-high` (> 80 % de 1 GB). Los límites de dev son deliberadamente bajos.
+2. **Desglosa por comando antes de creerte el p99.** Es el triaje que la agregación por `le` te oculta y lo primero que separa las dos poblaciones:
 
-3. Latencia real, con las series que **sí** existen hoy. Media por comando:
+   ```promql
+   histogram_quantile(
+     0.99,
+     sum by (le, db_operation) (rate(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[30m]))
+   )
+   ```
+
+   Si lo que sube es `GET`, `EVAL` o `UNLINK`, es Valkey o la red y sigue leyendo. Si lo que sube es `CLIENT`/`HELLO` —que la expresión de la alerta excluye, así que no fueron ellos quienes la dispararon— lo que tienes es reciclado de conexiones, no latencia de caché. **Esta consulta necesita los bordes del paso 1**; mientras no estén, su equivalente es el paso 4, que sí funciona hoy.
+
+3. Estado de ElastiCache en CloudWatch: `cache-ecpu-high` (> 80 % de 1.000 ECPU/s) y `cache-storage-high` (> 80 % de 1 GB). Los límites de dev son deliberadamente bajos.
+
+4. Latencia real, con las series que **sí** existen hoy sin depender de ningún bucket. Media por comando:
 
    ```promql
    sum by (db_operation) (rate(lettuce_milliseconds_sum{job="mainvet/vetsoftware"}[5m]))
@@ -2077,9 +2220,9 @@ En la práctica, la expresión devuelve `NaN` de forma permanente. Detalle abajo
    max by (db_operation) (lettuce_max_milliseconds{job="mainvet/vetsoftware"})
    ```
 
-   Referencia medida en dev para calibrar: `CLIENT` y `HELLO` llegan a 60–77 ms, mientras `GET`, `EVAL` y `UNLINK` se quedan en 1–5 ms. Es la diferencia entre establecer la conexión y usarla, y es exactamente lo que hay que separar antes de gritar «Valkey va lento».
+   Referencia medida en dev para calibrar: `CLIENT` y `HELLO` llegan a 60–77 ms, mientras `GET`, `EVAL` y `UNLINK` se quedan en 1–5 ms. Es la diferencia entre establecer la conexión y usarla, y es exactamente la separación que la expresión de la alerta ya hace por ti.
 
-4. ¿Se traduce en latencia de usuario? Si no, no es urgente:
+5. ¿Se traduce en latencia de usuario? Si no, no es urgente:
 
    ```promql
    histogram_quantile(0.99, sum by (le) (rate(http_server_requests_milliseconds_bucket{job="mainvet/vetsoftware"}[5m])))
@@ -2090,43 +2233,40 @@ En la práctica, la expresión devuelve `NaN` de forma permanente. Detalle abajo
 1. **ECPU cerca del límite de 1.000/s**: ElastiCache Serverless empieza a encolar y la latencia sube antes de que aparezca ningún rechazo.
 2. **Almacenamiento cerca de 1 GB con evictions**: cada eviction es trabajo extra y cada fallo de caché es un viaje a MySQL.
 3. **Valores grandes en caché**: la serialización JSON de un objeto voluminoso hace lento un `GET` sin que Valkey tenga la culpa.
-4. **Red o handshake**: si lo lento son solo `CLIENT`/`HELLO`, no es Valkey procesando, es el coste de abrir conexión — y en un sistema casi ocioso, donde cada petición reabre conexión, eso domina cualquier estadística.
+4. **Red o handshake**: si lo lento son solo `CLIENT`/`HELLO`, no es Valkey procesando, es el coste de abrir conexión. **Esa población ya no entra en la expresión**, así que si esta alerta ha disparado, el handshake no es la causa — pero sigue siendo lo primero que verás en el desglose crudo del paso 2, y confundirlo con el síntoma es el error clásico aquí.
 
 **Qué hacer** —
 
 *Mitigación inmediata.* Si hay presión de ECPU o de almacenamiento, subir `valkey_maximum_ecpu_per_second` o `valkey_maximum_data_storage_gb` — con la advertencia de coste: son las dos palancas que fijan la factura de un recurso que ya cuesta ~USD 6/mes de suelo con tráfico prácticamente nulo, y **ElastiCache Serverless no se puede parar**. Si la latencia viene de valores grandes, reducir el TTL o lo que se cachea (`RedisCacheConfiguration` con `entryTtl` de 5 minutos, `CacheConfig.java:27`).
 
-*Arreglo de fondo, y es lo primero que hay que hacer.* Publicar los bordes del histograma. Ver defectos.
+*Arreglo de fondo.* Ya está escrito y solo le falta llegar a la señal: los bordes del histograma en el `application.yml` del backend. Mientras el paso 1 devuelva un único `le`, la vigilancia real de la latencia de Valkey no existe y lo único que hay es mirar a mano el paso 4. Ver defectos.
 
 **Cuándo NO es un incidente** —
 
-- **Con tráfico casi nulo, un p99 es una anécdota.** 45 comandos en 7 días significa que el percentil 99 lo decide un solo comando, y con toda probabilidad ese comando es un `HELLO` o un `CLIENT` de apertura de conexión, que legítimamente tarda decenas de milisegundos. Si algún día esta alerta empieza a funcionar, **desglosa por `db_operation` antes de creerte nada**: `HELLO`/`CLIENT` por encima de 50 ms es normal en dev, `GET` por encima de 50 ms no lo es.
-- La expresión no lleva guarda de volumen, así que nada impide que un único comando lento marque el p99 de toda la ventana.
+- **Con tráfico casi nulo, un p99 es una anécdota.** 45 comandos en 7 días significa que el percentil 99 lo decide un solo comando. La causa más frecuente de ese comando único —el `HELLO`/`CLIENT` de apertura de conexión, que legítimamente tarda decenas de milisegundos— **ya está fuera de la expresión**, pero el problema estadístico de fondo sigue: un solo `GET` lento marca el p99 de toda la ventana. **Desglosa por `db_operation` (paso 2) antes de creerte nada**: `GET` por encima de 50 ms sí es anómalo, y con este filtro es lo único que puede haber disparado.
+- La expresión no lleva guarda de volumen, así que nada impide que ese único comando lento sea toda la alerta.
 
 **Defectos conocidos de la señal** —
 
-- **La alerta no puede dispararse. Verificado contra el stack.** `lettuce_milliseconds_bucket` publica un solo bucket, `le="+Inf"`, en los últimos 30 días. `histogram_quantile` necesita al menos dos bordes para interpolar; con uno devuelve `NaN`, y `NaN > 50` es falso siempre. Comprobado ejecutando la expresión exacta de la regla sobre 48 horas: **todos los puntos son `NaN`**. Con `noDataState: OK`, la regla vive en Normal de forma permanente y da una falsa sensación de que la latencia de Valkey está vigilada.
+- **~~La alerta no puede dispararse.~~ → CORREGIDO el 2026-08-19, en dos mitades, y la segunda todavía no ha llegado a la señal.** El defecto era este: `lettuce_milliseconds_bucket` publicaba un solo bucket, `le="+Inf"`. `histogram_quantile` necesita al menos dos bordes para interpolar; con uno devuelve `NaN`, y `NaN > 50` es falso siempre. Con `noDataState: OK` la regla vivía en Normal de forma permanente y daba una falsa sensación de que la latencia de Valkey estaba vigilada. Es el caso de libro de un umbral que no cae sobre ningún borde `le` publicado, en su versión extrema: **el indicador desaparece en silencio en vez de fallar de forma visible**. Publicar el borde va antes que el umbral.
 
-  La causa está en `VetSoftware/src/main/resources/application.yml:163-169`: `management.metrics.distribution.percentiles-histogram` solo está habilitado para `http.server.requests` y `vetsoftware.business.dian.transmission.duration`. El timer `lettuce` no tiene histograma, así que no hay bordes que publicar. (Contraste: `http_server_requests_milliseconds_bucket` sí tiene ~70 valores de `le`.)
+  *Lo que se hizo*, en `VetSoftware/src/main/resources/application.yml`, clave `management.metrics.distribution.slo`:
 
-  Es un caso de libro de umbral que no cae sobre ningún borde `le` publicado, en su versión extrema: **el SLI desaparece en silencio en vez de fallar de forma visible**. Publicar el borde va antes que el umbral.
+  ```yaml
+  lettuce: 1ms,5ms,25ms,50ms,100ms
+  ```
 
-  Dos arreglos, y el orden importa:
+  **Cinco bordes SLO y NO `percentiles-histogram: true`**, a propósito y con la medida delante. La opción booleana publica el histograma completo: medido en Grafana Cloud, `http_server_requests_milliseconds_bucket` tiene **74** valores de `le`. Activarla para `lettuce` serían del orden de **530 series** entre `lettuce` y `lettuce.active`, frente a las ~**50** que cuestan estos cinco bordes — y con ~45 comandos cada 7 días, esa resolución extra no responde ninguna pregunta que los cinco bordes no respondan. El plan admite 15.000 series activas y el uso medido ronda 1.150; por qué ese margen importa lo explica `VetSoftwareIngestionNearLimit`: al 100 % Grafana Cloud rechaza la ingesta y se pierde **toda** la telemetría, en silencio.
 
-  1. **Barato y sin series nuevas, para tener vigilancia hoy mismo**: cambiar la expresión de la regla a `max(lettuce_max_milliseconds{job="mainvet/vetsoftware"})` o a la media `rate(sum)/rate(count)`, ambas sobre series que ya existen. No es un p99 y hay que decirlo en la descripción de la alerta, pero mide algo real en vez de nada.
-  2. **Correcto**: declarar bordes explícitos en el backend, con el umbral de la alerta como uno de ellos —
+  *Por qué exactamente 100 ms, que es la parte no obvia y la que evita repetir el error.* No es holgura decorativa: **`histogram_quantile` devuelve el borde finito más alto cuando el cuantil cae en el bucket `+Inf`**. Si 50 ms fuese el techo, todo lo más lento caería en `+Inf`, el p99 valdría **siempre 50 exactos** y `> 50` seguiría siendo falso para siempre. Sería cambiar una alerta muerta por otra alerta muerta — y la segunda es peor que la primera, porque los buckets parecerían sanos y nadie volvería a sospechar de la señal. Los demás bordes: **50 ms** es el umbral de la alerta (un umbral que no coincide con un borde publicado obliga a interpolar y el indicador deja de ser una cuenta de eventos); **1 ms y 5 ms** dan resolución a `GET`/`EVAL`/`UNLINK`, medidos en 1–5 ms, cuyo p99 si no se interpolaría dentro de un bucket enorme; **25 ms** es el escalón entre esa población y la del saludo de conexión (`CLIENT`/`HELLO`, 60–77 ms medidos).
 
-     ```yaml
-     management:
-       metrics:
-         distribution:
-           slo:
-             lettuce: 1ms,5ms,10ms,25ms,50ms,100ms,250ms,1s
-     ```
+  *Efecto colateral aceptado*: `PropertiesMeterFilter` resuelve el nombre por jerarquía, así que los bordes se aplican también al `LongTaskTimer` `lettuce.active` (~25 series que nadie consulta). Evitarlo exigiría un `MeterFilter` en Java con su bean y su test para ahorrar 25 series de 15.000.
 
-     Coste en cardinalidad: 9 valores de `le` × 6 valores observados de `db_operation` ≈ 54 series por instancia, frente a las 6 de hoy (**+48**). Usar `slo` y no `percentiles-histogram: true` es deliberado: la opción booleana publica del orden de 70 bucket por combinación (≈ 420 series) sin garantizar que ninguno caiga en 50 ms, que es justo el número que importa. **Este cambio toca el backend, no este repo**: coordinarlo con quien sea dueño de `application.yml`.
+  *Lo que falta*: **desplegar una imagen del backend que lleve ese cambio.** A 2026-08-19 no está en `develop` del backend, y `count by (le) (count_over_time(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[24h]))` devuelve solo `+Inf`. Hasta que devuelva `1, 5, 25, 50, 100, +Inf`, **esta alerta sigue sin poder dispararse** por muy corregida que esté su expresión. Comprueba eso (paso 1) y no la tabla de cabecera.
 
-- Vale para las dos alertas de Valkey y para las tres de base de datos: la anotación `runbook` apunta a `docs/ALERTAMIENTO_OPERATIVO.md#<ancla>` y este documento debe publicarse con esas anclas, o el enlace del mensaje de Slack no lleva a ningún sitio.
+- **La cardinalidad de `lettuce_*` sigue sin acotar, y con bordes cuesta seis veces más.** Mismo defecto que en `VetSoftwareValkeyCommandsFailing` (TEL-18, punto d): el `MeterFilter` del backend solo cubre el prefijo `vetsoftware.business.`, así que `db_operation` toma el nombre de cualquier comando Redis y `error` el de cualquier clase de excepción. Hasta ahora, un valor nuevo de `db_operation` añadía 1 serie de bucket; con los cinco bordes añade **6**. En absoluto sigue siendo pequeño, pero el techo declarado no existe y el arreglo —acotar a un enum en un `MeterFilter` que cubra también `lettuce`— no ha cambiado.
+
+- Vale para las dos alertas de Valkey y para las tres de base de datos: la anotación `runbook` apunta a este documento por **URL absoluta** de GitHub con `#<ancla>`, y el ancla es el encabezado de la sección en minúsculas. **Renombrar un encabezado rompe el enlace del mensaje de Slack** sin que nada falle ni avise: el clic simplemente aterriza en ninguna parte.
 
 ---
 
@@ -2146,26 +2286,48 @@ grupo `vetsoftware-scheduled-jobs`, evaluación cada 1 m, y ambas con `for: 30m`
 
 ```promql
 sum by (job_name) (
-  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[30m])
+  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[30m])
 ) > 0
 ```
 
-Cualquier ejecución con resultado `failure` o `error` en la última media hora. El umbral es
-`> 0` porque el contador con `job_outcome=failure` **solo existe si alguna vez hubo un fallo**:
-no hay línea base que superar.
+Cualquier ejecución con resultado `failure`, `partial_failure` o `error` en la última media hora.
+El umbral es `> 0` porque el contador de fallos **solo existe si alguna vez hubo un fallo**: no
+hay línea base que superar.
 
-*Crítica* (`uid: vetsw-scheduled-job-failing-critical`, `severity=critical`): lo mismo sobre
-`[2h]`, **menos** los `job_name` que tengan algún `success` en esas 2 h:
+*Crítica* (`uid: vetsw-scheduled-job-failing-critical`, `severity=critical`): al menos **dos**
+ejecuciones fallidas en `[2h]`, **menos** los `job_name` que en esas 2 h hayan procesado bien
+algún elemento (`success` o `partial_failure`):
 
 ```promql
-sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[2h]))
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|error"}[2h])) >= 2)
 unless
-(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome="success"}[2h])) > 0)
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"success|partial_failure"}[2h])) > 0)
 ```
 
 El `unless` con `> 0` del lado de los éxitos está escrito así a propósito: un `== 0` clásico no
 casaría si la serie de éxitos **no existe**, y la alerta moriría en silencio justo en el fallo
 total que debe cubrir.
+
+**Las tres decisiones de esta expresión, porque las tres son contraintuitivas** (corregido el
+19-08-2026; el detalle y las mediciones están en «Defectos conocidos de la señal»):
+
+- **`no_work` no está en el lado excluido, y meterlo sería un error.** Parece el arreglo natural
+  del falso positivo, pero `dian.pending.reconciliation` alterna `no_work` con `failure` en la
+  misma ventana: excluir por `no_work` deja la alerta **muda** durante un fallo total real.
+  `no_work` es neutro — ni prueba salud ni prueba fallo — y por eso no entra en ningún lado.
+- **`partial_failure` está en el lado excluido de la crítica y en el lado de fallos de la
+  advertencia.** No es incoherente: significa `0 < failures < attempted`, o sea que hubo éxitos.
+  Contradice el «sin ningún éxito» de la crítica, pero es exactamente el fallo parcial que la
+  advertencia debe ver.
+- **El `>= 2` es una guarda de repetición, no de volumen.** Separa «falló un ciclo suelto» de
+  «lleva horas sin acertar». No puede subirse a 3: `security.tokens.cleanup` solo ejecuta 2,02
+  veces por cada 2 h, así que con `>= 3` un cleanup roto al 100 % nunca alcanzaría el umbral y la
+  regla quedaría **ciega** para él.
+
+**Solapamiento con la advertencia**: en un fallo total casan las dos, y es deliberado. La
+notification policy agrupa por `(alertname, severity)` y enruta cada `severity` a un receptor
+distinto, así que llega una notificación al canal de horario laboral y otra al de guardia. Es la
+escalada idiomática, no un duplicado.
 
 **El `for: 30m` combinado con la ventana `[30m]` tiene una consecuencia que conviene saber**: un
 único fallo aislado mantiene la expresión en `> 0` durante exactamente 30 minutos y luego sale de
@@ -2240,9 +2402,12 @@ sola vez en la transición a agotado, no en cada pasada.
 
 **Cuándo NO es un incidente**
 
-- **Advertencia sola, sin la crítica, y con `success` presente en la misma ventana**: es fallo
-  parcial. Un lote donde algunos elementos fallan y otros pasan. Merece revisión en horario
-  hábil, no de madrugada.
+- **Advertencia sola, sin la crítica, y con `success` o `partial_failure` en la misma ventana**:
+  es fallo parcial. Un lote donde algunos elementos fallan y otros pasan. Merece revisión en
+  horario hábil, no de madrugada. Es exactamente lo que la crítica excluye por diseño.
+- **Advertencia sola por un único ciclo fallido**: desde el 19-08-2026 la crítica exige dos
+  ejecuciones fallidas, así que un fallo suelto solo produce advertencia. Si el siguiente ciclo
+  sale bien, se resolvió solo y no hay nada que hacer.
 - Justo después de un despliegue: el primer ciclo tras arrancar puede fallar por el lease del
   ciclo anterior. Si el siguiente ciclo sale `success`, se resolvió solo.
 - En dev, cualquier disparo posterior a las 20:00 de Bogotá es residuo de la ventana anterior: el
@@ -2250,19 +2415,50 @@ sola vez en la transición a agotado, no en cada pasada.
 
 **Defectos conocidos de la señal**
 
-- **`no_work` no cuenta como éxito en la regla crítica, y eso genera falsos críticos.** El
-  `unless` excluye únicamente `job_outcome="success"`. Un job cuyo estado normal sea «no había
-  trabajo» nunca produce `success`: medido en el stack, `security.tokens.cleanup` lleva
-  **21 ejecuciones `no_work` y 0 `success` en 7 días**. Un solo fallo suyo cumple al instante
-  «ningún éxito en 2 horas» y notifica como crítico un job que está sano el 99 % del tiempo. El
-  arreglo es `job_outcome=~"success|no_work"` en el lado excluido.
+- **~~`no_work` no cuenta como éxito en la regla crítica~~ → CORREGIDO el 19-08-2026, pero NO
+  como estaba apuntado aquí.** Conviene leer entero el porqué, porque el arreglo que parecía
+  obvio rompía la alerta.
+
+  *El defecto*: el `unless` excluía únicamente `job_outcome="success"`. Un job cuyo estado normal
+  sea «no había trabajo» nunca produce `success` — `security.tokens.cleanup` ejecuta cada hora y
+  todas sus ejecuciones son `no_work` —, así que «ningún éxito en 2 horas» era su estado
+  permanente y **un solo fallo aislado suyo disparaba un crítico** sobre un job sano.
+
+  *El arreglo que estaba apuntado aquí y que NO debe aplicarse*: meter `no_work` en el lado
+  excluido (`job_outcome=~"success|no_work"`). Se probó contra el stack a las 00:47:40Z del
+  19-08-2026, con la reconciliación DIAN cayendo al 100 %:
+
+  | Expresión | `dian.pending.reconciliation` |
+  | --- | --- |
+  | Anterior (`unless success > 0`) | **6,05** — dispara |
+  | Con `no_work` en el lado excluido | **vacío — MUDA** |
+  | Actual (`>= 2 unless success\|partial_failure > 0`) | **6,05** — dispara |
+
+  La razón: `dian.pending.reconciliation` corre cada 10 min y produce ~6 `failure` **y** ~6
+  `no_work` por cada 2 h, porque muchos ciclos no encuentran documentos pendientes. `no_work`
+  **convive con el fallo total**: no es prueba de salud. Excluir por él habría silenciado el
+  incidente real que la regla existe para cubrir.
+
+  *El arreglo real*, dos cambios independientes: (1) el lado excluido pasa a
+  `success|partial_failure` —los únicos resultados que prueban que algún elemento se procesó
+  bien— y `no_work` queda fuera de ambos lados; (2) una guarda de repetición `>= 2` en el lado de
+  los fallos, que es lo que de verdad mata el falso positivo, porque el problema de fondo no era
+  `no_work` sino que la expresión no distinguía un ciclo fallido suelto de un fallo sostenido.
+  El `2` está medido: un fallo aislado extrapola a ~1,0-1,1 y queda por debajo; el job más lento
+  (`security.tokens.cleanup`, 2,02 ejecuciones/2 h) sigue alcanzando el umbral si se rompe del
+  todo. Contra-prueba inyectando +1 fallo simulado a los tres jobs: solo sobrevive
+  `dian.pending.reconciliation` (7,05); los otros dos caen en 1 y quedan filtrados.
 - **Hay un `@Scheduled` que ninguna de las dos reglas ve.** En el stack existe una serie de
   `tasks_scheduled_execution_milliseconds_count` **sin `job_name` ni `job_outcome`** (≈1.954
   ejecuciones en 7 días): es `BusinessGaugeMetrics.refresh`, que no está envuelto en
   `ScheduledJobTelemetry` y además **se traga la excepción en su propio `catch`**, así que la
   observación del scheduler nunca la ve (TEL-15). Si el snapshot de métricas de negocio se
   congela, esta alerta no dirá nada; el sustituto parcial es
-  `vetsoftware_business_metrics_snapshot_age_seconds`.
+  `vetsoftware_business_metrics_snapshot_age_seconds`. Desde el 19-08-2026 esa serie queda
+  **excluida explícitamente** con `job_name!=""` en las dos reglas: no casaba ya (no lleva
+  `job_outcome`), pero el matcher garantiza que un cambio futuro en esa etiqueta no la cuele en
+  el `sum by (job_name)` como `job_name=""` y produzca un aviso con el nombre del job en blanco.
+  Excluirla **no** tapa nada: nunca estuvo cubierta.
 - **El backlog fiscal muerto reporta «no hay trabajo» (TEL-06).** En `ContingencyRetryJob`, los
   documentos agotados que requieren reemisión manual se saltan **sin contar como intentados**: si
   todo el lote está agotado, `Outcome.from(0,0)` devuelve `NO_WORK`. Facturas fiscales muertas
@@ -2557,8 +2753,10 @@ grupo `vetsoftware-security-token-retention`, `uid: vetsw-security-token-table-g
 
 ```promql
 vetsoftware_security_tokens_rows{job="mainvet/vetsoftware"}
-- on(job, instance) group_left()
-vetsoftware_security_tokens_growth_threshold{job="mainvet/vetsoftware"}
+- on(job, instance, service_version) group_left()
+max by (job, instance, service_version) (
+  vetsoftware_security_tokens_growth_threshold{job="mainvet/vetsoftware"}
+)
 > 0
 ```
 
@@ -2568,6 +2766,14 @@ cuando la tabla está sana en vez de alternar entre *Alerting* y *NoData*, y hac
 la notificación sea el **exceso de filas** sobre el umbral, que es información útil. El
 `group_left()` es obligatorio: el lado izquierdo tiene una serie por `token_type` y el umbral no
 lleva esa etiqueta.
+
+Las claves del join se corrigieron el **2026-08-19** (antes eran solo `(job, instance)`, ver
+defectos). El arreglo tiene dos capas a propósito: **`service_version` en el `on(...)`** para que
+cada versión se compare contra *su* umbral —correcto si una versión futura cambia
+`growthWarningThreshold`—, y **`max by (...)` en el lado derecho** para garantizar cardinalidad 1
+pase lo que pase con las etiquetas. La segunda capa no es redundante: sin ella, dos tareas de la
+**misma** versión (`desired_count > 1`, o un reintento de despliegue sobre la misma etiqueta)
+reproducirían el fallo por otra vía.
 
 Los dos gauges los publica `TokenCleanupMetrics`
 (`VetSoftware/src/main/java/com/vetsoftware/app/infrastructure/token/TokenCleanupMetrics.java`);
@@ -2639,33 +2845,60 @@ los tokens — un cliente sin reutilizar el refresh, o un endpoint de registro s
 
 - Justo después de una carga de datos o de una prueba de registro masivo. La purga corre cada hora
   y aplica la ventana de retención: espera un ciclo completo antes de intervenir.
-- En dev el umbral es 50.000 y las filas reales están entre 0 y 2. Si esta alerta suena en dev,
-  sospecha antes del defecto del `join` (abajo) que de un crecimiento real.
+- En dev el umbral es 50.000 y las filas reales están entre 0 y 2 (medido el 2026-08-19). Un
+  crecimiento real en dev es prácticamente imposible: si esta alerta suena en dev, **mira primero
+  si llegó en estado `Error`** — el join ya no puede duplicar series, pero un error de evaluación
+  sigue notificándose con el texto de esta regla. La anotación `Error` de la notificación lo
+  distingue en un vistazo.
 
 **Defectos conocidos de la señal**
 
-- **El `join` se rompe en cada despliegue, y lo he verificado en vivo.** Las claves del join son
-  `(job, instance)`, pero `instance` es la constante `ecs-fargate-spot` — no identifica la tarea.
-  Lo que distingue a dos tareas simultáneas es `service_version`. Medido el 19-08-2026:
+- ~~**El `join` se rompe en cada despliegue.**~~ → **CORREGIDO 2026-08-19.** Se documenta porque
+  explica cualquier hueco de evaluación en el historial anterior a esa fecha. Las claves del join
+  eran `(job, instance)`, pero `instance` es la constante `ecs-fargate-spot` — no identifica la
+  tarea. Medido:
 
   ```promql
   max_over_time((count by (job, instance) (vetsoftware_security_tokens_growth_threshold))[7d:1m])  →  2
   ```
 
-  Es decir: durante los despliegues rodantes **hay dos series de umbral con el mismo `(job, instance)`**.
-  Un `group_left()` con dos candidatos a la derecha falla la evaluación
-  («found duplicate series for the match group»), y con `execErrState: Error` eso genera una
-  alerta de error de datasource que **hereda `severity=critical` y va a Slack**. Consecuencia: en
-  cada despliegue esta regla puede dejar de evaluar y emitir un crítico que no habla de tokens.
-  Arreglo: incluir `service_version` (o `service_instance_id`) en las claves del `on(...)`, o
-  agregar el lado derecho con `max by (job, instance) (...)`. Es el mismo defecto de clase que
-  TEL-13 —que la conversión Grafana-managed sí resolvió para `token_type`— sobreviviendo por otra
-  etiqueta.
-- **La descripción promete algo que el `for` no cumple.** El texto dice «sigue por encima del
-  umbral **después de varias ejecuciones de la purga**», pero `for: 30m` madura **dentro de un
-  solo ciclo de purga** (intervalo por defecto `PT1H`). O el `for` sube a `2h`, o la descripción
-  se corrige. Tal como está, quien la lea creerá que la purga ya se intentó varias veces cuando
-  puede no haberse intentado ninguna desde que la tabla creció.
+  Durante los despliegues rodantes había **dos series de umbral con el mismo `(job, instance)`**, y
+  un `group_left()` con dos candidatos a la derecha aborta la evaluación. Reproducido en vivo contra
+  `grafanacloud-prom`, error literal: *«found duplicate series for the match group
+  {instance="ecs-fargate-spot", job="mainvet/vetsoftware"} on the right side of the operation at
+  timestamp 2026-08-18T04:50:03.184Z: {… service_version="1.3.4-dev.2"} and
+  {… service_version="1.3.7-dev.1"}»*. Con `execErrState: Error`, esa evaluación fallida notificaba
+  a Slack un mensaje que llevaba el `summary` de esta regla y por tanto **hablaba de tokens cuando
+  lo que había pasado es que la consulta no compiló**. Es el mismo defecto de clase que TEL-13 —que
+  la conversión Grafana-managed sí resolvió para `token_type`— sobreviviendo por otra etiqueta.
+  Verificado tras el arreglo sobre el mismo rango de 7 días donde la expresión anterior abortaba:
+  devuelve 3 series (una por `token_type`) y 6 durante los solapes de despliegue, **sin error**.
+- **`execErrState: Error` SE MANTIENE, y es una decisión, no un olvido.** Lo que hacía daño no era
+  notificar los errores de evaluación: era notificarlos **en cada despliegue** con un texto que
+  hablaba de tokens. Corregido el join, un error aquí solo puede significar que cambió el esquema
+  de etiquetas de los dos gauges — raro, real y accionable. Las alternativas se descartaron por lo
+  mismo: `OK` convierte una regla rota en una regla que **parece sana mientras no mide nada**
+  (pérdida silenciosa, el peor resultado), y `KeepLast` hereda esa ceguera presentando además un
+  estado viejo como si fuera fresco. Mitigación añadida: la `description` ahora avisa
+  explícitamente de que **un estado de Error no habla de tokens** y remite a la anotación `Error`.
+- **Falta la meta-alerta de fallos de evaluación.** La forma correcta de vigilar «mis reglas no
+  evalúan» no es rule por rule: es **una sola** alerta sobre
+  `grafana_alerting_rule_evaluation_failures_total`. No existe en el repo (verificado). Su sitio es
+  `observability/grafana-managed/vetsoftware-cloud-additions-managed.yml`. Con ella puesta, el
+  `execErrState` de todas las reglas podría revisarse en bloque; sin ella, ese `Error` es la única
+  señal de que una regla dejó de funcionar.
+- **CAUSA RAÍZ, no arreglada:** `service.instance.id` está fijado al literal `ecs-fargate-spot`, y
+  las semantic conventions de OpenTelemetry exigen que sea **único por instancia** dentro de un
+  mismo `service.namespace`/`service.name`. Mientras siga siendo una constante, ninguna alerta de
+  este stack puede distinguir dos tareas y toda métrica por tarea se solapa en silencio. Corregirlo
+  es del backend/colector (`OTEL_RESOURCE_ATTRIBUTES` con el ARN o el UUID de la tarea), no de este
+  fichero ni del YAML de alertas.
+- ~~**La descripción promete algo que el `for` no cumple.**~~ → **CORREGIDO 2026-08-19.** Decía
+  «sigue por encima del umbral **después de varias ejecuciones de la purga**», pero `for: 30m`
+  madura **dentro de un solo ciclo de purga** (intervalo por defecto `PT1H`). Se corrigió el texto
+  en vez de subir el `for` a `2h`: el `for` es el amortiguador del pico entre purgas y alargarlo
+  retrasa la detección de una fuga real sin comprar nada, porque la pregunta «¿la purga corre?» la
+  responde la métrica del job — el paso 2 de *Primero mirar*, no el `for`.
 - **Versión heredada rota en el stack local (TEL-13).** `VetSoftware/docker/prometheus-platform-alerts.yml:363-367`
   sigue teniendo `> on(job, instance)` **sin** `group_left`, que es un match many-to-one que falla
   en cada ciclo: allí la alerta nunca evalúa y `VetSoftwarePrometheusRuleEvaluationFailures`
@@ -2924,11 +3157,13 @@ deben estar cableadas en prod, no solo en dev.
 
 **Defectos conocidos de la señal**
 
-- **El enlace del runbook apunta a un ancla que no existe.** La anotación `runbook` de esta regla
-  dice `docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackenddown`, que es el nombre de la alerta
-  *anterior* (la del mundo *scrape*, cuando `up` existía). El ancla correcto es
-  `#vetsoftwarebackendtelemetryabsent`. Quien haga clic desde Slack en plena caída de producción
-  **aterriza en ninguna parte**. Es un arreglo de una línea en la anotación.
+- **~~El enlace del runbook apunta a un ancla que no existe.~~ → CORREGIDO.** La anotación decía
+  `#vetsoftwarebackenddown`, el nombre de la alerta *anterior* (la del mundo *scrape*, cuando `up`
+  existía), y quien hiciera clic desde Slack en plena caída de producción aterrizaba en ninguna
+  parte. Hoy apunta a `#vetsoftwarebackendtelemetryabsent` por URL absoluta. Verificado el
+  2026-08-19 cruzando las 26 anotaciones `runbook` contra los encabezados de este documento: **no
+  queda ni un ancla huérfana** (dos anclas las comparten dos reglas cada una —las variantes
+  `warning`/`critical` de `ScheduledJobFailing` y `EmailSendFailing`— y es correcto).
 - **No he podido validar esta regla contra prod.** El único stack con tráfico es dev. Lo que sí
   verifiqué (19-08-2026) es el **mecanismo**: `target_info` y `jvm_threads_live` existen, comparten
   `job="mainvet/vetsoftware"`, llevan `service_version` y `deployment_environment_name=dev`, y
@@ -2949,3 +3184,53 @@ deben estar cableadas en prod, no solo en dev.
   exemplars **sí llegan** pero el datasource espera `traceID` y llega `trace_id`, así que un p99
   alto no te da ninguna traza de ejemplo con un clic. El segundo requiere ticket a Soporte de
   Grafana Cloud; lo ejecuta el dueño de la cuenta, no quien atiende la alerta.
+
+---
+
+## 5. Qué NO se vigila aquí, y por decisión
+
+No todo hueco de cobertura es un olvido. Este apartado existe para que una decisión ya tomada no
+haya que volver a tomarla cada seis meses, y para que quien la reabra lo haga con el expediente
+completo delante.
+
+### Las cuatro alertas de negocio retiradas
+
+`VetSoftwareDianContingencyRateHigh`, `VetSoftwareDianBacklogOlderThanOneHour`,
+`VetSoftwareInventoryInsufficientStockRateHigh` y `VetSoftwareBusinessMetricsSnapshotStale`
+existen en el stack Docker local (`VetSoftware/docker/prometheus-business-alerts.yml`) y **no
+tienen gemelo en Grafana Cloud**. No es un fallo de la portabilidad: sus métricas existen en
+cloud y las reglas llegaron a escribirse. **El dueño del producto decidió no vigilarlas** —«no
+me interesan»— y se retiraron enteras: no queda fichero ni namespace `vetsoftware-business`.
+
+**Qué queda sin vigilancia dedicada por esa decisión.** Se dice sin adornos, porque dos de las
+cuatro son dominio de dinero y de cumplimiento fiscal:
+
+- **Contingencia de facturación electrónica**: la tasa de documentos emitidos en contingencia no
+  tiene alerta propia.
+- **Backlog de la DIAN**: que un documento lleve más de una hora pendiente de transmitir no
+  dispara nada por sí mismo.
+- **Stock insuficiente** en los movimientos de inventario.
+- **Frescura del snapshot de métricas de negocio**: si el job que las refresca se para, los
+  paneles de negocio se congelan sin avisar a nadie.
+
+**Qué sigue cubriendo ese dominio**, que es lo que hace defendible la decisión: el SLI
+`dian-transmission` de la cadena SLO vigila la facturación electrónica por **burn rate**
+(`VetSoftwareSloFastBurn` y sus tres hermanas), y `VetSoftwareScheduledJobFailing` cubre los jobs
+de reconciliación y de contingencia por el lado de la ejecución. La cobertura de DIAN baja; no
+desaparece.
+
+**El matiz temporal, que es lo que hay que saber si alguien reabre esto.** La decisión se tomó
+**antes** de saber que la transmisión a la DIAN estaba fallando al **100 %** en dev (documento
+atascado, fallo determinista del proveedor). Ese fallo lo destapó el **burn rate del SLO**, no
+una alerta de negocio: la vía de cobertura que quedó en pie encontró un incidente real. Queda
+escrito como dato del expediente, no como argumento en ninguna dirección — quien quiera revertir
+la retirada tiene que decir qué pregunta concreta no responde el burn rate, y quien quiera
+mantenerla tiene un caso a favor documentado.
+
+**Cómo se revierte, si algún día se decide.** Es mecánico y no hay que reinventarlo: las reglas
+siguen en el historial de git de `observability/mimir-rules/` y en la versión local
+(`VetSoftware/docker/prometheus-business-alerts.yml`), y hay que reponerlas en `RULE_FILES` de
+los dos workflows de sync. Antes de hacerlo, releer «Qué NO se portó y por qué» del
+`README.md` de `observability/mimir-rules/`: la regla de la casa es comprobar primero si el
+hallazgo ya está cubierto desde el lado AWS o desde la cadena SLO, y duplicar cobertura tiene su
+propio coste.
