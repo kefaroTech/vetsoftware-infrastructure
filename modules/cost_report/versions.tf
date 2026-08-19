@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.56.0"
+      version = "~> 6.60.0"
     }
 
     # Empaqueta el codigo de la Lambda en el propio plan. La alternativa era
