@@ -34,7 +34,9 @@
 #   ruler -que corre antes- ya quedo aplicado.
 # - Un marcador ${...} sin resolver en el contenido -> exit 1 SIEMPRE: enviar
 #   el literal a la API es peor que fallar, porque queda guardado y parece
-#   configurado (un correo "${VETSOFTWARE_ALERT_EMAIL}" no notifica a nadie).
+#   configurado (un contact point con la cadena
+#   "${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}" de URL no publica en ningun
+#   canal).
 # - Cualquier otro fallo -> exit 1.
 #
 # A diferencia de `mimirtool rules sync`, esto es un UPSERT: crea y actualiza,
@@ -224,8 +226,8 @@ foreach ($file in $Files) {
         exit 1
     }
     # Sustitucion de marcadores ${NOMBRE} por variables de entorno ANTES de
-    # convertir a JSON (p.ej. ${VETSOFTWARE_ALERT_EMAIL} en los contact
-    # points). Solo la forma con llaves: un $ suelto no se toca, que es lo que
+    # convertir a JSON (p.ej. ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL} en los
+    # contact points). Solo la forma con llaves: un $ suelto no se toca, que es lo que
     # protege los $labels del templating de Grafana en las annotations. Un
     # marcador cuya variable no existe se deja tal cual y lo caza el control
     # de abajo.
@@ -246,11 +248,12 @@ foreach ($file in $Files) {
 
     # El control de no-resueltos se hace sobre el JSON y no sobre el texto
     # crudo a proposito: los marcadores en lineas comentadas del YAML (como el
-    # webhook de Slack aun sin activar) desaparecen al convertir y no deben
-    # exigir su variable todavia. Un marcador que sobreviva hasta aqui iria
-    # LITERAL a la API: se guardaria y pareceria configurado (un correo
-    # "${VETSOFTWARE_ALERT_EMAIL}" no notifica a nadie). Ese fallo silencioso
-    # es peor que un rojo, asi que es error SIEMPRE, incluso en avisa-y-pasa.
+    # respaldo por correo, ${VETSOFTWARE_ALERT_EMAIL}, hoy desactivado)
+    # desaparecen al convertir y no deben exigir su variable todavia. Un
+    # marcador que sobreviva hasta aqui iria LITERAL a la API: se guardaria y
+    # pareceria configurado (una URL "${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}"
+    # no publica en ningun canal). Ese fallo silencioso es peor que un rojo,
+    # asi que es error SIEMPRE, incluso en avisa-y-pasa.
     $unresolved = @([regex]::Matches($jsonText, '\$\{([A-Za-z_][A-Za-z0-9_]*)\}') |
             ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
     if ($unresolved.Count -gt 0) {

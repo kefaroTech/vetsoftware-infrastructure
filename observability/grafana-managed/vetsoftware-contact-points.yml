@@ -5,18 +5,24 @@
 # camino de aplicación: Grafana Cloud NO tiene provisioning por fichero (no hay filesystem);
 # este YAML es la fuente de verdad versionada y el pipeline lo traduce a llamadas de la API
 # de provisioning (`POST/PUT /api/v1/provisioning/contact-points`, un contact point por
-# llamada, con `X-Disable-Provenance: true` si se quiere que sigan siendo editables en la UI).
+# llamada). El pipeline NO envía `X-Disable-Provenance`, a propósito: sin esa cabecera Grafana
+# marca lo aplicado como aprovisionado y bloquea su edición desde la UI, que es justo lo que
+# se busca — el repositorio manda y un cambio a mano por consola volvería a desaparecer en el
+# siguiente apply sin dejar rastro de por qué.
 #
-# Diseño: DOS contact points activos (critical y warning), hoy con UNA integración de email
-# cada uno — es la única vía que funciona AHORA MISMO, porque Grafana Cloud envía correo de
-# forma nativa, sin credencial externa. La integración de Slack está escrita y parametrizada
-# dentro de cada contact point, pero COMENTADA hasta que exista el secreto (ver el bloque
-# «Slack: qué falta y quién lo crea»). Se dejó comentada y no activa con un placeholder a
-# propósito: una URL de webhook inválida haría fallar la entrega de Slack en cada
-# notificación, ensuciando el registro de entregas justo cuando se está atendiendo un
-# incidente. Activarla es descomentar + sustituir el secreto: el enrutado de la policy no
-# cambia, porque una route de Grafana apunta a UN contact point y son las integraciones de
-# dentro las que se multiplican.
+# Diseño: DOS contact points activos (critical y warning), cada uno con UNA integración de
+# Slack. Es el destino elegido: las alertas van a un canal del workspace, no a un buzón.
+#
+# El respaldo por correo queda escrito pero COMENTADO, y conviene saber qué riesgo cubre:
+# con un solo canal de entrega, si el webhook se revoca o el canal se archiva, las alertas
+# dejan de notificar EN SILENCIO — seguirán disparando en la UI de Grafana y nadie se
+# enterará. Activarlo es descomentar las dos integraciones y añadir VETSOFTWARE_ALERT_EMAIL
+# al sub-gate del workflow; el enrutado de la policy no cambia, porque una route apunta a UN
+# contact point y son las integraciones de dentro las que se multiplican.
+#
+# El fichero NO lleva la URL: va como marcador y el pipeline la sustituye desde el secret.
+# Un marcador sin resolver hace fallar el apply a propósito — si llegara a Grafana se
+# guardaría y PARECERÍA configurado, que es el peor de los desenlaces.
 #
 # ── Slack: qué falta y quién lo crea ─────────────────────────────────────────────────────
 # Los canales existentes del proyecto son C0BNT7FCWSH (alertas) y C0BNWM8ASAE (infra), en el
@@ -51,42 +57,53 @@ contactPoints:
   - orgId: 1
     name: vetsoftware-critical
     receivers:
-      - uid: vetsw-cp-critical-email
-        type: email
+      - uid: vetsw-cp-critical-slack
+        type: slack
+        # false: cuando la condición se resuelve, Slack recibe el aviso de recuperación.
+        # En un canal compartido eso importa más que en un buzón: sin él, el hilo queda
+        # con la alerta abierta para siempre y nadie sabe si sigue viva.
         disableResolveMessage: false
         settings:
-          # El destino NO se versiona. El pipeline sustituye este marcador por el valor de
-          # la variable de environment VETSOFTWARE_ALERT_EMAIL antes de la llamada a la API.
-          # Motivo: una dirección personal en un fichero del repositorio queda en el
-          # historial de git para siempre y se publica con él; además el destinatario de las
-          # alertas cambia (vacaciones, relevo, alias de equipo) sin que cambie la política
-          # de alertado, así que no pertenece al código. Admite varias separadas por «;».
-          addresses: ${VETSOFTWARE_ALERT_EMAIL}
-          # Un solo correo por grupo de notificación aunque haya varias instancias
-          # (p. ej. varios job_name fallando a la vez): menos ruido, misma información.
-          singleEmail: true
-      # Descomentar cuando exista el webhook (ver cabecera). Misma notificación, segundo
-      # canal: email y Slack conviven dentro del mismo contact point.
-      # - uid: vetsw-cp-critical-slack
-      #   type: slack
+          # El webhook NO se versiona: quien tenga la URL puede publicar en el canal, así
+          # que es un secreto real. El pipeline sustituye este marcador por el valor del
+          # secret GRAFANA_SLACK_WEBHOOK_URL antes de la llamada a la API, y falla si
+          # queda sin resolver (un marcador que llegue a Grafana se guarda y PARECE
+          # configurado — notificaciones a ninguna parte, sin error visible).
+          url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+          # Sin title ni text: Grafana usa sus plantillas por defecto, que ya incluyen
+          # nombre de alerta, estado, resumen y enlace. Definir plantillas propias es una
+          # decision aparte y no se toma a ciegas.
+          #
+          # El canal lo decide el webhook, no este fichero: un webhook entrante de Slack
+          # queda ligado al canal que se elige al crearlo. Para mandar critical y warning
+          # a canales distintos hacen falta DOS webhooks — ver la cabecera.
+      # Respaldo por correo, desactivado a propósito. Merece la pena conocer el riesgo que
+      # cubre: con un solo canal de entrega, si el webhook se revoca o el canal se archiva,
+      # las alertas dejan de notificar EN SILENCIO — la alerta seguirá disparando en la UI
+      # y nadie se enterará. Activarlo es descomentar y añadir la variable
+      # VETSOFTWARE_ALERT_EMAIL al sub-gate del workflow.
+      # - uid: vetsw-cp-critical-email
+      #   type: email
       #   disableResolveMessage: false
       #   settings:
-      #     url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+      #     addresses: ${VETSOFTWARE_ALERT_EMAIL}
+      #     singleEmail: true
 
   # ── warning: anomalía con camino de recuperación, se atiende en horario laboral ────────
   - orgId: 1
     name: vetsoftware-warning
     receivers:
-      - uid: vetsw-cp-warning-email
-        type: email
+      - uid: vetsw-cp-warning-slack
+        type: slack
         disableResolveMessage: false
         settings:
-          addresses: ${VETSOFTWARE_ALERT_EMAIL}
-          singleEmail: true
-      # - uid: vetsw-cp-warning-slack
-      #   type: slack
+          # Mismo webhook que critical mientras solo exista uno: los dos van al mismo
+          # canal. La separación real hoy la da el label `severity` en el título y el
+          # ritmo de repetición de la policy, no el destino.
+          url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+      # - uid: vetsw-cp-warning-email
+      #   type: email
       #   disableResolveMessage: false
       #   settings:
-      #     # Mismo webhook (mismo canal) que critical mientras solo exista uno; para
-      #     # separar por canal hace falta un segundo webhook — ver cabecera.
-      #     url: ${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}
+      #     addresses: ${VETSOFTWARE_ALERT_EMAIL}
+      #     singleEmail: true

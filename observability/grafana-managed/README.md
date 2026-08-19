@@ -42,17 +42,20 @@ Este directorio ya no se aplica a mano: **lo aplican los propios workflows de sy
 (`sync-alert-rules-dev.yml` / `sync-alert-rules-prod.yml`), en un tramo posterior al sync de
 mimirtool que ejecuta `.github/scripts/apply-grafana-provisioning.ps1`. La lista de ficheros
 está en su variable `PROVISIONING_FILES` (un fichero nuevo se lista en los dos workflows). El
-tramo tiene su propio sub-gate: sin `GRAFANA_API_URL`, `VETSOFTWARE_ALERT_EMAIL` o
-`GRAFANA_PROVISIONING_TOKEN` en el environment avisa y pasa, sin afectar al sync del ruler.
+tramo tiene su propio sub-gate: sin `GRAFANA_API_URL`, el secret
+`VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` o el secret `GRAFANA_PROVISIONING_TOKEN` en el
+environment avisa y pasa, sin afectar al sync del ruler.
 Dos semánticas que conviene tener presentes (detalle en
 `docs/ALERTAS_GRAFANA_CLOUD.md`):
 
 - Es un **upsert por `uid`**: crea y actualiza, pero no borra del stack lo que desaparezca
   de estos ficheros; retirar un recurso exige un `DELETE` manual.
 - Antes de aplicar, el script **sustituye los marcadores `${NOMBRE}`** por variables de
-  entorno (hoy `${VETSOFTWARE_ALERT_EMAIL}`) y **falla si alguno queda sin resolver** — un
+  entorno (hoy `${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}`, que el workflow inyecta solo en
+  el paso del apply por ser un secreto) y **falla si alguno queda sin resolver** — un
   marcador literal guardado en Grafana parece configurado y no notifica a nadie. Los
-  marcadores en líneas comentadas (el webhook de Slack) no exigen su variable todavía.
+  marcadores en líneas comentadas (el respaldo por correo, `${VETSOFTWARE_ALERT_EMAIL}`) no
+  exigen su variable todavía.
 
 Grafana Cloud **no tiene provisioning por fichero** (no hay filesystem): estos YAML son la
 fuente de verdad versionada, en el mismo formato que emiten los endpoints de export de la API
@@ -76,17 +79,20 @@ lectura en la UI — que es lo correcto cuando el pipeline es la única vía de 
 Requisitos previos que la API no crea sola:
 
 - La carpeta `VetSoftware` debe existir en el stack (la referencia `folder:` de la cost-guard).
-- El webhook de Slack **no existe todavía** y solo puede crearlo una persona con permisos en
-  el workspace `T0BMM8Y0FC5`; los IDs de canal conocidos (`C0BNT7FCWSH`, `C0BNWM8ASAE`)
-  pertenecen a la integración de AWS Chatbot, que Grafana no puede usar. El paso a paso está
-  en la cabecera de `vetsoftware-contact-points.yml`. Mientras tanto, **el correo funciona
-  desde el primer apply**: Grafana Cloud lo envía de forma nativa, sin credencial externa.
+- El webhook de Slack **no existe todavía** y es **bloqueante**: Slack es hoy la única
+  integración activa de los contact points, y el sub-gate omite el tramo entero mientras el
+  secret no esté cargado. Solo puede crearlo una persona con permisos en el workspace
+  `T0BMM8Y0FC5`; los IDs de canal conocidos (`C0BNT7FCWSH`, `C0BNWM8ASAE`) pertenecen a la
+  integración de **AWS Chatbot**, que Grafana no puede usar — el paso a paso está en la
+  cabecera de `vetsoftware-contact-points.yml`. El correo queda **comentado como respaldo**:
+  con un solo canal de entrega, un webhook revocado o un canal archivado deja las alertas
+  sin notificar en silencio; cómo activarlo, en `docs/ALERTAS_GRAFANA_CLOUD.md`.
 
 **Verificación pendiente tras el primer apply** (está detallada en la cabecera de la policy):
 confirmar que las alertas del **ruler** entregan por este Alertmanager de Grafana. La
 evidencia apunta a que sí (los stacks recientes de Grafana Cloud entregan ahí por defecto y
 este stack no tiene datasource de Alertmanager de Mimir aparte), pero si una alerta del ruler
-no llegara al correo, el ruler estaría entregando en el Alertmanager de Mimir del tenant y
+no llegara al canal de Slack, el ruler estaría entregando en el Alertmanager de Mimir del tenant y
 habría que cargar allí una configuración equivalente con `mimirtool alertmanager load`.
 
 ## Qué vigila la cost-guard y por qué importa

@@ -139,8 +139,8 @@ de la release.
 Convención idéntica en los dos environments. Estado actual: **los tres valores
 del ruler de dev ya están cargados y funcionando** en `iac-apply-dev`; faltan
 los tres del tramo de provisioning (`GRAFANA_API_URL`,
-`VETSOFTWARE_ALERT_EMAIL` y `GRAFANA_PROVISIONING_TOKEN`), y todo lo de prod
-hasta que exista su stack.
+`VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` y `GRAFANA_PROVISIONING_TOKEN`), y
+todo lo de prod hasta que exista su stack.
 
 | Dónde | Tipo | Nombre | Valor | Estado |
 |---|---|---|---|---|
@@ -148,13 +148,13 @@ hasta que exista su stack.
 | environment `iac-apply-dev` | variable | `GRAFANA_METRICS_TENANT_ID` | Instance ID numérico de Prometheus del stack de dev | cargada |
 | environment `iac-apply-dev` | secret | `GRAFANA_RULER_TOKEN` | Token de Access Policy con `rules:read` + `rules:write` | cargado |
 | environment `iac-apply-dev` | variable | `GRAFANA_API_URL` | `https://vastcoyote3439.grafana.net` (host de la instancia de Grafana, ver abajo) | **pendiente** |
-| environment `iac-apply-dev` | variable | `VETSOFTWARE_ALERT_EMAIL` | Correo destino de las notificaciones (variable, no secreto: es un destino, no una credencial) | **pendiente** |
+| environment `iac-apply-dev` | secret | `VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` | Webhook entrante de Slack para las notificaciones (secreto, no variable: quien tenga la URL puede publicar en el canal) | **pendiente** |
 | environment `iac-apply-dev` | secret | `GRAFANA_PROVISIONING_TOKEN` | **Service account token** de la instancia (`glsa_...`, ver abajo) — NO un token de Access Policy | **pendiente** |
 | environment `iac-apply-prod` | variable | `GRAFANA_RULER_URL` | Ídem, del stack de prod (aún no existe) | pendiente |
 | environment `iac-apply-prod` | variable | `GRAFANA_METRICS_TENANT_ID` | Ídem, del stack de prod | pendiente |
 | environment `iac-apply-prod` | secret | `GRAFANA_RULER_TOKEN` | Ídem, del stack de prod | pendiente |
 | environment `iac-apply-prod` | variable | `GRAFANA_API_URL` | `https://<stack-prod>.grafana.net` | pendiente |
-| environment `iac-apply-prod` | variable | `VETSOFTWARE_ALERT_EMAIL` | Ídem (puede ser otro destino que el de dev) | pendiente |
+| environment `iac-apply-prod` | secret | `VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` | Ídem (puede ser otro webhook, hacia otro canal, que el de dev) | pendiente |
 | environment `iac-apply-prod` | secret | `GRAFANA_PROVISIONING_TOKEN` | Ídem, de la instancia de prod | pendiente |
 
 De dónde sale cada valor, en Grafana Cloud:
@@ -185,12 +185,39 @@ De dónde sale cada valor, en Grafana Cloud:
    ([Gestión de secretos](GESTION_DE_SECRETOS.md)). Hasta que exista y sea
    válido, el tramo de provisioning detecta el `401/403`, lo anota como
    *warning* y pasa sin fallar.
-6. **`VETSOFTWARE_ALERT_EMAIL`**: el buzón que debe recibir las
-   notificaciones. El fichero de contact points versiona el marcador
-   `${VETSOFTWARE_ALERT_EMAIL}` en lugar de una dirección personal; el script
-   lo sustituye en el momento de aplicar y **falla si el marcador queda sin
-   resolver**, porque un literal `${...}` guardado en Grafana parece
-   configurado y no notifica a nadie.
+6. **`VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL`**: un **webhook entrante de
+   Slack**, que hoy no existe y hay que crear:
+   [https://api.slack.com/apps](https://api.slack.com/apps) → *Create New
+   App* (workspace `T0BMM8Y0FC5`) → *Incoming Webhooks* → activar → *Add New
+   Webhook to Workspace* → **elegir el canal**. Dos cosas que hay que saber:
+   - **El canal se decide en Slack, no en el fichero**: el webhook queda
+     ligado al canal elegido al crearlo. Hoy critical y warning comparten
+     webhook (y por tanto canal); para separarlos en canales distintos harían
+     falta **dos** webhooks, uno por contact point.
+   - **La conexión de Slack que el proyecto ya tiene NO sirve.** Los canales
+     existentes (`C0BNT7FCWSH` alertas, `C0BNWM8ASAE` infra, workspace
+     `T0BMM8Y0FC5`) pertenecen a la integración de **AWS Chatbot**, y Grafana
+     no puede usarla: necesita su propio webhook. Es la confusión natural —
+     «ya tengo Slack conectado, ¿por qué otro webhook?» — y la respuesta es
+     que aquel webhook es de AWS, no nuestro.
+
+   El fichero de contact points versiona el marcador
+   `${VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL}`, nunca la URL; el script la
+   sustituye desde el secret en el momento de aplicar y **falla si el
+   marcador queda sin resolver**, porque un literal `${...}` guardado en
+   Grafana parece configurado y no notifica a nadie.
+
+### El respaldo por correo, documentado y desactivado
+
+`vetsoftware-contact-points.yml` conserva la integración de correo
+**comentada** en los dos contact points. El riesgo que cubriría está escrito
+en su cabecera y conviene repetirlo: con Slack como **único canal de
+entrega**, si el webhook se revoca o el canal se archiva, las alertas dejan de
+notificar **en silencio** — siguen disparando en la UI de Grafana y nadie se
+entera. Para activar el respaldo: descomentar las dos integraciones de correo
+en el fichero y volver a añadir `VETSOFTWARE_ALERT_EMAIL` (variable de
+environment) al sub-gate de los dos workflows, para que el marcador tenga con
+qué resolverse.
 
 ### Dos tipos de credencial que no son intercambiables
 
@@ -251,14 +278,16 @@ workflow empieza a sincronizar sin tocar una línea.
 El tramo de provisioning tiene su **propio sub-gate** con la misma filosofía,
 en dos niveles:
 
-- `GRAFANA_API_URL` o `VETSOFTWARE_ALERT_EMAIL` vacías, o
-  `GRAFANA_PROVISIONING_TOKEN` ausente → el sub-gate anota el *warning* y
-  omite el tramo entero; el sync del ruler **no se ve afectado**. Es un gate
-  separado adrede: si estas condiciones entraran en el gate principal, su
-  ausencia apagaría también el sync de mimirtool, que ya funciona y no
-  depende de ellas. El token se comprueba con el mismo patrón booleano que el
-  gate principal (`secrets.X != ''`), sin materializar el secreto en el
-  runner.
+- `GRAFANA_API_URL` vacía, o los secrets
+  `VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` / `GRAFANA_PROVISIONING_TOKEN`
+  ausentes → el sub-gate anota el *warning* y omite el tramo entero; el sync
+  del ruler **no se ve afectado**. Es un gate separado adrede: si estas
+  condiciones entraran en el gate principal, su ausencia apagaría también el
+  sync de mimirtool, que ya funciona y no depende de ellas. Los dos secretos
+  se comprueban con el mismo patrón booleano que el gate principal
+  (`secrets.X != ''`), sin materializar su valor en el runner; el webhook
+  además se inyecta **solo en el paso del apply**, no en el `env:` del job
+  entero.
 - Todo cargado pero el token no vale (por ejemplo, se cargó un `glc_` de
   Access Policy en vez del `glsa_` de service account) → la API devuelve
   `401/403` y `apply-grafana-provisioning.ps1` lo convierte en *warning* y
@@ -292,8 +321,9 @@ Los contact points y la notification policy viven versionados en
 mismos workflows de sync. Para que las alertas notifiquen de verdad hacen
 falta, en este orden:
 
-1. `GRAFANA_API_URL` y `VETSOFTWARE_ALERT_EMAIL` cargadas en el environment
-   (tabla de credenciales).
+1. `GRAFANA_API_URL` cargada y el webhook entrante de Slack creado y cargado
+   como secret `VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` (tabla de credenciales
+   y paso 6 — ojo: el Slack de AWS Chatbot no sirve).
 2. El service account token creado en la instancia y cargado como
    `GRAFANA_PROVISIONING_TOKEN` (paso 5 de la misma sección — **no** es el
    token del ruler ni sale de Access Policies).
