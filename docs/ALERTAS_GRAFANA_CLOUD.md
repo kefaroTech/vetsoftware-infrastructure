@@ -29,29 +29,41 @@ repositorio de la aplicación. Pesa más lo contrario:
 
 ## Los ficheros y a qué ambiente van
 
-Formato mimirtool: `namespace:` + `groups:` por fichero.
+**El ruler solo tiene recording rules. Todas las alertas son Grafana-managed.**
+
+Formato mimirtool (`namespace:` + `groups:`), sincronizado con `mimirtool rules sync`:
 
 | Fichero (`observability/mimir-rules/`) | dev | prod |
 |---|---|---|
-| `vetsoftware-slo-rules.yml` | sí | sí |
-| `vetsoftware-slo-alerts.yml` | sí | sí |
-| `vetsoftware-platform-alerts.yml` | sí | sí |
-| `vetsoftware-cloud-additions.yml` | sí | sí |
-| `vetsoftware-heartbeat-prod.yml` | no | sí |
+| `vetsoftware-slo-rules.yml` — 57 recording rules | sí | sí |
 
-Hay además un directorio hermano, `observability/grafana-managed/`, que **`mimirtool` no
-toca** pero que los mismos workflows de sync sí aplican, en un tramo posterior y por otra vía:
-la **API de provisioning de Grafana** (ver «El flujo»). Contiene lo que no puede vivir en el
-ruler: la guarda de ingesta (consulta métricas de uso alojadas en otro tenant,
-`grafanacloud-usage`), los contact points y la notification policy del Alertmanager del stack.
-Su README explica el porqué de la separación; el workflow de calidad del PR no los valida,
-porque sus globs apuntan a `mimir-rules/`.
+Las 25 alertas vivieron aquí y se movieron, porque **en el ruler no notificaban a nadie**.
+Grafana Cloud tiene dos motores de alertas con dos Alertmanager que no se hablan entre sí, y
+el de Mimir no está expuesto en el plan Free. Verificado en vivo el 2026-08-19: 10 alertas
+disparando en el ruler y `/api/alertmanager/grafana/api/v2/alerts` devolviendo `[]`.
+
+Las recording rules se quedan porque no necesitan Alertmanager — solo calculan series —, y
+las alertas convertidas las leen por el datasource `grafanacloud-prom`, que apunta al mismo
+tenant: la cadena SLO sigue entera, solo cambia quién evalúa el último escalón.
+
+**Regla práctica al añadir algo:** recording rule → `mimir-rules/`; alerta →
+`grafana-managed/`. Una alerta puesta en `mimir-rules/` evalúa y no notifica, en silencio —
+que es el fallo que costó descubrir.
+
+El directorio `observability/grafana-managed/` **`mimirtool` no lo toca**: lo aplican los
+mismos workflows en un tramo posterior, por la **API de provisioning de Grafana** (ver «El
+flujo»). El workflow de calidad del PR tampoco lo valida, porque sus globs apuntan a
+`mimir-rules/`.
 
 | Fichero (`observability/grafana-managed/`) | Qué es |
 |---|---|
 | `vetsoftware-contact-points.yml` | Receptores de notificación (`contactPoints:`) |
 | `vetsoftware-notification-policy.yml` | Árbol de enrutamiento (`policies:`) |
-| `vetsoftware-cost-guard.yml` | Alerta Grafana-managed de ingesta (`groups:`) |
+| `vetsoftware-slo-alerts-managed.yml` | 6 alertas SLO |
+| `vetsoftware-platform-alerts-managed.yml` | 11 de plataforma (HTTP, JVM, HikariCP, tokens) |
+| `vetsoftware-cloud-additions-managed.yml` | 7: jobs, correo, abuso de login, Valkey |
+| `vetsoftware-cost-guard.yml` | 1: guarda de ingesta |
+| `vetsoftware-heartbeat-prod-managed.yml` | 1: ausencia de ingesta — **solo prod** |
 
 La lista exacta está en la variable `PROVISIONING_FILES` de cada workflow de sync, con la
 misma regla que `RULE_FILES`: **un fichero nuevo se añade en los dos workflows**.

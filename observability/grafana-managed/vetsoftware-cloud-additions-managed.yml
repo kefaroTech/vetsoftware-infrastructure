@@ -1,0 +1,370 @@
+# Conversión Grafana-managed de observability/mimir-rules/vetsoftware-cloud-additions.yml.
+#
+# Motivo: en el plan Grafana Cloud Free el Alertmanager de Mimir no está expuesto, así que
+# las alertas del ruler evalúan pero NO notifican a nadie (verificado en vivo: 10 alertas
+# firing en el ruler y /api/alertmanager/grafana/api/v2/alerts devolviendo []). El único
+# motor con contact points y notification policy operativos es el de Grafana, que enruta
+# a Slack por el label `severity` — por eso labels y annotations se conservan intactos.
+#
+# Las recording rules del ruler NO se migran: estas reglas consultan sus series (y las
+# métricas crudas OTLP) a través del datasource grafanacloud-prom, que lee el mismo tenant.
+#
+# Decisiones transversales de esta conversión:
+#
+# 1) Partición de expresiones. El PromQL va en refId A SIN el comparador final; la
+#    comparación pasa al nodo threshold (refId C). Los comparadores INTERNOS de las
+#    expresiones compuestas (`unless ... > 0`, `and ... >= 5`) NO son el comparador final:
+#    son parte de la semántica de la guarda y se quedan dentro de A. Perderlos rompería
+#    exactamente el caso que cubren (ver comentarios por regla).
+#
+# 2) noDataState: OK en TODAS las reglas de este fichero. EventBridge apaga el backend de
+#    dev a las 20:00/20:15 Bogotá de lunes a viernes y los fines de semana completos: todas
+#    las series de la aplicación desaparecen cada noche. Con NoData como alerting, cada
+#    regla sonaría a diario por diseño del ambiente, no por un incidente. La detección de
+#    «no llega telemetría» es responsabilidad del heartbeat de prod (fichero aparte), no de
+#    estas reglas.
+#
+# 3) Títulos. En el original, ScheduledJobFailing y EmailSendFailing tienen dos variantes
+#    (warning/critical) con el MISMO alertname, distinguidas solo por `severity` — patrón
+#    idiomático en Prometheus/Mimir. Históricamente el provisioning de Grafana rechazaba
+#    títulos duplicados en la misma carpeta («rule title under the same organisation and
+#    folder should be unique»), así que la duda era real.
+#
+#    VERIFICADO contra el stack el 2026-08-19 (Grafana 13.2.0): se creó por API una regla
+#    con el título de otra ya existente, en la MISMA carpeta y el MISMO grupo, y respondió
+#    201 Created. La regla de prueba se borró (204). Conclusión: este stack SI admite
+#    duplicados, y las dos parejas conservan su alertname original sin sufijos.
+#
+#    Lo que distingue cada variante es el `uid` —que es la clave de upsert del pipeline y
+#    lleva el sufijo `-warning`/`-critical`— y el label `severity`, del que depende el
+#    enrutado. El título no interviene en ninguno de los dos.
+#
+# 4) relativeTimeRange.from cubre en cada regla la ventana más larga de su expresión
+#    (hay [5m], [30m] y [2h]); las consultas son instant, pero el rango debe abarcar el
+#    lookback para que la vista previa y el backtesting de Grafana no trunquen datos.
+
+apiVersion: 1
+
+groups:
+  # ---------------------------------------------------------------------------------------
+  # Jobs programados (TEL-10). Un job que falla no tiene usuario delante que reintente:
+  # sin alerta, el fallo solo existe en un contador que nadie mira.
+  # ---------------------------------------------------------------------------------------
+  - orgId: 1
+    name: vetsoftware-scheduled-jobs
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      # Variante warning: hay fallos en la última media hora (fallo parcial o intermitente).
+      - uid: vetsw-scheduled-job-failing-warning
+        title: VetSoftwareScheduledJobFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # Multidimensional a propósito: el threshold se evalúa por serie, así que cada
+              # job_name genera su propia instancia de alerta y {{ $labels.job_name }} en las
+              # annotations sigue resolviendo igual que en el ruler.
+              expr: |
+                sum by (job_name) (
+                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[30m])
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # OK y no NoData: el contador con job_outcome=failure solo existe si alguna vez hubo
+        # un fallo, y de noche el backend de dev está apagado. Ausencia de la serie != fallo.
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: warning
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El job programado {{ $labels.job_name }} está registrando fallos"
+          description: "El job {{ $labels.job_name }} lleva al menos 30 minutos acumulando ejecuciones con job_outcome failure/error. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
+
+      # Variante critical: TODAS las ejecuciones de las últimas 2 horas fallaron (ni un
+      # éxito). Fallo determinista y sistémico. Mismo alertname que la warning —el stack
+      # admite duplicados, ver decisión 3 de la cabecera—; lo que las distingue es el uid
+      # (clave de upsert) y el label severity, que es el que enruta.
+      - uid: vetsw-scheduled-job-failing-critical
+        title: VetSoftwareScheduledJobFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 7200, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # El `unless` COMPLETO vive dentro de A; al threshold solo se le quita el
+              # comparador final del lado de los fallos. El `> 0` del lado de los éxitos NO
+              # es el comparador final: es el filtro que decide qué series elimina el
+              # `unless`, y existe porque un `== 0` clásico no casaría si la serie de éxitos
+              # no existe — la alerta moriría en silencio justo en el fallo total que debe
+              # cubrir. Semántica resultante, idéntica a la original: A devuelve los fallos
+              # por job_name SALVO los job_name con algún éxito en 2 h; C dispara si el
+              # valor restante > 0. (Precedencia PromQL: `>` liga más fuerte que `unless`,
+              # los paréntesis son solo por legibilidad.)
+              expr: |
+                sum by (job_name) (
+                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome=~"failure|error"}[2h])
+                )
+                unless
+                (
+                  sum by (job_name) (
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_outcome="success"}[2h])
+                  ) > 0
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El job programado {{ $labels.job_name }} falla el 100 % de sus ejecuciones"
+          description: "Todas las ejecuciones de {{ $labels.job_name }} en las últimas 2 horas terminaron en failure/error, sin ningún éxito. El fallo es sistémico: ningún ciclo posterior lo va a recuperar solo."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
+
+  # ---------------------------------------------------------------------------------------
+  # Envío de correo (TEL-12). El envío es fire-and-forget: cada fallo es un correo perdido
+  # aunque la petición HTTP del usuario haya respondido 200.
+  # ---------------------------------------------------------------------------------------
+  - orgId: 1
+    name: vetsoftware-email-delivery
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      # Fallo parcial: éxitos y fallos conviviendo. La guarda de volumen (`and ... >= 5`)
+      # se queda DENTRO de A: si sale al threshold se pierde, y sin ella un único correo
+      # fallido con tráfico casi nulo daría 100 % de tasa y dispararía la alerta.
+      - uid: vetsw-email-send-failing-warning
+        title: VetSoftwareEmailSendFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # A devuelve la TASA de fallo solo cuando hay >= 5 envíos en 30 m; con menos
+              # volumen devuelve vacío -> NoData -> OK (mismo comportamiento que el original,
+              # que tampoco disparaba). El comparador final (> 0.10) pasa al threshold.
+              expr: |
+                (
+                  sum(increase(email_send_template_milliseconds_count{job="mainvet/vetsoftware",email_outcome="failure"}[30m]))
+                  /
+                  clamp_min(sum(increase(email_send_template_milliseconds_count{job="mainvet/vetsoftware"}[30m])), 1)
+                )
+                and
+                (
+                  sum(increase(email_send_template_milliseconds_count{job="mainvet/vetsoftware"}[30m])) >= 5
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.10] }
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "Más del 10 % de los envíos de correo están fallando"
+          description: "La tasa de email_outcome=failure supera el 10 % en la última media hora con al menos 5 envíos. El envío es fire-and-forget: cada fallo es un correo perdido para el destinatario, aunque la petición HTTP del usuario haya respondido 200."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
+
+      # Fallo TOTAL (el caso vivo de TEL-12: 403 de Resend por dominio no verificado).
+      # Mismo tratamiento del `unless` que en los jobs: entero dentro de A, con el `> 0`
+      # del lado de los éxitos preservado para que la ausencia total de la serie de éxitos
+      # NO silencie la alerta. Mismo alertname que la warning (verificado: el stack admite
+      # duplicados); los distingue el uid y el label severity.
+      - uid: vetsw-email-send-failing-critical
+        title: VetSoftwareEmailSendFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum(increase(email_send_template_milliseconds_count{job="mainvet/vetsoftware",email_outcome="failure"}[30m]))
+                unless
+                (
+                  sum(increase(email_send_template_milliseconds_count{job="mainvet/vetsoftware",email_outcome="success"}[30m])) > 0
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El envío de correo falla al 100 %: ningún éxito en 30 minutos"
+          description: "Hay envíos con email_outcome=failure y ninguno con success en la última media hora: fallo total y determinista, no transitorio. Caso conocido: 403 de Resend por dominio remitente no verificado — el arreglo es verificar kefaro.tech en Resend, no reintentar."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
+
+  # ---------------------------------------------------------------------------------------
+  # Seguridad (TEL-36): fuerza bruta / enumeración en el login. El selector por uri está
+  # verificado en dev: los 401/403 aparecen únicamente en /auth/login/employee|system.
+  # ---------------------------------------------------------------------------------------
+  - orgId: 1
+    name: vetsoftware-auth-abuse
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-auth-failure-spike
+        title: VetSoftwareAuthFailureSpike
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum(rate(http_server_requests_milliseconds_count{job="mainvet/vetsoftware",uri=~"(/api/v1)?/auth/login/(employee|system)",status=~"401|403"}[5m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.5] }
+        # Sin rechazos recientes la serie 401|403 no existe -> NoData es el estado normal.
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: security
+          service: vetsoftware
+        annotations:
+          summary: "Tasa alta de credenciales rechazadas en el login"
+          description: "Más de 0,5 rechazos por segundo (~30/min) sostenidos 10 minutos en /auth/login/*. Puede ser fuerza bruta, enumeración de códigos de empleado o un cliente mal configurado en bucle. Contrastar client.ip y user_agent.original en el canal AUDIT de Loki (event=login_failure) antes de bloquear nada."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareauthfailurespike"
+
+  # ---------------------------------------------------------------------------------------
+  # Valkey vía el cliente Lettuce. Valkey sostiene la caché de permisos y el rate limiting
+  # de bucket4j: degradado, el control de fuerza bruta deja de ser fiable sin otra señal.
+  # ---------------------------------------------------------------------------------------
+  - orgId: 1
+    name: vetsoftware-valkey
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-valkey-commands-failing
+        title: VetSoftwareValkeyCommandsFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # Sin `by (error)` a propósito (igual que el original): una tormenta de
+              # excepciones distintas no debe fragmentar la alerta en varias instancias.
+              expr: |
+                sum(rate(lettuce_milliseconds_count{job="mainvet/vetsoftware",error!="none"}[5m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # Las series con error!="none" solo existen si hubo errores; su ausencia es el
+        # estado sano y, de noche, el backend de dev está apagado.
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: cache
+          service: vetsoftware
+        annotations:
+          summary: "Los comandos a Valkey están fallando"
+          description: "El cliente Lettuce registra comandos con error sostenidos 5 minutos. Valkey sostiene la caché de permisos y el rate limiting de bucket4j: con él degradado, el control de fuerza bruta deja de ser fiable. Revisar el estado de ElastiCache y la conectividad antes que el código."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeycommandsfailing"
+
+      - uid: vetsw-valkey-latency-high
+        title: VetSoftwareValkeyLatencyHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                histogram_quantile(
+                  0.99,
+                  sum by (le) (rate(lettuce_milliseconds_bucket{job="mainvet/vetsoftware"}[5m]))
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+        # Con el backend apagado los buckets desaparecen -> NoData; y sin tráfico reciente
+        # histogram_quantile puede devolver NaN, que no supera el umbral. Ambos casos son
+        # «no hay nada que medir», no «latencia alta».
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+          domain: cache
+          service: vetsoftware
+        annotations:
+          summary: "La latencia p99 de Valkey supera 50 ms"
+          description: "El p99 de los comandos Lettuce lleva 10 minutos por encima de 50 ms. Valkey está en el camino caliente de la autorización: su latencia se suma a la de cada petición. Revisar CPU/memoria de ElastiCache y la tasa de eviction."
+          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeylatencyhigh"

@@ -1,37 +1,50 @@
 # Alerting Grafana-managed
 
-Aquí vive lo que **no puede ser una regla del ruler de Mimir**: la configuración del sistema
-de alerting de Grafana propiamente dicho. Hoy son tres ficheros:
+**Aquí vive TODO el alerting del proyecto**: las 26 alertas y su configuración de entrega.
+En `../mimir-rules/` solo quedan recording rules.
 
-| Fichero | Qué es | ¿Funciona hoy? |
+| Fichero | Qué es | Ambientes |
 |---|---|---|
-| `vetsoftware-cost-guard.yml` | 1 alerta Grafana-managed (`VetSoftwareIngestionNearLimit`) | Sí |
-| `vetsoftware-contact-points.yml` | 2 contact points (`vetsoftware-critical`, `vetsoftware-warning`) | Email sí (nativo de Grafana Cloud); Slack escrito pero **comentado hasta que exista el webhook** |
-| `vetsoftware-notification-policy.yml` | El árbol de enrutado: raíz + una route por `severity` | Sí, en cuanto existan los contact points |
+| `vetsoftware-contact-points.yml` | 2 contact points (`vetsoftware-critical`, `vetsoftware-warning`), integración de Slack | dev y prod |
+| `vetsoftware-notification-policy.yml` | El árbol de enrutado: raíz + una route por `severity` | dev y prod |
+| `vetsoftware-slo-alerts-managed.yml` | 6 alertas SLO (3 de burn rate multiventana, 2 de budget, 1 de integridad) | dev y prod |
+| `vetsoftware-platform-alerts-managed.yml` | 11 de plataforma (HTTP, JVM, HikariCP, tokens) | dev y prod |
+| `vetsoftware-cloud-additions-managed.yml` | 7: jobs y correo (warning + critical cada una), abuso de login, Valkey ×2 | dev y prod |
+| `vetsoftware-cost-guard.yml` | 1: `VetSoftwareIngestionNearLimit` | dev y prod |
+| `vetsoftware-heartbeat-prod-managed.yml` | 1: ausencia de ingesta | **solo prod** |
 
-## Por qué existe este directorio
+## Por qué TODO está aquí y no en el ruler
 
-`observability/mimir-rules/` contiene reglas en formato Prometheus que `mimirtool` sincroniza
-al ruler de nuestro tenant. Hay dos cosas que ese camino no puede expresar:
+Grafana Cloud tiene **dos motores de alertas**, cada uno con su propio Alertmanager, y **no
+se hablan entre sí**. El del ruler de Mimir **no está expuesto en el plan Free**: no tiene
+tarjeta en el portal, `mimirtool alertmanager get` responde «no Alertmanager config
+currently exists» y `load` da 404 contra el host del ruler.
 
-1. **Alertas que consultan otro tenant.** El ruler solo puede consultar las series de su
-   propio tenant, y la guarda de coste necesita `grafanacloud_instance_active_series` y
-   `grafanacloud_instance_metrics_limits`, que viven en el datasource `grafanacloud-usage`
-   — otro tenant, de solo lectura y gestionado por Grafana. Comprobado: esas métricas no
-   existen en `grafanacloud-prom`. Las alertas *Grafana-managed* sí pueden consultar
-   cualquier datasource del stack.
-2. **La entrega.** Contact points y notification policy no son conceptos del ruler: el ruler
-   evalúa y dispara, pero quién recibe qué, agrupado cómo y repetido cada cuánto es
-   configuración de Alertmanager. Sin estos ficheros, las 24 alertas del ruler **evalúan
-   pero no notifican a nadie** — que es exactamente el estado en que estaba el stack antes
-   de añadirlos (verificado: la lista de contact points estaba vacía).
+Verificado en vivo el 2026-08-19, con las alertas ya sincronizadas al ruler y los contact
+points ya aplicados: **10 alertas disparando en el ruler y
+`/api/alertmanager/grafana/api/v2/alerts` devolviendo `[]`**. Evaluaban perfectamente y no
+notificaban a nadie. No era un fallo de Slack —el webhook respondía `200 ok`— sino de la
+unión: reglas en un motor, receptores en el otro.
+
+Como el Alertmanager de Mimir no se puede configurar y el de Grafana sí, las 25 alertas se
+convirtieron a formato Grafana-managed. Es la decisión que unifica: **un motor, un
+Alertmanager, una configuración de entrega, y todas las reglas visibles en la misma pantalla
+de Alerting**.
+
+Las 57 recording rules se quedan en el ruler porque no necesitan Alertmanager — solo
+calculan series. Las alertas convertidas las leen por el datasource `grafanacloud-prom`, que
+apunta al mismo tenant, así que la cadena SLO sigue entera.
+
+Hay además una alerta que **nunca pudo estar en el ruler**: `cost-guard` consulta
+`grafanacloud_instance_*` del datasource `grafanacloud-usage`, que es **otro tenant** y el
+ruler solo alcanza el suyo. Fue la primera pista de que había dos mundos.
 
 | | Mimir ruler (`mimir-rules/`) | Grafana-managed (aquí) |
 |---|---|---|
 | Formato | reglas Prometheus (`namespace:` + `groups:`) | provisioning de Grafana (`apiVersion: 1`) |
 | Despliegue | `mimirtool rules sync` desde CI | API de provisioning de Grafana (ver abajo) |
 | Puede consultar | solo el tenant propio | cualquier datasource del stack |
-| Expresa | evaluación (recording rules + alertas) | evaluación multi-datasource **y** entrega |
+| Expresa | solo recording rules | evaluación multi-datasource **y** entrega |
 
 **Importante:** `mimirtool rules sync` **no toca** estos ficheros. Son dos mundos separados a
 propósito; no mezcles los ficheros de directorio o el sync fallará al parsear.
@@ -81,21 +94,20 @@ Requisitos previos que la API no crea sola:
 - La carpeta `VetSoftware` (la referencia `folder:` de la cost-guard) **la crea el script si no
   existe**: es un contenedor vacío, no configuración, y pedir un paso manual previo dejaría el
   pipeline sin ser autosuficiente en un stack nuevo.
-- El webhook de Slack **no existe todavía** y es **bloqueante**: Slack es hoy la única
-  integración activa de los contact points, y el sub-gate omite el tramo entero mientras el
-  secret no esté cargado. Solo puede crearlo una persona con permisos en el workspace
-  `T0BMM8Y0FC5`; los IDs de canal conocidos (`C0BNT7FCWSH`, `C0BNWM8ASAE`) pertenecen a la
-  integración de **AWS Chatbot**, que Grafana no puede usar — el paso a paso está en la
-  cabecera de `vetsoftware-contact-points.yml`. El correo queda **comentado como respaldo**:
-  con un solo canal de entrega, un webhook revocado o un canal archivado deja las alertas
-  sin notificar en silencio; cómo activarlo, en `docs/ALERTAS_GRAFANA_CLOUD.md`.
+- El webhook de Slack es **bloqueante**: es la única integración activa de los contact
+  points, y el sub-gate omite el tramo entero mientras el secret no esté cargado. Ya existe
+  y está probado (`HTTP 200 · ok`) en el environment de dev. Solo puede crearlo una persona
+  con permisos en el workspace `T0BMM8Y0FC5`; ojo con la trampa: los IDs de canal conocidos
+  (`C0BNT7FCWSH`, `C0BNWM8ASAE`) pertenecen a la integración de **AWS Chatbot**, que Grafana
+  no puede usar — el paso a paso está en la cabecera de `vetsoftware-contact-points.yml`. El
+  correo queda **comentado como respaldo**: con un solo canal de entrega, un webhook revocado
+  o un canal archivado deja las alertas sin notificar en silencio.
 
-**Verificación pendiente tras el primer apply** (está detallada en la cabecera de la policy):
-confirmar que las alertas del **ruler** entregan por este Alertmanager de Grafana. La
-evidencia apunta a que sí (los stacks recientes de Grafana Cloud entregan ahí por defecto y
-este stack no tiene datasource de Alertmanager de Mimir aparte), pero si una alerta del ruler
-no llegara al canal de Slack, el ruler estaría entregando en el Alertmanager de Mimir del tenant y
-habría que cargar allí una configuración equivalente con `mimirtool alertmanager load`.
+**La verificación que quedaba pendiente ya se hizo, y salió que no.** Se comprobó si las
+alertas del ruler entregaban por este Alertmanager de Grafana: **no lo hacen**. Con 10
+alertas disparando en el ruler, `/api/alertmanager/grafana/api/v2/alerts` devolvía `[]`. Esa
+es la razón por la que las 25 alertas se convirtieron a Grafana-managed y hoy no queda
+ninguna en el ruler — ver «Por qué TODO está aquí y no en el ruler», arriba.
 
 ## Qué vigila la cost-guard y por qué importa
 
@@ -115,9 +127,9 @@ no es el crecimiento vegetativo:
 
 **Qué pasa si se llega al 100 %:** Grafana Cloud rechaza la ingesta. No se degrada, no avisa
 en la aplicación: simplemente deja de aceptar métricas. Se pierde telemetría en silencio y con
-ella la capacidad de ver cualquier otro incidente — incluidas las 24 alertas del ruler, que
+ella la capacidad de ver cualquier otro incidente — incluidas las 26 alertas, que
 dejarían de tener datos que evaluar. De ahí que sea la alerta que protege a todas las demás.
 
 Otro límite del mismo bloque, que conviene tener presente aunque no tenga alerta:
-**`ruler_max_rule_groups_per_tenant` = 85**, y los ficheros de `mimir-rules/` usan 18 grupos
-en dev (19 con el heartbeat de prod). Hay margen, pero no es infinito.
+**`ruler_max_rule_groups_per_tenant` = 85**, y `mimir-rules/` usa hoy 7 grupos, todos de
+recording rules. Hay margen de sobra.
