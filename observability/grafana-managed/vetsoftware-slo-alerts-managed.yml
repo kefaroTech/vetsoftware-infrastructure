@@ -224,6 +224,18 @@ groups:
           description: "Según la política de gobierno, los cambios no críticos de este dominio requieren revisión explícita hasta que el presupuesto se recupere."
           runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresloerrorbudgetlow"
 
+      # SEVERIDAD `warning` A PROPÓSITO, pese a describir un incumplimiento de SLO.
+      #
+      # La severidad codifica URGENCIA DE RESPUESTA, no gravedad del hecho. Esta serie
+      # promedia una ventana de 30 días (`avg_over_time(...[30d])`), así que describe daño
+      # ya ocurrido y registrado: a las 4 de la mañana no existe ninguna acción que cambie
+      # el número. Marcarla `critical` la enrutaría al `repeat_interval` de 4 h — unas 180
+      # notificaciones por un incidente que puede llevar días arreglado, porque el dato malo
+      # no sale de la ventana hasta que envejece 30 días.
+      #
+      # No se pierde cobertura: la emergencia en curso la cubre `SloFastBurn`, que dispara
+      # en 2 minutos gracias a su guarda de ventana corta (`ratio_rate5m`). Esta alerta es
+      # el ticket que dice «este mes incumpliste», no el busca que dice «actúa ahora».
       - uid: vetsw-slo-error-budget-exhausted
         title: VetSoftwareSloErrorBudgetExhausted
         condition: C
@@ -251,12 +263,12 @@ groups:
                       - 0
         # Sin datos = la serie del presupuesto no existe; eso es un problema de MEDICIÓN,
         # no de presupuesto, y lo detecta SeriesAbsent. Marcarlo aquí duplicaría la alarma
-        # con la severidad equivocada (critical).
+        # con la severidad equivocada.
         noDataState: OK
         execErrState: Error
         for: 30m
         labels:
-          severity: critical
+          severity: warning
           domain: slo
           service: vetsoftware
         annotations:
