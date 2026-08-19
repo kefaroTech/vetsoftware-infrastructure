@@ -1,11 +1,27 @@
 name: Alert rules quality
 
-# Validacion LOCAL de las reglas del ruler de Mimir en cada pull request que
-# las toque: sintaxis YAML, PromQL parseable y buenas practicas de nombrado.
+# Validacion LOCAL de las reglas de alertado en cada pull request que las toque.
 # Sin credenciales y sin acceso remoto, a proposito: un PR corre codigo de una
 # rama cualquiera y no debe ver el token del ruler. El acceso remoto (diff y
 # sync) vive en sync-alert-rules-dev.yml / sync-alert-rules-prod.yml, detras
 # de sus environments con aprobacion.
+#
+# Cubre las DOS familias de ficheros, que son formatos distintos:
+#
+#   1. observability/mimir-rules/**  -> formato del ruler de Mimir. Hoy son 57
+#      recording rules SLO y NINGUNA alerta. Lo valida `mimirtool` (job
+#      mimir-rules): YAML, PromQL parseable y nombrado.
+#   2. observability/grafana-managed/** -> formato de provisioning de Grafana
+#      (apiVersion 1, uid/condition/data[].model). Son las 26 alertas que de
+#      verdad notifican, mas los contact points y la notification policy.
+#      `mimirtool` NO entiende este formato: lo valida el script
+#      .github/scripts/check-grafana-alert-quality.ps1 (job grafana-managed).
+#
+# Hasta el PR que anadio el segundo job, el `paths` solo miraba mimir-rules/,
+# es decir: el CI validaba el directorio SIN alertas y no miraba el que las
+# tiene. Los tres defectos que motivaron esto -una plantilla Go sin validar,
+# una anotacion `runbook` con un ancla inexistente y una URL apuntando al
+# repositorio del backend- se detectaron a mano en revision, no en el CI.
 
 on:
   pull_request:
@@ -14,6 +30,9 @@ on:
       - main
     paths:
       - "observability/mimir-rules/**"
+      - "observability/grafana-managed/**"
+      - "docs/ALERTAMIENTO_OPERATIVO.md"
+      - ".github/scripts/check-grafana-alert-quality.ps1"
       - ".github/workflows/alert-rules-quality.yml"
   workflow_dispatch:
 
@@ -25,7 +44,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  # Dos jobs y no dos pasos del mismo, por tres razones concretas:
+  #   - Herramientas disjuntas. mimirtool no sabe leer el formato de
+  #     provisioning de Grafana y el script de grafana-managed no sabe nada de
+  #     namespaces de Mimir. Nada que compartir entre ellos salvo el checkout.
+  #   - Corren en paralelo: el tiempo de pared es el del mas lento (~1 min el de
+  #     mimirtool, que descarga un binario de 40 MB de GitHub releases), no la
+  #     suma. El de grafana-managed no descarga nada y tarda segundos.
+  #   - Aislamiento del fallo. Si el release de mimirtool no baja (red, rate
+  #     limit del CDN), las alertas que SI notifican se siguen validando, y el
+  #     PR muestra en que familia esta el problema sin abrir los logs.
+  # Ambos jobs corren aunque el PR toque solo una familia: el `paths` filtra por
+  # workflow, no por job. Revalidar la otra es idempotente y barato, y evita
+  # meter una action de terceros de filtrado de rutas.
+
+  mimir-rules:
     name: Lint and check Mimir rule files
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -74,3 +107,29 @@ jobs:
           printf '  %s\n' "${files[@]}"
           mimirtool rules lint --dry-run "${files[@]}"
           mimirtool rules check "${files[@]}"
+
+  grafana-managed:
+    name: Check Grafana-managed alerts and runbook
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Sin `Install ...`: pwsh y yq (mikefarah v4) vienen preinstalados en la
+      # imagen ubuntu-24.04 del runner, y el script no necesita nada mas -ni
+      # red, ni credenciales, ni un stack de Grafana al que preguntar-. Todas
+      # sus comprobaciones son lectura de fichero:
+      #   C1 toda regla trae anotacion `runbook`
+      #   C2 el fragmento de esa URL existe como encabezado del runbook
+      #   C3 todo encabezado `### VetSoftware*` tiene su regla, y ninguno
+      #      duplica el ancla de otro
+      #   C4 la URL empieza por el prefijo de ESTE repositorio y ESTE documento
+      #   C5 ninguna consulta usa `_seconds_` (el backend emite en ms: TEL-01)
+      #   C6 los ficheros de provisioning parsean como YAML
+      #   C7 las plantillas Go de los contact points estan balanceadas
+      - name: Check runbook coverage, anchors and Go templates
+        shell: pwsh
+        run: ./.github/scripts/check-grafana-alert-quality.ps1
