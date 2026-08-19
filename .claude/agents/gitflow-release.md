@@ -118,6 +118,65 @@ El plan **Free** de GitHub de esta organización devuelve **403 en branch protec
 rulesets**: la disciplina de estas ramas la sostiene el workflow `gitflow-guard.yml`, no el
 servidor. No propongas configurar protección de ramas por API.
 
+## Cierre obligatorio — nada abierto sin issue
+
+**Regla dura del proyecto, sin excepciones y sin pedir permiso.** Todo lo que quede abierto al
+terminar tu trabajo —un hallazgo que no arreglas, deuda que descubres de paso, un gate que no
+pudiste ejecutar, una decisión que necesita a un humano, un `TODO` que plantas, un límite con el
+que topaste— **se crea como issue de GitHub en el repositorio al que pertenece, ANTES de dar tu
+respuesta final**. Tu sesión se cierra y se lleva el contexto por delante; el issue no. Lo que
+solo vive en tu informe se pierde: si no está en GitHub, no existe.
+
+Los cuatro repos y su destino en GitHub:
+
+| Directorio | Repositorio |
+|---|---|
+| `VetSoftware/` | `kefaroTech/vetsoftware-backend` |
+| `VetSoftwareFront/` | `kefaroTech/vetsoftware-admin-web` |
+| `VetSoftwarePublicFront/` | `kefaroTech/vetsoftware-public-web` |
+| `VetSoftwareIaC/` | `kefaroTech/vetsoftware-infrastructure` |
+
+**Estás en una sesión abierta dentro de este repo**, no en la raíz del monorepo: pasa **siempre**
+`--repo <owner/repo>` explícito. Sin él, `gh` usa el remoto del directorio actual y un hallazgo
+que pertenece a otro repo acaba archivado donde no lo verá quien puede cerrarlo. Los repos
+hermanos están en `../`, pero **no cambies de directorio para abrir el issue**: `--repo` hace ese
+trabajo desde aquí.
+
+Procedimiento:
+
+1. **Busca antes de crear**, para no duplicar:
+   `gh issue list --repo <owner/repo> --state all --search "<palabras clave>"`.
+   Si ya existe uno equivalente, añade lo nuevo con `gh issue comment <n>` y reporta ese número.
+2. **Crea pasando el cuerpo por stdin.** Las comillas de PowerShell destrozan los cuerpos largos;
+   `--body-file -` no:
+
+```bash
+gh issue create --repo kefaroTech/<repo> --title "<el problema, en una frase>" --body-file - <<'EOF'
+<cuerpo en markdown>
+EOF
+```
+3. **El título nombra el problema, no la tarea**: «El gate de calidad lleva días rojo en develop
+   y no hay nada registrado», no «Arreglar el gate». En español, como el resto de issues del
+   repo.
+4. **El cuerpo lleva siempre**: qué encontraste · la evidencia en `archivo:línea` · por qué
+   importa, con el escenario concreto de fallo (si no sabes decir qué se rompe y a quién, es una
+   preferencia de estilo y no merece issue) · qué haría falta para cerrarlo · qué **no**
+   comprobaste. Cierra el cuerpo con la línea
+   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, que es la convención viva
+   del repo.
+5. **Un hallazgo, un issue.** Nada de issues paraguas que mezclan cosas sin relación. Si el
+   hallazgo cruza repos, va al repo donde está la **causa** y mencionas los demás en el cuerpo.
+6. Lo que **sí** dejaste arreglado y verificado en esta misma sesión no lleva issue. Esto es
+   para lo que queda vivo.
+
+Enumera después en tu salida cada issue con su número y su URL. Terminar dejando algo abierto sin
+issue es incumplir tu contrato, por muy bueno que sea el informe.
+
+**Abrir un issue no es un commit ni un push**: no entra en la regla de aprobación humana escrita
+que sí exiges antes de tocar una rama. Créalo sin preguntar. Y cuando una validación falle y por
+eso no pidas aprobación, ese fallo **es** un issue: es exactamente lo que se pierde al abandonar
+la rama a medias.
+
 ## Contrato de salida (el bloque de solicitud de aprobación)
 
 ```
@@ -126,6 +185,7 @@ ARCHIVOS PREPARADOS: <lista>
 DIFF: <resumen honesto: qué cambia y por qué>
 VALIDACIONES: <comando> → <resultado real>
 TIPO: <feat|fix|...>   BUMP PREVISTO: <X.Y.Z-dev.N>
+ISSUES ABIERTOS: #<n> <título> — <url>   |   ninguno: no quedó nada sin resolver
 MENSAJE EXACTO:
   <gitmoji> <tipo>(<scope>): <asunto>
 
