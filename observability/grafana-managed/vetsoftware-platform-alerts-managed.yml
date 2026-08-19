@@ -74,7 +74,7 @@ groups:
         annotations:
           summary: "La tasa HTTP 5xx supera el 5 %"
           description: "El backend superó el 5 % de respuestas 5xx con al menos 20 solicitudes en cinco minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttp5xxratehigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttp5xxratehigh"
 
       - uid: vetsw-http-p95-latency-high
         title: VetSoftwareHttpP95LatencyHigh
@@ -114,7 +114,7 @@ groups:
         annotations:
           summary: "La latencia HTTP p95 supera un segundo"
           description: "La latencia p95 agregada permaneció por encima de un segundo (1000 ms) con volumen suficiente."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp95latencyhigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp95latencyhigh"
 
       - uid: vetsw-http-p99-latency-critical
         title: VetSoftwareHttpP99LatencyCritical
@@ -153,7 +153,7 @@ groups:
         annotations:
           summary: "La latencia HTTP p99 supera dos segundos"
           description: "La latencia p99 agregada permaneció por encima de dos segundos (2000 ms) con volumen suficiente."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp99latencycritical"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarehttpp99latencycritical"
 
   # ─────────────────────────── Runtime JVM ───────────────────────────
   - orgId: 1
@@ -194,7 +194,7 @@ groups:
         annotations:
           summary: "El uso de heap de la JVM supera el 85 %"
           description: "El heap se mantuvo por encima del 85 % durante diez minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmheaphigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmheaphigh"
 
       - uid: vetsw-process-cpu-high
         title: VetSoftwareProcessCpuHigh
@@ -226,7 +226,7 @@ groups:
         annotations:
           summary: "El proceso Java supera el 85 % de CPU"
           description: "El uso de CPU del proceso se mantuvo por encima del 85 % durante diez minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareprocesscpuhigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareprocesscpuhigh"
 
       - uid: vetsw-jvm-gc-overhead-high
         title: VetSoftwareJvmGcOverheadHigh
@@ -258,7 +258,7 @@ groups:
         annotations:
           summary: "La JVM dedica demasiado tiempo al recolector de basura"
           description: "El overhead de GC superó el 20 % durante diez minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmgcoverheadhigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmgcoverheadhigh"
 
       # Renombre cloud conservado del origen: la serie llega como jvm_threads_live
       # (sin el sufijo _threads del scrape local).
@@ -292,7 +292,7 @@ groups:
         annotations:
           summary: "La JVM mantiene más de 200 hilos vivos"
           description: "El número de hilos vivos se mantuvo por encima del umbral durante diez minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmthreadcounthigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarejvmthreadcounthigh"
 
   # ─────────────────────────── HikariCP ───────────────────────────
   - orgId: 1
@@ -333,7 +333,7 @@ groups:
         annotations:
           summary: "El pool de conexiones está saturado"
           description: "Más del 85 % de las conexiones HikariCP permanecen activas desde hace cinco minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabasepoolsaturated"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabasepoolsaturated"
 
       - uid: vetsw-database-connection-pending
         title: VetSoftwareDatabaseConnectionPending
@@ -365,7 +365,7 @@ groups:
         annotations:
           summary: "Hay solicitudes esperando conexión a la base de datos"
           description: "HikariCP mantiene solicitudes pendientes desde hace al menos tres minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectionpending"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectionpending"
 
       - uid: vetsw-database-connection-timeouts
         title: VetSoftwareDatabaseConnectionTimeouts
@@ -397,7 +397,7 @@ groups:
         annotations:
           summary: "Se agotó el tiempo esperando una conexión"
           description: "HikariCP registró al menos un timeout de conexión durante los últimos cinco minutos."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectiontimeouts"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectiontimeouts"
 
   # ─────────────────────── Tokens de seguridad ───────────────────────
   - orgId: 1
@@ -459,4 +459,4 @@ groups:
         annotations:
           summary: "Una tabla de tokens de seguridad supera el umbral de crecimiento"
           description: "La tabla indicada por token_type sigue por encima del umbral después de varias ejecuciones de la purga."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresecuritytokentablegrowth"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresecuritytokentablegrowth"

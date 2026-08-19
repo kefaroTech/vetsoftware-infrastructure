@@ -74,4 +74,4 @@ groups:
             `BusinessMetricCardinalityFilter`, que hoy solo cubre el prefijo
             `vetsoftware.business.` — las familias `email.*` y `lettuce.*` quedan fuera de
             esa allowlist.
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareingestionnearlimit"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareingestionnearlimit"

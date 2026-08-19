@@ -93,7 +93,7 @@ groups:
         annotations:
           summary: "El job programado {{ $labels.job_name }} está registrando fallos"
           description: "El job {{ $labels.job_name }} lleva al menos 30 minutos acumulando ejecuciones con job_outcome failure/error. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
       # Variante critical: TODAS las ejecuciones de las últimas 2 horas fallaron (ni un
       # éxito). Fallo determinista y sistémico. Mismo alertname que la warning —el stack
@@ -146,7 +146,7 @@ groups:
         annotations:
           summary: "El job programado {{ $labels.job_name }} falla el 100 % de sus ejecuciones"
           description: "Todas las ejecuciones de {{ $labels.job_name }} en las últimas 2 horas terminaron en failure/error, sin ningún éxito. El fallo es sistémico: ningún ciclo posterior lo va a recuperar solo."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
   # ---------------------------------------------------------------------------------------
   # Envío de correo (TEL-12). El envío es fire-and-forget: cada fallo es un correo perdido
@@ -201,7 +201,7 @@ groups:
         annotations:
           summary: "Más del 10 % de los envíos de correo están fallando"
           description: "La tasa de email_outcome=failure supera el 10 % en la última media hora con al menos 5 envíos. El envío es fire-and-forget: cada fallo es un correo perdido para el destinatario, aunque la petición HTTP del usuario haya respondido 200."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
 
       # Fallo TOTAL (el caso vivo de TEL-12: 403 de Resend por dominio no verificado).
       # Mismo tratamiento del `unless` que en los jobs: entero dentro de A, con el `> 0`
@@ -242,7 +242,7 @@ groups:
         annotations:
           summary: "El envío de correo falla al 100 %: ningún éxito en 30 minutos"
           description: "Hay envíos con email_outcome=failure y ninguno con success en la última media hora: fallo total y determinista, no transitorio. Caso conocido: 403 de Resend por dominio remitente no verificado — el arreglo es verificar kefaro.tech en Resend, no reintentar."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareemailsendfailing"
 
   # ---------------------------------------------------------------------------------------
   # Seguridad (TEL-36): fuerza bruta / enumeración en el login. El selector por uri está
@@ -284,7 +284,7 @@ groups:
         annotations:
           summary: "Tasa alta de credenciales rechazadas en el login"
           description: "Más de 0,5 rechazos por segundo (~30/min) sostenidos 10 minutos en /auth/login/*. Puede ser fuerza bruta, enumeración de códigos de empleado o un cliente mal configurado en bucle. Contrastar client.ip y user_agent.original en el canal AUDIT de Loki (event=login_failure) antes de bloquear nada."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareauthfailurespike"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareauthfailurespike"
 
   # ---------------------------------------------------------------------------------------
   # Valkey vía el cliente Lettuce. Valkey sostiene la caché de permisos y el rate limiting
@@ -329,7 +329,7 @@ groups:
         annotations:
           summary: "Los comandos a Valkey están fallando"
           description: "El cliente Lettuce registra comandos con error sostenidos 5 minutos. Valkey sostiene la caché de permisos y el rate limiting de bucket4j: con él degradado, el control de fuerza bruta deja de ser fiable. Revisar el estado de ElastiCache y la conectividad antes que el código."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeycommandsfailing"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeycommandsfailing"
 
       - uid: vetsw-valkey-latency-high
         title: VetSoftwareValkeyLatencyHigh
@@ -367,4 +367,4 @@ groups:
         annotations:
           summary: "La latencia p99 de Valkey supera 50 ms"
           description: "El p99 de los comandos Lettuce lleva 10 minutos por encima de 50 ms. Valkey está en el camino caliente de la autorización: su latencia se suma a la de cada petición. Revisar CPU/memoria de ElastiCache y la tasa de eviction."
-          runbook: "docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeylatencyhigh"
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarevalkeylatencyhigh"

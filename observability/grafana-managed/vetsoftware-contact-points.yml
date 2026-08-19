@@ -82,13 +82,15 @@
 #     ya rellenos). `.DashboardURL` se imprime SOLO si existe: hoy ninguna regla trae las
 #     anotaciones `__dashboardUid__`/`__panelId__`, así que no saldrá — está puesto para que
 #     funcione el día que alguna las lleve, sin tocar la plantilla.
-#   - SIN enlace al runbook, a propósito: las 25 reglas que traen la anotación `runbook`
-#     apuntan a `docs/ALERTAMIENTO_OPERATIVO.md`, fichero que NO EXISTE en el repositorio.
-#     Publicarlo sería un enlace roto en CADA mensaje, y un runbook roto es peor que ninguno
-#     porque se deja de comprobar. Para activarlo hacen falta dos cosas: (1) que el fichero
-#     exista con sus anclas por alerta, y (2) que la anotación sea una URL absoluta (una
-#     ruta relativa no es clicable en Slack). Cuando ambas se cumplan, basta añadir al
-#     bloque de enlaces: `{{ with $a.Annotations.runbook }} · <{{ . }}|Runbook>{{ end }}`.
+#   - CON enlace al runbook. Las 26 reglas traen la anotación `runbook`, y desde el PR #81 el
+#     fichero `docs/ALERTAMIENTO_OPERATIVO.md` existe con una sección por alerta y sus anclas
+#     verificadas una a una. La anotación es URL ABSOLUTA porque una ruta relativa no es
+#     clicable en Slack, y apunta a la rama `develop` a propósito: es donde el documento entra
+#     primero —`main` no lo tiene hasta la siguiente release y enlazarlo daría 404— y porque
+#     de un runbook se quiere siempre la versión más reciente, no la de la última release. La
+#     contrapartida, dicha para que no parezca un descuido: una alerta de prod puede enlazar a
+#     un procedimiento por delante de lo desplegado. En documentación operativa eso es lo
+#     correcto; en un contrato de API no lo sería.
 #   - La policy agrupa por `alertname`, así que un mensaje puede traer VARIAS instancias (p.
 #     ej. tres `job_name` distintos fallando). La plantilla itera `.Alerts` y corta en 5,
 #     anunciando el total: sin corte, un grupo grande revienta el límite de longitud de
@@ -162,7 +164,7 @@ contactPoints:
             {{ end }}{{ end }}
             {{- with $a.StartsAt }}> *activa desde:* {{ (tz "America/Bogota" .).Format "2006-01-02 15:04:05" }} (Bogotá)
             {{ end }}
-            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
+            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ with $a.Annotations.runbook }} · <{{ . }}|Runbook>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
             {{ end }}{{ end }}
             {{- if gt (len .Alerts) 5 }}
             _Se muestran 5 de {{ len .Alerts }} instancias; el resto, en Grafana._
@@ -221,7 +223,7 @@ contactPoints:
             {{ end }}{{ end }}
             {{- with $a.StartsAt }}> *activa desde:* {{ (tz "America/Bogota" .).Format "2006-01-02 15:04:05" }} (Bogotá)
             {{ end }}
-            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
+            {{- if $a.GeneratorURL }}<{{ $a.GeneratorURL }}|Abrir la alerta>{{ end }}{{ with $a.Annotations.runbook }} · <{{ . }}|Runbook>{{ end }}{{ if $a.SilenceURL }} · <{{ $a.SilenceURL }}|Silenciar>{{ end }}{{ if $a.DashboardURL }} · <{{ $a.DashboardURL }}|Panel>{{ end }}
             {{ end }}{{ end }}
             {{- if gt (len .Alerts) 5 }}
             _Se muestran 5 de {{ len .Alerts }} instancias; el resto, en Grafana._
