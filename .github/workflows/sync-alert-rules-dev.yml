@@ -1,0 +1,147 @@
+name: Sync alert rules dev
+
+# Sincroniza las reglas de alerta y de grabacion (formato mimirtool:
+# `namespace:` + `groups:`) de observability/mimir-rules/ al ruler de Mimir del
+# stack de Grafana Cloud de dev.
+#
+# El repositorio es la fuente de verdad: `mimirtool rules sync` crea, actualiza
+# y BORRA en el tenant todo lo que no este en los ficheros enviados. Ninguna
+# regla del ruler debe crearse a mano por consola; desapareceria en el
+# siguiente sync sin dejar mas rastro que el log de este workflow.
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "observability/mimir-rules/**"
+      - ".github/workflows/sync-alert-rules-dev.yml"
+      - ".github/scripts/assert-ruler-endpoint.ps1"
+      - ".github/telemetry-endpoints.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Lint, diff and sync rules to dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: iac-apply-dev
+    # Grupo propio y NO terraform-dev: este job no toca el state de Terraform,
+    # asi que no tiene por que serializarse con plan/apply. Sin
+    # cancel-in-progress: dos syncs encolados deben aplicarse en orden, porque
+    # el segundo lleva el contenido mas nuevo y cancelarlo dejaria el ruler con
+    # el anterior.
+    concurrency:
+      group: alert-rules-dev
+      cancel-in-progress: false
+    env:
+      GRAFANA_RULER_URL: ${{ vars.GRAFANA_RULER_URL }}
+      GRAFANA_METRICS_TENANT_ID: ${{ vars.GRAFANA_METRICS_TENANT_ID }}
+      # Reglas comunes a dev y prod. Un fichero nuevo se lista aqui y en
+      # sync-alert-rules-prod.yml; alert-rules-quality.yml valida todo *.yml
+      # del directorio sin tocar esta lista.
+      RULE_FILES: >-
+        observability/mimir-rules/vetsoftware-slo-rules.yml
+        observability/mimir-rules/vetsoftware-slo-alerts.yml
+        observability/mimir-rules/vetsoftware-platform-alerts.yml
+        observability/mimir-rules/vetsoftware-cloud-additions.yml
+
+    steps:
+      # El push ya viene filtrado a develop, pero workflow_dispatch puede
+      # lanzarse desde cualquier rama. Mismo control que terraform-apply-dev.
+      - name: Enforce the development branch
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/develop') {
+            throw "dev solo puede sincronizarse desde refs/heads/develop; revision recibida: $env:GITHUB_REF."
+          }
+
+      - name: Check out authorized IaC revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Modo avisa-y-pasa: sin GRAFANA_RULER_URL o GRAFANA_METRICS_TENANT_ID en
+      # el environment no hay ruler contra el que sincronizar. Terminar en verde
+      # sin hacer nada es deliberado -el mismo comportamiento que el verificador
+      # OTLP tiene hoy para prod sin stack-: fallar aqui pondria en rojo cada
+      # merge a develop por una configuracion que todavia no se ha cargado.
+      # Como cargarla: docs/ALERTAS_GRAFANA_CLOUD.md.
+      - name: Decide whether the dev ruler is configured
+        id: gate
+        shell: pwsh
+        run: |
+          $missing = [string]::IsNullOrWhiteSpace($env:GRAFANA_RULER_URL) -or [string]::IsNullOrWhiteSpace($env:GRAFANA_METRICS_TENANT_ID)
+          if ($missing) {
+            Write-Host "::warning::El environment iac-apply-dev no tiene GRAFANA_RULER_URL / GRAFANA_METRICS_TENANT_ID: se omite la sincronizacion de reglas. Pasos para cargarlos en docs/ALERTAS_GRAFANA_CLOUD.md."
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+              "### Sync de reglas de alerta - dev",
+              "",
+              "OMITIDO: faltan ``GRAFANA_RULER_URL`` / ``GRAFANA_METRICS_TENANT_ID`` en el environment ``iac-apply-dev``.",
+              "",
+              "Como cargarlos: ``docs/ALERTAS_GRAFANA_CLOUD.md``."
+            )
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+          else {
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      # Contraparte del guardarrail OTLP: compara la variable del environment
+      # contra el valor canonico versionado ANTES de tocar el token. Un
+      # mismatch muere aqui, con las credenciales sin exponer a ningun paso.
+      - name: Verify ruler endpoint parity
+        if: steps.gate.outputs.skip != 'true'
+        shell: pwsh
+        run: ./.github/scripts/assert-ruler-endpoint.ps1 -Environment dev -Source 'vars.GRAFANA_RULER_URL / vars.GRAFANA_METRICS_TENANT_ID (environment iac-apply-dev)'
+
+      # Binario de release anclado por version y SHA-256: instalacion
+      # reproducible sin depender de una action de terceros ni de "latest".
+      # mimir-3.1.4 publicado el 2026-07-22; checksum contrastado contra el
+      # asset mimirtool-linux-amd64-sha-256 y el digest del API de releases.
+      - name: Install mimirtool
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          MIMIR_RELEASE: mimir-3.1.4
+          MIMIRTOOL_SHA256: 61d42fdbe6a40bc8abaa4c754763423bc9288d5335e1f8507ccbde261585096c
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/mimirtool \
+            "https://github.com/grafana/mimir/releases/download/${MIMIR_RELEASE}/mimirtool-linux-amd64"
+          echo "${MIMIRTOOL_SHA256}  /tmp/mimirtool" | sha256sum -c -
+          install -m 0755 /tmp/mimirtool /usr/local/bin/mimirtool
+          mimirtool version
+
+      # lint en seco (--dry-run) valida que el YAML y el PromQL parseen sin
+      # reescribir los ficheros; check aplica las buenas practicas de nombrado.
+      # Es la misma validacion local que corre alert-rules-quality.yml en el PR.
+      - name: Lint and check rule files
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          mimirtool rules lint --dry-run $RULE_FILES
+          mimirtool rules check $RULE_FILES
+
+      # Informativo: deja en el log que va a crear/cambiar/borrar el sync.
+      # Tambien es la primera llamada autenticada, asi que un token malo o un
+      # tenant equivocado revientan aqui, antes de escribir nada.
+      - name: Diff rules against the dev ruler
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          MIMIR_API_KEY: ${{ secrets.GRAFANA_RULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          mimirtool rules diff $RULE_FILES \
+            --address="$GRAFANA_RULER_URL" --id="$GRAFANA_METRICS_TENANT_ID"
+
+      - name: Sync rules to the dev ruler
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          MIMIR_API_KEY: ${{ secrets.GRAFANA_RULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          mimirtool rules sync $RULE_FILES \
+            --address="$GRAFANA_RULER_URL" --id="$GRAFANA_METRICS_TENANT_ID"

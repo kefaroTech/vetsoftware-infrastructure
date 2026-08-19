@@ -73,6 +73,9 @@ falta un control explícito.
 
 `.github/telemetry-endpoints.json` guarda el endpoint canónico por ambiente, con el
 stack, el clúster, la fecha de verificación y la lista de sitios donde vive una copia.
+El mismo manifiesto lleva también los valores canónicos del ruler de Mimir
+(`ruler_url` y `metrics_tenant_id`), con su propio verificador y su propio flujo de
+sincronización de reglas de alerta: ver [Alertas en Grafana Cloud](ALERTAS_GRAFANA_CLOUD.md).
 
 Es un archivo del repositorio, así que **se revisa en el pull request**. Las variables
 de GitHub no: cambiarlas no deja rastro en el diff, no pasa por revisión y solo se

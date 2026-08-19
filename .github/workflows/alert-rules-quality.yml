@@ -1,0 +1,76 @@
+name: Alert rules quality
+
+# Validacion LOCAL de las reglas del ruler de Mimir en cada pull request que
+# las toque: sintaxis YAML, PromQL parseable y buenas practicas de nombrado.
+# Sin credenciales y sin acceso remoto, a proposito: un PR corre codigo de una
+# rama cualquiera y no debe ver el token del ruler. El acceso remoto (diff y
+# sync) vive en sync-alert-rules-dev.yml / sync-alert-rules-prod.yml, detras
+# de sus environments con aprobacion.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - "observability/mimir-rules/**"
+      - ".github/workflows/alert-rules-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alert-rules-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Lint and check Mimir rule files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Binario de release anclado por version y SHA-256: instalacion
+      # reproducible sin depender de una action de terceros ni de "latest".
+      # mimir-3.1.4 publicado el 2026-07-22; checksum contrastado contra el
+      # asset mimirtool-linux-amd64-sha-256 y el digest del API de releases.
+      # Misma version que en los workflows de sync: lo que valida el PR es lo
+      # que luego sincroniza.
+      - name: Install mimirtool
+        env:
+          MIMIR_RELEASE: mimir-3.1.4
+          MIMIRTOOL_SHA256: 61d42fdbe6a40bc8abaa4c754763423bc9288d5335e1f8507ccbde261585096c
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/mimirtool \
+            "https://github.com/grafana/mimir/releases/download/${MIMIR_RELEASE}/mimirtool-linux-amd64"
+          echo "${MIMIRTOOL_SHA256}  /tmp/mimirtool" | sha256sum -c -
+          install -m 0755 /tmp/mimirtool /usr/local/bin/mimirtool
+          mimirtool version
+
+      # A diferencia de los workflows de sync, aqui se valida TODO *.yml del
+      # directorio, no una lista fija: un fichero nuevo queda validado aunque
+      # todavia no se haya anadido al RULE_FILES de los syncs. lint corre en
+      # seco (--dry-run): valida sin reescribir los ficheros del checkout.
+      #
+      # No se usa promtool: exigiria extraer los `groups:` de debajo de
+      # `namespace:` con una herramienta extra, y mimirtool ya parsea el YAML
+      # y cada expresion PromQL con el mismo parser embebido de Prometheus.
+      - name: Lint and check rule files
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(observability/mimir-rules/*.yml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No hay ficheros de reglas en observability/mimir-rules/."
+            exit 1
+          fi
+          printf 'Validando %s ficheros:\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+          mimirtool rules lint --dry-run "${files[@]}"
+          mimirtool rules check "${files[@]}"
