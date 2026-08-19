@@ -101,13 +101,45 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
+          # El autor del pull request, no github.actor. En un PR de Dependabot
+          # el actor cambia en cuanto una persona empuja un arreglo sobre la
+          # rama o pulsa "rebase"; el autor no cambia nunca y no es
+          # falsificable: para que valga 'dependabot[bot]' el PR lo tiene que
+          # haber abierto la propia app.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
-          echo "PR: $HEAD_REF -> $BASE_REF"
+          echo "PR: $HEAD_REF -> $BASE_REF (autor: ${PR_AUTHOR:-desconocido})"
 
           fallo=0
 
           case "$HEAD_REF" in
+            dependabot/*)
+              # BE-27. Dependabot no puede renombrar sus ramas: el prefijo
+              # 'dependabot/<ecosistema>/...' lo impone GitHub y no hay opcion
+              # de configuracion que lo cambie. Sin esta excepcion, todos sus
+              # PR nacerian en rojo por el nombre de la rama.
+              #
+              # La excepcion es por autor, igual que la del versionado
+              # automatico en el job de arriba: se exceptua a la identidad, que
+              # no se puede suplantar, y no al nombre de la rama, que cualquiera
+              # puede escribir. Una persona que llame 'dependabot/loquesea' a su
+              # rama sigue fallando.
+              if [ "$PR_AUTHOR" != "dependabot[bot]" ]; then
+                echo "::error title=Rama dependabot/ que no es de Dependabot::'$HEAD_REF' solo es valida en pull requests abiertos por dependabot[bot]; este lo abrio '${PR_AUTHOR:-desconocido}'."
+                echo "::error::Renombrar la rama con un prefijo de GitFlow: feature/, fix/, chore/, ci/, ..."
+                fallo=1
+              elif [ "$BASE_REF" != "develop" ]; then
+                # Coherente con target-branch: develop de .github/dependabot.yml.
+                # Si un PR de Dependabot apunta a main, o se cambio el destino a
+                # mano o alguien toco esa clave: main solo se toca por release o
+                # por hotfix.
+                echo "::error::Los pull requests de Dependabot se integran en develop, no en '$BASE_REF'. Revisar target-branch en .github/dependabot.yml."
+                fallo=1
+              else
+                echo "PR de Dependabot ($HEAD_REF): prefijo exento por autor."
+              fi
+              ;;
             release/*|hotfix/*)
               # Una release o un hotfix cierran contra main. La reintegracion a
               # develop es un PR aparte, y por eso develop tambien es valido.
@@ -138,6 +170,9 @@ jobs:
               feature/  fix/  perf/  refactor/  docs/  test/
               chore/    build/ ci/   sec/       style/     -> integran en develop
               release/  hotfix/                            -> cierran contra main
+
+          El prefijo dependabot/ existe pero esta reservado a dependabot[bot];
+          no sirve para ramas escritas por una persona.
 
           Renombrar la rama:
 
