@@ -8,8 +8,8 @@ hacen los workflows del repo (fuera del alcance de este directorio).
 
 | Fichero | Namespace | Contenido | Ambientes |
 |---|---|---|---|
-| `vetsoftware-slo-rules.yml` | `vetsoftware-slo` | 57 recording rules SLO (cadena completa: objetivos → eventos 5m → ventanas → razones → burn rate → cumplimiento → budget) | dev y prod |
-| `vetsoftware-slo-alerts.yml` | `vetsoftware-slo` | 6 alertas SLO (3 burn rate multiventana, 2 de budget, 1 de integridad) | dev y prod |
+| `vetsoftware-slo-rules.yml` | `vetsoftware-slo-rules` | 57 recording rules SLO (cadena completa: objetivos → eventos 5m → ventanas → razones → burn rate → cumplimiento → budget) | dev y prod |
+| `vetsoftware-slo-alerts.yml` | `vetsoftware-slo-alerts` | 6 alertas SLO (3 burn rate multiventana, 2 de budget, 1 de integridad) | dev y prod |
 | `vetsoftware-platform-alerts.yml` | `vetsoftware-platform` | 11 alertas de plataforma portables (HTTP, JVM, HikariCP, tokens) | dev y prod |
 | `vetsoftware-cloud-additions.yml` | `vetsoftware-additions` | 8 reglas: jobs y correo (warning + critical cada una), crash loop del proceso, abuso de login, y Valkey vía Lettuce (fallos + latencia) | dev y prod |
 | `vetsoftware-heartbeat-prod.yml` | `vetsoftware-heartbeat` | 1 alerta de ausencia de ingesta | **solo prod** |
@@ -69,8 +69,14 @@ propio stack de Grafana Cloud, así que el aislamiento lo da el tenant, no un se
   en lugar de `éxitos == 0`, porque si la serie de éxitos no existe en la ventana la
   comparación con `== 0` no casa con nada y la alerta nunca dispararía justo en el caso que
   debe cubrir (fallo total).
-- **Mismo `namespace` (`vetsoftware-slo`) para recording rules y alertas SLO**, en dos
-  ficheros con nombres de grupo disjuntos: mimirtool los fusiona en el namespace.
+- **Un fichero, un `namespace`. No es una preferencia de estilo: mimirtool lo exige.**
+  El primer intento dio a `vetsoftware-slo-rules.yml` y `vetsoftware-slo-alerts.yml` el mismo
+  namespace `vetsoftware-slo`, suponiendo que la herramienta fusionaría dos ficheros con
+  grupos disjuntos. No lo hace: aborta con
+  `repeated namespace attempted to be loaded`, y el fallo lo destapó el CI porque
+  `promtool` no puede verlo — se valida quitando justamente la clave `namespace:`.
+  Al añadir un fichero, dale namespace propio y valida con `mimirtool`, no solo con
+  `promtool`.
 
 ## Qué NO se portó y por qué
 
@@ -169,7 +175,19 @@ activas. Irrelevante frente al límite del plan Free (10k series).
 
 ## Validación
 
-`mimirtool rules lint` / `mimirtool rules check` sobre este directorio, o `promtool check
-rules` quitando la clave `namespace:` (promtool no la conoce). Las pruebas unitarias de
+`mimirtool rules lint --dry-run` + `mimirtool rules check` sobre este directorio — **es la
+validación que manda**, y es la que corre el workflow de calidad del PR. En local, sin
+instalar nada:
+
+```bash
+docker run --rm -v "$PWD:/rules" grafana/mimirtool:3.1.4 \
+  rules lint --dry-run /rules/*.yml
+docker run --rm -v "$PWD:/rules" grafana/mimirtool:3.1.4 \
+  rules check /rules/*.yml
+```
+
+`promtool check rules` también sirve, pero **solo tras quitar la clave `namespace:`** (no la
+conoce), y por eso mismo es ciego a los errores que viven en ese campo — el de namespace
+repetido, sin ir más lejos. Úsalo como complemento, nunca como sustituto. Las pruebas unitarias de
 reglas (`docker/tests/prometheus-*.test.yml` del backend) cubren la edición **local**; sus
 series sintéticas usan nombres scrape (`_seconds_`) y no aplican tal cual a estos gemelos.

@@ -20,7 +20,7 @@
 # ATENCIÓN dev: con ~370 requests/7d, estas guardas solo se cumplen en ráfagas de actividad —
 # ver las advertencias de volumen en el README de este directorio.
 
-namespace: vetsoftware-slo
+namespace: vetsoftware-slo-alerts
 
 groups:
   # El nombre lleva el sufijo `-alerts` para no colisionar con el grupo homónimo de reglas de

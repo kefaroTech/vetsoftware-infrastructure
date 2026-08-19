@@ -33,7 +33,7 @@
 # Intervalos: el fichero local usa 30 s en varios grupos; aquí todos son 1 m — es el mínimo
 # cómodo del ruler de Grafana Cloud y, con el volumen real de dev, 30 s no aporta nada.
 
-namespace: vetsoftware-slo
+namespace: vetsoftware-slo-rules
 
 groups:
   # ---------------------------------------------------------------------------
