@@ -22,6 +22,13 @@
 # instancias del mismo nombre (varios `job_name` de VetSoftwareScheduledJobFailing, por
 # ejemplo) se compactan en una sola notificación.
 #
+# Consecuencia de la partición por cadencia de VetSoftwareScheduledJobFailing (19-08-2026):
+# sus DOS reglas críticas —`-critical` para los jobs de ciclo corto y `-critical-slow` para
+# los de ciclo largo— comparten alertname y severity, así que caen en el MISMO grupo y llegan
+# en una sola notificación. Es lo deseable: al de guardia le importa qué jobs están rotos, no
+# de qué regla salió cada línea; y `{{ $labels.job_name }}` distingue una instancia de otra
+# dentro del mensaje.
+#
 # critical — 30s / 5m / 4h:
 #   Un fallo terminal debe llegar rápido: 30 s solo compra compactar instancias simultáneas
 #   del mismo alertname. El recordatorio cada 4 h es presión deliberada: un critical sin

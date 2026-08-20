@@ -1,6 +1,6 @@
 # Alertamiento operativo — alertas de Grafana Cloud
 
-Runbook de las **26 alertas Grafana-managed** definidas en `observability/grafana-managed/`.
+Runbook de las **27 alertas Grafana-managed** definidas en `observability/grafana-managed/`.
 Cada regla enlaza aquí desde su anotación `runbook`, y el ancla es el nombre de la regla en
 minúsculas: la sección `### VetSoftwareSloFastBurn` responde a `#vetsoftwareslofastburn`.
 **Si renombras una regla, renombra su encabezado o rompes el enlace.**
@@ -41,6 +41,7 @@ ausente, y por eso la que todavía no mide va primero.
 | `VetSoftwareHttpP99LatencyCritical` | ~~Igual. Además, un p99 sobre 20 muestras es la petición más lenta, no un percentil~~ → **CORREGIDO 2026-08-19**: misma exclusión, y la guarda **sube** a ≥ 100 = 1/(1−0,99) precisamente por eso |
 | `VetSoftwareSecurityTokenTableGrowth` | ~~**Se rompe en cada despliegue.** Con dos `service_version` vivas, `group_left()` falla por serie duplicada~~ → **CORREGIDO 2026-08-19**: el join va por `(job, instance, service_version)` y el lado derecho se agrega con `max by (...)`, así que no puede volver a duplicarse. `execErrState: Error` **se mantiene** deliberadamente, con la descripción corregida para que un estado de Error no se lea como crecimiento de tokens |
 | `VetSoftwareScheduledJobFailing` (critical) | ~~**Falso positivo estructural.** `security.tokens.cleanup` solo emite `no_work` y nunca `success`, así que un fallo aislado cumplía «ningún éxito en 2 h» al instante~~ → **CORREGIDO 2026-08-19** con una guarda de repetición `>= 2`. **Ojo: NO se arregla metiendo `no_work` en el lado excluido** —se probó y deja muda la alerta de la reconciliación DIAN, que alterna `no_work` con `failure`. Ver la sección de la alerta |
+| `VetSoftwareScheduledJobFailing` (las tres) | ~~**Muda para los jobs DIAN.** El backend los espació de 10 min a **12 h** (commit `dffef716`) y la ventana siguió en `[2h]`: con un ciclo de 12 h nunca hay dos incrementos en 2 horas, así que el `>= 2` es **aritméticamente** inalcanzable. La advertencia se rompía igual, por el borde `for: 30m` / ventana `[30m]`~~ → **CORREGIDO 2026-08-19**: advertencia a `[2h]`, crítica rápida a `[3h]` y una segunda crítica `-critical-slow` con `[26h]` para los jobs de ciclo largo, que además es el cajón por defecto. **La ventana es la cadencia del job en tiempo de reloj: si cambia un `fixedDelayString` en el backend, hay que volver aquí, y nada lo comprueba.** Ver la sección de la alerta |
 
 Y un punto ciego que no es una regla rota sino una que no puede ver su fallo más probable:
 **`VetSoftwareEmailSendFailing`** no dispara si falta `RESEND_API_KEY`, porque
@@ -2275,34 +2276,65 @@ de protocolo, se añade a la exclusión **con la medición delante**, no por par
 ### VetSoftwareScheduledJobFailing
 
 **Qué significa** — Un trabajo programado del backend (los que corren solos, sin nadie delante)
-está terminando mal. Detrás de este nombre hay **dos reglas** con el mismo título: la de
-advertencia dice «este job registra fallos»; la crítica dice «este job no ha acertado ni una vez».
-Nadie va a reintentarlo por su cuenta: si el job no funciona, el trabajo se acumula en silencio.
+está terminando mal. Detrás de este nombre hay **tres reglas** con el mismo título: la de
+advertencia dice «este job registra fallos»; las dos críticas dicen «este job no ha acertado ni
+una vez», una para los jobs de ciclo corto y otra para los de ciclo largo. Nadie va a reintentarlo
+por su cuenta: si el job no funciona, el trabajo se acumula en silencio.
 
-**Qué la dispara** — Ambas viven en `observability/grafana-managed/vetsoftware-cloud-additions-managed.yml`,
-grupo `vetsoftware-scheduled-jobs`, evaluación cada 1 m, y ambas con `for: 30m`.
+**La cadencia de cada job es parte de la alerta.** Es lo primero que hay que tener delante, porque
+la ventana de cada regla no es un número redondo elegido a ojo: es la cadencia traducida a tiempo
+de reloj. Estado a 19-08-2026, leído en el backend:
 
-*Advertencia* (`uid: vetsw-scheduled-job-failing-warning`, `severity=warning`):
+| `job_name` | Cadencia (`fixedDelay`) | Declarada en | Regla crítica que lo cubre |
+|---|---|---|---|
+| `dian.pending.reconciliation` | **12 h** | `PendingReconciliationJob.java:66` (`43200000`) | `-critical-slow`, ventana `[26h]` |
+| `dian.contingency.retry` | **12 h** | `ContingencyRetryJob.java:84` (`43200000`) | `-critical-slow`, ventana `[26h]` |
+| `security.tokens.cleanup` | **1 h** | `TokenCleanupJob.java:33` (`PT1H`) | `-critical`, ventana `[3h]` |
+
+Los dos jobs DIAN pasaron de 10 y 5 minutos a 12 horas en el commit `dffef716` del backend; los
+mismos `43200000` ms son el valor por defecto en `application.yml:301` y `:313`.
+
+**Qué la dispara** — Las tres viven en `observability/grafana-managed/vetsoftware-cloud-additions-managed.yml`,
+grupo `vetsoftware-scheduled-jobs`, evaluación cada 1 m, y las tres con `for: 30m`.
+
+*Advertencia* (`uid: vetsw-scheduled-job-failing-warning`, `severity=warning`), una sola regla
+para todos los jobs:
 
 ```promql
 sum by (job_name) (
-  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[30m])
+  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[2h])
 ) > 0
 ```
 
-Cualquier ejecución con resultado `failure`, `partial_failure` o `error` en la última media hora.
+Cualquier ejecución con resultado `failure`, `partial_failure` o `error` en las últimas dos horas.
 El umbral es `> 0` porque el contador de fallos **solo existe si alguna vez hubo un fallo**: no
-hay línea base que superar.
+hay línea base que superar. Como no cuenta ciclos —le basta un incremento— esta regla no necesita
+partirse por cadencia: su ventana solo decide cuánto tiempo sigue viva la alerta tras el fallo.
 
-*Crítica* (`uid: vetsw-scheduled-job-failing-critical`, `severity=critical`): al menos **dos**
-ejecuciones fallidas en `[2h]`, **menos** los `job_name` que en esas 2 h hayan procesado bien
-algún elemento (`success` o `partial_failure`):
+*Crítica, familia rápida* (`uid: vetsw-scheduled-job-failing-critical`, `severity=critical`):
+al menos **dos** ejecuciones fallidas de `security.tokens.cleanup` en `[3h]` —dos de sus ciclos de
+una hora, con margen— **menos** el caso en que en esas 3 h haya procesado bien algún elemento
+(`success` o `partial_failure`):
 
 ```promql
-(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|error"}[2h])) >= 2)
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name="security.tokens.cleanup",job_outcome=~"failure|error"}[3h])) >= 2)
 unless
-(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"success|partial_failure"}[2h])) > 0)
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name="security.tokens.cleanup",job_outcome=~"success|partial_failure"}[3h])) > 0)
 ```
+
+*Crítica, familia lenta y cajón por defecto* (`uid: vetsw-scheduled-job-failing-critical-slow`,
+`severity=critical`): lo mismo para **todos los demás** `job_name` —hoy los dos DIAN, y cualquier
+job futuro que nadie clasifique— con ventana `[26h]`, que son dos ciclos de 12 h más 2 h de
+margen:
+
+```promql
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_name!="security.tokens.cleanup",job_outcome=~"failure|error"}[26h])) >= 2)
+unless
+(sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_name!="security.tokens.cleanup",job_outcome=~"success|partial_failure"}[26h])) > 0)
+```
+
+Los matchers de las dos críticas son mutuamente excluyentes, así que **ningún job dispara el
+crítico por duplicado**.
 
 El `unless` con `> 0` del lado de los éxitos está escrito así a propósito: un `== 0` clásico no
 casaría si la serie de éxitos **no existe**, y la alerta moriría en silencio justo en el fallo
@@ -2320,29 +2352,57 @@ total que debe cubrir.
   Contradice el «sin ningún éxito» de la crítica, pero es exactamente el fallo parcial que la
   advertencia debe ver.
 - **El `>= 2` es una guarda de repetición, no de volumen.** Separa «falló un ciclo suelto» de
-  «lleva horas sin acertar». No puede subirse a 3: `security.tokens.cleanup` solo ejecuta 2,02
-  veces por cada 2 h, así que con `>= 3` un cleanup roto al 100 % nunca alcanzaría el umbral y la
-  regla quedaría **ciega** para él.
+  «lleva horas sin acertar». No puede subirse a 3: cuantos menos ciclos entren en la ventana,
+  antes deja de ser alcanzable el umbral, y un job roto al 100 % que nunca alcanza el umbral es
+  una regla **ciega**, que es peor negocio que un aviso de más.
+- **Y por eso mismo la crítica está partida en dos.** Como `>= 2` significa «dos CICLOS
+  seguidos», la ventana tiene que caber exactamente dos ciclos de ese job: ni menos —regla
+  aritméticamente muda— ni mucho más —dos fallos sueltos separados por veinte horas contarían
+  como consecutivos—. Con las cadencias de hoy no hay un número que sirva a la vez para 12 h y
+  para 1 h, y equivocarse tiene consecuencias opuestas y las dos reales: `[2h]` para un job de
+  12 h deja la alerta muda; `[26h]` para `security.tokens.cleanup` reintroduce a escala 13x el
+  falso positivo que se corrigió el 19-08-2026, porque para ese job el `unless` es vacío (su
+  estado sano es `no_work`, casi nunca emite `success`).
 
 **Solapamiento con la advertencia**: en un fallo total casan las dos, y es deliberado. La
 notification policy agrupa por `(alertname, severity)` y enruta cada `severity` a un receptor
 distinto, así que llega una notificación al canal de horario laboral y otra al de guardia. Es la
 escalada idiomática, no un duplicado.
 
-**El `for: 30m` combinado con la ventana `[30m]` tiene una consecuencia que conviene saber**: un
-único fallo aislado mantiene la expresión en `> 0` durante exactamente 30 minutos y luego sale de
-la ventana, así que **queda en el borde y normalmente no llega a madurar**. Para que esta alerta
-notifique hacen falta fallos repetidos o sostenidos. Es deliberado — un ciclo fallido que el
-siguiente recupera no es un incidente — pero significa que **la ausencia de esta alerta no prueba
-que no haya habido ningún fallo**.
+**La advertencia ya no se queda en el borde del `for`, y eso es un cambio de comportamiento**
+(19-08-2026). Hasta esa fecha la ventana era `[30m]` y el `for` `30m`: un fallo aislado mantenía
+la expresión en `> 0` durante exactamente media hora y salía del lookback justo cuando el `for` la
+reclamaba, así que **la advertencia no llegaba a notificar de ningún job cuyo ciclo fuera de 30
+minutos o más** — ni siquiera fallando en todas y cada una de sus pasadas. Con ciclos de 12 h
+todos los fallos son aislados por definición, y `security.tokens.cleanup`, a 1 h, tampoco maduraba
+nunca: entre fallo y fallo la expresión volvía a cero durante media hora. Ese segundo caso estaba
+roto desde antes del cambio de cadencia y no lo había visto nadie.
+
+Con la ventana en `[2h]` el fallo permanece visible unas dos horas y el `for: 30m` madura con
+margen. **Consecuencia buscada: un único ciclo fallido sí produce ahora advertencia** — que es lo
+que este mismo runbook viene afirmando más abajo y lo que hasta hoy no ocurría. A 12 horas de
+ciclo no existe «esperar al siguiente ciclo»: son doce horas más de trabajo parado.
+
+**Lo que la crítica de la familia lenta NO puede hacer, y hay que saberlo antes de confiar en
+ella**: con un ciclo de 12 h no puede avisar antes de unas 24-26 horas, porque hasta entonces no
+existen dos ciclos fallidos que contar. Ninguna expresión arregla eso — la alerta no puede ser más
+rápida que la señal. Para documentos fiscales atascados eso es demasiado, y la detección temprana
+tiene que venir de otro sitio: del backlog (`vetsoftware_business_dian_backlog_documents`, que es
+independiente de la cadencia del job y **hoy no tiene alerta**) o de acortar la cadencia del job.
 
 **Primero mirar**
 
-1. Qué job y en qué proporción. Es la consulta que separa «uno falló» de «está todo caído»:
+1. Qué job y en qué proporción. Es la consulta que separa «uno falló» de «está todo caído».
+   **Usa `[26h]`, no `[2h]`**: con los jobs DIAN a 12 h de ciclo, una ventana de 2 horas devuelve
+   vacío casi siempre y parece que no pasa nada.
 
    ```promql
-   sum by (job_name, job_outcome) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware"}[2h]))
+   sum by (job_name, job_outcome) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware"}[26h]))
    ```
+
+   Si el resultado te desconcierta, compáralo con el número de ciclos que **caben** en la ventana:
+   26 h son ~2 ejecuciones de un job DIAN y ~26 de `security.tokens.cleanup`. Un job DIAN con
+   «solo» 2 fallos en la ventana ha fallado el 100 % de sus oportunidades.
 
 2. Traduce el `job_name` a la clase que lo ejecuta — es lo que necesitas para leer el código:
 
@@ -2384,8 +2444,9 @@ va a recuperar solo.
 2. Configuración rota que hace fallar el 100 %: empresa sin proveedor DIAN configurado
    (`IllegalStateException`), token de MATIAS expirado, credencial revocada. Falla siempre, hasta
    que alguien cambie configuración.
-3. Fallo transitorio del proveedor externo (timeout, 429, 5xx). Este sí se recupera solo, y por
-   eso normalmente no madura el `for: 30m`.
+3. Fallo transitorio del proveedor externo (timeout, 429, 5xx). Este sí se recupera solo — pero
+   «solo» significa **en el ciclo siguiente**, y para un job DIAN el ciclo siguiente son 12 horas.
+   Producirá advertencia; solo escalará a crítica si el ciclo de dentro de 12 h vuelve a fallar.
 4. Base de datos saturada o el lease de job (`DianJobLeasePort`) sin liberar tras una parada
    abrupta de la tarea Fargate.
 
@@ -2407,7 +2468,9 @@ sola vez en la transición a agotado, no en cada pasada.
   horario hábil, no de madrugada. Es exactamente lo que la crítica excluye por diseño.
 - **Advertencia sola por un único ciclo fallido**: desde el 19-08-2026 la crítica exige dos
   ejecuciones fallidas, así que un fallo suelto solo produce advertencia. Si el siguiente ciclo
-  sale bien, se resolvió solo y no hay nada que hacer.
+  sale bien, se resolvió solo y no hay nada que hacer. **Ojo con «el siguiente ciclo» en los jobs
+  DIAN: son 12 horas.** No es «espera un rato y mira»; es «esto se queda así hasta mañana». Si el
+  trabajo pendiente es fiscal, mira el backlog antes de dar por buena esa espera.
 - Justo después de un despliegue: el primer ciclo tras arrancar puede fallar por el lease del
   ciclo anterior. Si el siguiente ciclo sale `success`, se resolvió solo.
 - En dev, cualquier disparo posterior a las 20:00 de Bogotá es residuo de la ventana anterior: el
@@ -2434,20 +2497,41 @@ sola vez en la transición a agotado, no en cada pasada.
   | Con `no_work` en el lado excluido | **vacío — MUDA** |
   | Actual (`>= 2 unless success\|partial_failure > 0`) | **6,05** — dispara |
 
-  La razón: `dian.pending.reconciliation` corre cada 10 min y produce ~6 `failure` **y** ~6
-  `no_work` por cada 2 h, porque muchos ciclos no encuentran documentos pendientes. `no_work`
-  **convive con el fallo total**: no es prueba de salud. Excluir por él habría silenciado el
-  incidente real que la regla existe para cubrir.
+  La razón: `dian.pending.reconciliation` producía entonces ~6 `failure` **y** ~6 `no_work` por
+  cada 2 h, porque muchos ciclos no encuentran documentos pendientes. `no_work` **convive con el
+  fallo total**: no es prueba de salud. Excluir por él habría silenciado el incidente real que la
+  regla existe para cubrir.
+
+  > Aquellas cifras se midieron con la cadencia **vieja** de 10 minutos, la única que existía a
+  > esa hora. Ese job corre hoy cada 12 h y ya no lo cubre la regla `-critical`, sino la
+  > `-critical-slow`. La conclusión sobre `no_work` no depende de la cadencia y sigue vigente;
+  > los números, sí, y por eso quedan fechados.
 
   *El arreglo real*, dos cambios independientes: (1) el lado excluido pasa a
   `success|partial_failure` —los únicos resultados que prueban que algún elemento se procesó
   bien— y `no_work` queda fuera de ambos lados; (2) una guarda de repetición `>= 2` en el lado de
   los fallos, que es lo que de verdad mata el falso positivo, porque el problema de fondo no era
   `no_work` sino que la expresión no distinguía un ciclo fallido suelto de un fallo sostenido.
-  El `2` está medido: un fallo aislado extrapola a ~1,0-1,1 y queda por debajo; el job más lento
-  (`security.tokens.cleanup`, 2,02 ejecuciones/2 h) sigue alcanzando el umbral si se rompe del
-  todo. Contra-prueba inyectando +1 fallo simulado a los tres jobs: solo sobrevive
-  `dian.pending.reconciliation` (7,05); los otros dos caen en 1 y quedan filtrados.
+  El `2` está medido: un fallo aislado extrapola a ~1,0-1,1 y queda por debajo; un job roto del
+  todo sí alcanza el umbral. Contra-prueba inyectando +1 fallo simulado a los tres jobs: solo
+  sobrevive `dian.pending.reconciliation` (7,05); los otros dos caen en 1 y quedan filtrados.
+- **~~La ventana de `[2h]` dejaba muda la crítica de los jobs DIAN~~ → CORREGIDO el 19-08-2026
+  partiendo la crítica por cadencia.** El commit `dffef716` del backend espació
+  `dian.pending.reconciliation` y `dian.contingency.retry` de 10 y 5 minutos a **12 horas**, y con
+  un ciclo de 12 h no puede haber dos incrementos del contador dentro de una ventana de 2 h: el
+  `>= 2` pasó a ser **aritméticamente inalcanzable**, no «poco probable». La advertencia se rompía
+  igual, por el borde `for: 30m` / ventana `[30m]`. Se corrigió con tres cambios: ventana de la
+  advertencia a `[2h]`, ventana de la crítica rápida a `[3h]` (el `2,02` de antes era una
+  casualidad de la extrapolación de `increase()`, no un margen) y una segunda crítica
+  `-critical-slow` con ventana `[26h]` para los jobs de ciclo largo, que además es el **cajón por
+  defecto** de cualquier job nuevo. Meterlos a todos en una sola ventana de 26 h habría
+  reintroducido el falso positivo de `security.tokens.cleanup` a escala 13x.
+- **Nada comprueba que la ventana siga cuadrando con la cadencia.** Es el defecto de proceso que
+  hay detrás de lo anterior: el `fixedDelayString` de un `@Scheduled` es un contrato con la alerta
+  que lo vigila, y viven en **dos repositorios distintos**. `alert-rules-quality.yml` valida
+  **forma** (YAML, anclas del runbook, plantillas Go), no **comportamiento**, así que un cambio de
+  cadencia en el backend no enciende ninguna luz aquí. La próxima vez volverá a pasar y volverá a
+  descubrirse a mano.
 - **Hay un `@Scheduled` que ninguna de las dos reglas ve.** En el stack existe una serie de
   `tasks_scheduled_execution_milliseconds_count` **sin `job_name` ni `job_outcome`** (≈1.954
   ejecuciones en 7 días): es `BusinessGaugeMetrics.refresh`, que no está envuelto en
@@ -3161,9 +3245,10 @@ deben estar cableadas en prod, no solo en dev.
   `#vetsoftwarebackenddown`, el nombre de la alerta *anterior* (la del mundo *scrape*, cuando `up`
   existía), y quien hiciera clic desde Slack en plena caída de producción aterrizaba en ninguna
   parte. Hoy apunta a `#vetsoftwarebackendtelemetryabsent` por URL absoluta. Verificado el
-  2026-08-19 cruzando las 26 anotaciones `runbook` contra los encabezados de este documento: **no
-  queda ni un ancla huérfana** (dos anclas las comparten dos reglas cada una —las variantes
-  `warning`/`critical` de `ScheduledJobFailing` y `EmailSendFailing`— y es correcto).
+  2026-08-19 cruzando las 27 anotaciones `runbook` contra los encabezados de este documento: **no
+  queda ni un ancla huérfana** (dos anclas las comparten varias reglas — `#vetsoftwarescheduledjobfailing`
+  la comparten **tres** desde la partición por cadencia de la crítica, y
+  `#vetsoftwareemailsendfailing` dos — y es correcto).
 - **No he podido validar esta regla contra prod.** El único stack con tráfico es dev. Lo que sí
   verifiqué (19-08-2026) es el **mecanismo**: `target_info` y `jvm_threads_live` existen, comparten
   `job="mainvet/vetsoftware"`, llevan `service_version` y `deployment_environment_name=dev`, y

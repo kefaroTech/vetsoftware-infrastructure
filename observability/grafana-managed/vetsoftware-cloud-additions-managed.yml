@@ -40,8 +40,14 @@
 #    enrutado. El título no interviene en ninguno de los dos.
 #
 # 4) relativeTimeRange.from cubre en cada regla la ventana más larga de su expresión
-#    (hay [5m], [30m] y [2h]); las consultas son instant, pero el rango debe abarcar el
-#    lookback para que la vista previa y el backtesting de Grafana no trunquen datos.
+#    (hay [5m], [30m], [2h], [3h] y [26h]); las consultas son instant, pero el rango debe
+#    abarcar el lookback para que la vista previa y el backtesting de Grafana no trunquen
+#    datos.
+#
+# 5) La ventana de una regla que cuenta EJECUCIONES de un job no es un parámetro libre: es
+#    la cadencia de ese job traducida a tiempo de reloj. Si cambia un `fixedDelayString` en
+#    el backend, hay que volver aquí — el detalle está en la cabecera del grupo
+#    vetsoftware-scheduled-jobs, que es donde muerde.
 
 apiVersion: 1
 
@@ -49,19 +55,102 @@ groups:
   # ---------------------------------------------------------------------------------------
   # Jobs programados (TEL-10). Un job que falla no tiene usuario delante que reintente:
   # sin alerta, el fallo solo existe en un contador que nadie mira.
+  #
+  # ── LA VENTANA NO ES UN PARÁMETRO LIBRE: ES LA CADENCIA DEL JOB EN TIEMPO DE RELOJ ──
+  #    (recalibrado el 19-08-2026, después de espaciar los dos jobs DIAN de 10 min a 12 h)
+  #
+  # El `>= 2` de la crítica significa «DOS CICLOS seguidos fallidos». Para que eso sea cierto
+  # la ventana tiene que caber dos ciclos: ni menos —la regla se vuelve aritméticamente muda—
+  # ni mucho más —dos fallos sueltos separados por veinte horas contarían como consecutivos—.
+  #
+  # Los tres jobs envueltos en ScheduledJobTelemetry corren hoy a DOS cadencias distintas
+  # (leído en el backend el 19-08-2026):
+  #
+  #   | job_name                    | cadencia | fixedDelay declarado en                       |
+  #   |-----------------------------|----------|-----------------------------------------------|
+  #   | dian.pending.reconciliation | 12 h     | PendingReconciliationJob.java:66 (43.200.000) |
+  #   | dian.contingency.retry      | 12 h     | ContingencyRetryJob.java:84      (43.200.000) |
+  #   | security.tokens.cleanup     |  1 h     | TokenCleanupJob.java:33          (PT1H)       |
+  #
+  # Los dos de 12 h vienen del commit dffef716 «espaciar los jobs a 12h», ya ancestro de
+  # origin/develop; los mismos 43.200.000 ms son el default de application.yml:301 y :313.
+  # Son fixedDelay, no fixedRate: el periodo real es 12 h MÁS lo que dure la pasada.
+  #
+  # Las dos direcciones del error de ventana son reales y opuestas:
+  #
+  #   · Ventana CORTA para un job LENTO -> ALERTA MUDA. Con `[2h]` y un ciclo de 12 h nunca
+  #     hay dos incrementos dentro de la ventana: `increase(...[2h])` vale como mucho ~1,1 y
+  #     el `>= 2` es ARITMÉTICAMENTE inalcanzable, no «poco probable». Es lo que dejaba muda
+  #     la crítica de los dos jobs DIAN en cuanto dffef716 llegara a dev.
+  #   · Ventana LARGA para un job RÁPIDO -> FALSO POSITIVO CRÍTICO. Para
+  #     `security.tokens.cleanup` el `unless` es VACUO: su resultado sano es `no_work` y casi
+  #     nunca emite `success` (medido: 21 ejecuciones y CERO `success` en 7 días). Con una
+  #     ventana de 26 h, dos fallos suyos aislados separados por veinte horas —24 de sus 26
+  #     ejecuciones sanas— mandarían un crítico a guardia: el mismo falso positivo estructural
+  #     que se corrigió el 19-08-2026, reintroducido a escala 13x.
+  #
+  # De ahí el reparto de este grupo: UNA warning para todos los jobs y DOS críticas partidas
+  # por cadencia.
+  #
+  #   · La warning NO cuenta ciclos. Su umbral es `> 0`: le basta un incremento, y la ventana
+  #     solo decide cuánto tiempo sigue viva la alerta después del fallo. Por eso no se parte:
+  #     `[2h]` sirve a las dos familias.
+  #   · La crítica SÍ cuenta ciclos, y es la única que se parte:
+  #       - vetsw-scheduled-job-failing-critical      -> familia RÁPIDA (ciclo <= 2 h):
+  #         matcher `job_name="security.tokens.cleanup"`, ventana [3h].
+  #       - vetsw-scheduled-job-failing-critical-slow -> familia LENTA y CAJÓN POR DEFECTO:
+  #         matcher `job_name!="" , job_name!="security.tokens.cleanup"`, ventana [26h].
+  #
+  # Los dos matchers son mutuamente excluyentes —Prometheus admite varios matchers sobre la
+  # misma etiqueta y los combina con AND—, así que ningún job casa las dos reglas y nadie
+  # recibe el crítico por duplicado.
+  #
+  # Que el cajón por defecto sea el LENTO es deliberado: un job nuevo que nadie clasifique
+  # queda CUBIERTO en vez de invisible. Si resultara ser rápido, el riesgo es de sobre-aviso,
+  # no de silencio — y ni siquiera eso en la mayoría de casos: para cualquier job que emita
+  # `success` cuando está sano, el `unless` sigue protegiendo (cero éxitos en 26 h ya es un
+  # fallo total de verdad). La sobre-sensibilidad solo muerde a los jobs con forma de
+  # `security.tokens.cleanup`, cuyo estado sano es `no_work`. Al añadir un job con ciclo
+  # <= 2 h, muévelo a la regla rápida ampliando su matcher a
+  # `job_name=~"security\\.tokens\\.cleanup|el.nuevo"` y excluyéndolo en la lenta.
+  #
+  # PRECIO QUE ESTO NO PUEDE PAGAR: con un ciclo de 12 h, la crítica de los jobs DIAN no
+  # puede avisar antes de ~24-26 h, porque hasta entonces no existen dos ciclos fallidos que
+  # contar. Ninguna expresión arregla eso: la alerta no puede ser más rápida que la señal. Si
+  # 24 h es demasiado para documentos fiscales atascados —lo es—, la detección temprana tiene
+  # que venir del backlog (`vetsoftware_business_dian_backlog_documents`, hoy graficado en el
+  # panel 13 y SIN alerta) o de acortar la cadencia del job. Está anotado como issue aparte.
   # ---------------------------------------------------------------------------------------
   - orgId: 1
     name: vetsoftware-scheduled-jobs
     folder: VetSoftware
     interval: 1m
     rules:
-      # Variante warning: hay fallos en la última media hora (fallo parcial o intermitente).
+      # Variante warning: el job ha registrado algún fallo —parcial o intermitente— dentro de
+      # la ventana. Umbral `> 0`, o sea que le basta UN incremento: no cuenta ciclos, y por
+      # eso es la única de las tres que no necesita partirse por cadencia.
+      #
+      # LA VENTANA PASÓ DE [30m] A [2h] EL 19-08-2026, y no por gusto: con [30m] esta regla
+      # NO PODÍA NOTIFICAR de ningún job cuyo ciclo fuera >= 30 min, ni siquiera fallando en
+      # todas y cada una de sus pasadas. Un fallo aislado deja la expresión en `> 0` durante
+      # ~30 minutos justos —lo que el incremento sigue dentro del lookback— y el `for: 30m`
+      # exige 30 minutos CONTINUOS: la condición dejaba de ser cierta exactamente cuando el
+      # `for` la reclamaba. Con ciclos de 12 h (los dos DIAN) todos los fallos son aislados
+      # por definición; y `security.tokens.cleanup`, a 1 h, tampoco maduraba nunca, porque
+      # entre fallo y fallo la expresión volvía a 0 durante media hora. Ese segundo caso ya
+      # estaba roto ANTES del cambio de cadencia y no lo había visto nadie.
+      #
+      # Con [2h] el fallo permanece visible ~2 h y el `for` madura con margen en las dos
+      # familias. Consecuencia buscada: un ÚNICO ciclo fallido sí produce ahora advertencia.
+      # Es lo que el runbook viene afirmando («un fallo suelto solo produce advertencia») y
+      # lo que hasta hoy no ocurría. A 12 h de ciclo no existe «esperar al siguiente ciclo»:
+      # son doce horas más de documentos fiscales parados.
       - uid: vetsw-scheduled-job-failing-warning
         title: VetSoftwareScheduledJobFailing
         condition: C
         data:
           - refId: A
-            relativeTimeRange: { from: 1800, to: 0 }
+            relativeTimeRange: { from: 7200, to: 0 }
             datasourceUid: grafanacloud-prom
             model:
               refId: A
@@ -86,7 +175,7 @@ groups:
               # `sum by (job_name)` como job_name="" y produzca un aviso con el nombre en blanco.
               expr: |
                 sum by (job_name) (
-                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[30m])
+                  increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|partial_failure|error"}[2h])
                 )
           - refId: C
             datasourceUid: __expr__
@@ -107,11 +196,16 @@ groups:
           service: vetsoftware
         annotations:
           summary: "El job programado {{ $labels.job_name }} está registrando fallos"
-          description: "El job {{ $labels.job_name }} lleva al menos 30 minutos acumulando ejecuciones con job_outcome failure, partial_failure o error. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
+          description: "El job {{ $labels.job_name }} lleva al menos 30 minutos con alguna ejecución de job_outcome failure, partial_failure o error dentro de las últimas 2 horas. La ventana de 2 h cubre la cadencia más lenta que se vigila aquí (los jobs DIAN corren cada 12 h): con la ventana anterior de 30 min, un fallo suelto se salía del lookback justo cuando el for lo reclamaba y esta advertencia no llegaba a notificar nunca. Revisar sus logs por trace_id antes de que el trabajo pendiente se acumule."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
-      # Variante critical: el job lleva al menos DOS ejecuciones fallidas en 2 horas y ni una
-      # sola en la que procesara bien algún elemento. Fallo determinista, sistémico y repetido.
+      # Variante critical, FAMILIA RÁPIDA (ciclo <= 2 h; hoy solo `security.tokens.cleanup`,
+      # que corre cada hora): el job lleva al menos DOS ejecuciones fallidas en 3 horas y ni
+      # una sola en la que procesara bien algún elemento. Fallo determinista, sistémico y
+      # repetido. La hermana `-critical-slow`, justo debajo, hace lo mismo para los jobs de
+      # ciclo largo con una ventana de 26 h; el porqué de la partición está en la cabecera
+      # del grupo.
+      #
       # Mismo alertname que la warning —el stack admite duplicados, ver decisión 3 de la
       # cabecera—; lo que las distingue es el uid (clave de upsert) y el label severity, que es
       # el que enruta.
@@ -127,7 +221,7 @@ groups:
         condition: C
         data:
           - refId: A
-            relativeTimeRange: { from: 7200, to: 0 }
+            relativeTimeRange: { from: 10800, to: 0 }
             datasourceUid: grafanacloud-prom
             model:
               refId: A
@@ -153,10 +247,15 @@ groups:
               # 2026-08-19, con la reconciliación DIAN cayendo al 100 %:
               #   expresión anterior              -> dian.pending.reconciliation = 6,05  (dispara)
               #   con `no_work` en el lado excluido -> vacío                            (MUDA)
-              # La razón: `dian.pending.reconciliation` corre cada 10 min y alterna ~6 `failure`
-              # con ~6 `no_work` por cada 2 h — los ciclos en los que no encuentra documentos
-              # pendientes. `no_work` NO es prueba de salud: convive con el fallo total. Meterlo
-              # en el lado excluido habría silenciado el incidente real que esta regla cubre.
+              # La razón: `dian.pending.reconciliation` alternaba ~6 `failure` con ~6 `no_work`
+              # por cada 2 h — los ciclos en los que no encuentra documentos pendientes.
+              # `no_work` NO es prueba de salud: convive con el fallo total. Meterlo en el lado
+              # excluido habría silenciado el incidente real que esta regla cubre.
+              #
+              # (Aquellas cifras se midieron con la cadencia VIEJA de 10 min, la única que
+              # existía a esa hora. Hoy ese job corre cada 12 h y ya no lo cubre esta regla,
+              # sino su hermana `-critical-slow`. La conclusión sobre `no_work` no depende de
+              # la cadencia y sigue vigente; los números, sí, y por eso quedan fechados.)
               #
               # Lo que se hace en su lugar, dos cambios independientes:
               #
@@ -171,26 +270,41 @@ groups:
               #    expresión no distinguía «falló un ciclo suelto» de «lleva 24 h sin acertar».
               #    El 2 no es arbitrario, es el único valor que sirve, y se midió:
               #      · un fallo aislado extrapola a ~1,0-1,1  -> queda por debajo, no dispara.
-              #      · `security.tokens.cleanup` es el job MÁS LENTO: 2,02 ejecuciones/2 h. Con
-              #        `>= 3` un cleanup roto al 100 % nunca podría alcanzar el umbral y la
-              #        regla quedaría ciega para él para siempre — cambiar un falso positivo
-              #        por un falso negativo es peor negocio.
-              #      · con `>= 2` ese mismo cleanup roto al 100 % sí dispara (2,02 >= 2).
-              #    Contra-prueba ejecutada inyectando +1 fallo simulado a los tres jobs: solo
-              #    sobrevive `dian.pending.reconciliation` (7,05); `security.tokens.cleanup` y
-              #    `dian.contingency.retry` caen en 1 y quedan filtrados.
+              #      · con `>= 3` un cleanup roto al 100 % tardaría tres horas largas en
+              #        alcanzar el umbral, y con la ventana de entonces no lo alcanzaba nunca:
+              #        cambiar un falso positivo por un falso negativo es peor negocio.
+              #      · con `>= 2` un cleanup roto al 100 % sí dispara.
               #
-              # `job_name!=""`: misma razón que en la warning, ver el comentario de arriba.
+              # ── VENTANA [2h] -> [3h] (19-08-2026, con la partición por cadencia) ──
+              #
+              # `security.tokens.cleanup` es fixedDelay de 1 h, o sea que su periodo real es
+              # «1 h MÁS lo que dure la pasada»: dos ejecuciones suyas NO caben con holgura en
+              # 2 horas. La medición que justificaba el umbral daba 2,02 ejecuciones/2 h — un
+              # 2,02 contra un umbral de 2 no es margen, es una casualidad de la extrapolación
+              # de `increase()`, y una pasada un poco más larga lo deja en 1,9 y la alerta
+              # muda. Con [3h] el mismo cleanup roto al 100 % da ~2,9: el `>= 2` se alcanza con
+              # margen y sigue exigiendo dos ciclos, que es lo que quiere decir.
+              #
+              # ── MATCHER DE FAMILIA ──
+              #
+              # `job_name="security.tokens.cleanup"`: esta regla cubre SOLO la familia rápida.
+              # Es un matcher exacto y no una regex a propósito — sin metacaracteres no hay
+              # nada que escapar y no puede ampliarse por accidente. Es también el que hace
+              # innecesario el `job_name!=""` de la warning: un nombre exacto ya excluye la
+              # serie sin `job_name` de `BusinessGaugeMetrics.refresh`. Si algún día hay más
+              # de un job rápido, pasa a `job_name=~"security\\.tokens\\.cleanup|el.nuevo"` y
+              # acuérdate de excluirlo también en la regla `-critical-slow`, o el crítico
+              # llegará por duplicado.
               expr: |
                 (
                   sum by (job_name) (
-                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"failure|error"}[2h])
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name="security.tokens.cleanup",job_outcome=~"failure|error"}[3h])
                   ) >= 2
                 )
                 unless
                 (
                   sum by (job_name) (
-                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_outcome=~"success|partial_failure"}[2h])
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name="security.tokens.cleanup",job_outcome=~"success|partial_failure"}[3h])
                   ) > 0
                 )
           - refId: C
@@ -210,7 +324,75 @@ groups:
           service: vetsoftware
         annotations:
           summary: "El job programado {{ $labels.job_name }} falla el 100 % de las ejecuciones en las que tuvo trabajo"
-          description: "{{ $labels.job_name }} acumula al menos 2 ejecuciones con job_outcome failure/error en las últimas 2 horas y ninguna con success ni partial_failure: ni un solo elemento procesado bien. Las ejecuciones no_work no cuentan (el job corrió y no había trabajo), por eso no salvan ni condenan. El fallo es sistémico y repetido: ningún ciclo posterior lo va a recuperar solo."
+          description: "{{ $labels.job_name }} acumula al menos 2 ejecuciones con job_outcome failure/error en las últimas 3 horas y ninguna con success ni partial_failure: ni un solo elemento procesado bien. La ventana de 3 h son dos ciclos de este job, que corre cada hora. Las ejecuciones no_work no cuentan (el job corrió y no había trabajo), por eso no salvan ni condenan. El fallo es sistémico y repetido: ningún ciclo posterior lo va a recuperar solo."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
+
+      # Variante critical, FAMILIA LENTA y CAJÓN POR DEFECTO: todo job cuyo ciclo NO sea
+      # rápido — hoy `dian.pending.reconciliation` y `dian.contingency.retry`, los dos a 12 h —
+      # más cualquier job futuro que nadie haya clasificado.
+      #
+      # Es la MISMA expresión que la de arriba con dos únicas diferencias, y las dos derivan de
+      # la cadencia:
+      #
+      #   · Matcher complementario: `job_name!=""` (excluye la serie sin job_name de
+      #     `BusinessGaugeMetrics.refresh`, ver el comentario de la warning) más
+      #     `job_name!="security.tokens.cleanup"` (que ya cubre la regla rápida). Prometheus
+      #     admite varios matchers sobre la misma etiqueta y los combina con AND, así que las
+      #     dos reglas son mutuamente excluyentes: ningún job dispara el crítico dos veces.
+      #   · Ventana [26h] = dos ciclos de 12 h más 2 h de margen. El margen no es decorativo:
+      #     `fixedDelay` cuenta desde que TERMINA la pasada anterior, así que el periodo real
+      #     es 12 h más la duración del job, y una ventana de 24 h clavadas dejaría fuera el
+      #     segundo ciclo justo cuando el job va lento — que es precisamente cuando falla.
+      #
+      # Lo que esta regla NO puede hacer, y conviene saberlo antes de confiar en ella: con un
+      # ciclo de 12 h no puede avisar antes de ~24-26 h, porque hasta entonces no existen dos
+      # ciclos fallidos que contar. Para el aviso temprano de documentos fiscales atascados
+      # está el backlog (`vetsoftware_business_dian_backlog_documents`), que es independiente
+      # de la cadencia del job y hoy no tiene alerta.
+      - uid: vetsw-scheduled-job-failing-critical-slow
+        title: VetSoftwareScheduledJobFailing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 93600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # Semántica idéntica a la de la regla rápida —el `unless` completo dentro de A,
+              # `no_work` fuera de los dos lados, `>= 2` como guarda de repetición—; el porqué
+              # de cada decisión está documentado allí y no se repite aquí para que no se
+              # queden las dos copias diciendo cosas distintas.
+              expr: |
+                (
+                  sum by (job_name) (
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_name!="security.tokens.cleanup",job_outcome=~"failure|error"}[26h])
+                  ) >= 2
+                )
+                unless
+                (
+                  sum by (job_name) (
+                    increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name!="",job_name!="security.tokens.cleanup",job_outcome=~"success|partial_failure"}[26h])
+                  ) > 0
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 30m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El job programado {{ $labels.job_name }} falla el 100 % de las ejecuciones en las que tuvo trabajo"
+          description: "{{ $labels.job_name }} acumula al menos 2 ejecuciones con job_outcome failure/error en las últimas 26 horas y ninguna con success ni partial_failure: ni un solo elemento procesado bien. La ventana de 26 h son dos ciclos de los jobs DIAN, que corren cada 12 h; con la ventana anterior de 2 h esta alerta era aritméticamente incapaz de dispararse para ellos. Las ejecuciones no_work no cuentan (el job corrió y no había trabajo), por eso no salvan ni condenan. El fallo es sistémico y repetido: ningún ciclo posterior lo va a recuperar solo. Si el job es de facturación electrónica, hay documentos fiscales sin transmitir desde hace al menos un día."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobfailing"
 
   # ---------------------------------------------------------------------------------------
