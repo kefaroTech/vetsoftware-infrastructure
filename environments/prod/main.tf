@@ -181,16 +181,72 @@ module "backend" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  name                             = local.name
-  aws_region                       = var.aws_region
-  alarm_email                      = var.alarm_email
+  name       = local.name
+  aws_region = var.aws_region
+
+  # El destino. alarm_email es obligatorio en produccion (ver variables.tf), y
+  # mientras lo sea notification_topic_enabled es siempre verdadero: los dos
+  # topicos de severidad existen y ninguna alarma puede nacer con
+  # alarm_actions vacio. La CMK del entorno ya autoriza a cloudwatch, events,
+  # budgets y costalerts a cifrar contra ella (modules/kms/main.tf), asi que
+  # cifrar el topico no rompe la publicacion.
+  alarm_email     = var.alarm_email
+  sns_kms_key_arn = module.kms.key_arn
+
+  # Se autoriza por policy del topico y no por policy del rol: las inline
+  # policies de los roles de GitHub estan cerca del limite de 10.240 caracteres,
+  # y una autorizacion nombrada aqui se aplica con el mismo apply que crea el
+  # topico, sin volver a correr el bootstrap.
+  notification_publisher_role_arns = [
+    local.deployment_notifier_role_arn,
+    local.cost_reporter_role_arn,
+  ]
+
   monthly_budget_usd               = var.monthly_budget_usd
+  budget_sns_notifications_enabled = true
+
+  # Apagado mientras Cost Explorer no este habilitado a mano en la cuenta de
+  # prod y su monitor de servicios importado. Ver la nota de la variable: no es
+  # una bandera que se pueda encender sin ese paso previo.
+  cost_anomaly_detection_enabled = var.cost_anomaly_detection_enabled
+  cost_anomaly_threshold_usd     = var.cost_anomaly_threshold_usd
+
+  # Los IDs de Slack se inyectan por TF_VAR desde iac-apply-prod; vacios dejan
+  # Slack apagado sin afectar al correo ni a la existencia de los topicos.
+  slack_workspace_id        = var.slack_workspace_id
+  slack_channel_id          = var.slack_channel_id
+  slack_alerts_channel_id   = var.slack_alerts_channel_id
+  slack_infra_channel_id    = var.slack_infra_channel_id
+  slack_critical_channel_id = var.slack_critical_channel_id
+  runbook_url               = var.runbook_url
+
+  # Sin el circuito de eventos, produccion no tiene ninguna alarma que detecte
+  # una tarea que muere y no vuelve: las de CPU y memoria miden una tarea viva.
+  # backend_crash_loop y backend_task_restarts cuelgan de aqui.
+  ecs_events_enabled               = true
   ecs_cluster_name                 = module.backend.cluster_name
+  ecs_cluster_arn                  = module.backend.cluster_arn
   ecs_service_name                 = module.backend.service_name
+  ecs_service_arn                  = module.backend.service_arn
+  backend_log_group_name           = module.backend.log_group_name
   cloudflare_tunnel_log_group_name = module.backend.cloudflare_tunnel_log_group_name
-  database_identifier              = module.database.identifier
-  alloy_instance_ids               = module.alloy.instance_ids
-  tags                             = local.common_tags
+
+  # Falso mientras Container Insights siga apagado: RunningTaskCount vive en
+  # ECS/ContainerInsights y sin el las alarmas quedarian en INSUFFICIENT_DATA
+  # para siempre. Pasarlo deja el interruptor de hombre muerto a un flag.
+  container_insights_enabled = var.backend_container_insights
+
+  database_events_enabled = true
+  database_identifier     = module.database.identifier
+  database_arn            = module.database.arn
+  # Los umbrales de conexiones y de disco se derivan de estos dos valores en vez
+  # de escribirse a mano: cambiar la clase de instancia o ampliar el volumen
+  # mueve las alarmas con ellos.
+  database_max_connections       = var.database_max_connections
+  database_allocated_storage_gib = var.database_allocated_storage
+
+  alloy_instance_ids = module.alloy.instance_ids
+  tags               = local.common_tags
 }
 
 # Linea base de trazabilidad de la cuenta. Prod tiene la suya: dev y prod viven
