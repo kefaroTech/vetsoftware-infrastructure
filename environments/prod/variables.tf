@@ -226,6 +226,26 @@ variable "database_backup_retention_days" {
   default = 7
 }
 
+# PROVISIONAL, igual que en dev: reconfirmar con
+# SHOW GLOBAL VARIABLES LIKE 'max_connections' contra la instancia arrancada.
+#
+# Esta variable NO configura el motor -el parameter group deja la formula de
+# sistema {DBInstanceClassMemory/12582880}-: solo declara el limite efectivo del
+# que el modulo de monitoreo deriva los umbrales de las alarmas de conexiones.
+# Hay que pasarla porque el default del modulo, 60, es el de una clase micro:
+# aplicado a la db.t4g.small de produccion abriria la advertencia a 42
+# conexiones y la critica a 54, muy por debajo del limite real del motor.
+variable "database_max_connections" {
+  description = "max_connections efectivo de la instancia de produccion; los umbrales de conexiones de las alarmas se derivan de aqui."
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.database_max_connections > 0
+    error_message = "database_max_connections debe ser mayor que cero."
+  }
+}
+
 variable "valkey_major_engine_version" {
   type    = string
   default = "8"
@@ -341,14 +361,94 @@ variable "audit_bucket_name" {
   default = ""
 }
 
+# Sin destino no hay topic, y sin topic las alarmas se crean igual pero con
+# alarm_actions vacio: el plan sale verde, el apply sale verde, la consola de
+# CloudWatch muestra las alarmas bien configuradas y ninguna puede avisar a
+# nadie. Por eso no tiene default -produccion no se despliega sin canal- y la
+# validacion rechaza la cadena vacia antes de que llegue a AWS.
+#
+# El correo tambien es lo que hace existir los dos topicos de severidad, de los
+# que cuelgan el ruteo de hallazgos de GuardDuty y cualquier notificacion
+# futura: modules/monitoring/main.tf:8 deriva notification_topic_enabled de el.
 variable "alarm_email" {
-  type    = string
-  default = ""
+  description = "Correo que recibe las alarmas de produccion. Obligatorio: sin destino no se crea el topic SNS y las alarmas quedan sin accion. La suscripcion exige confirmacion manual desde el buzon."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[a-zA-Z]{2,}$", var.alarm_email))
+    error_message = "alarm_email debe ser una direccion de correo valida: produccion no puede desplegarse sin canal de alerta."
+  }
+}
+
+# Los IDs de Slack no viven en el repositorio: se inyectan por TF_VAR desde el
+# environment iac-apply-prod. Vacios dejan Slack apagado, y eso ya no vuelve a
+# dejar produccion sin destino -alarm_email es obligatorio, asi que los topicos
+# existen siempre-. El modulo valida que workspace y canal se configuren juntos.
+variable "slack_workspace_id" {
+  description = "ID T... del workspace autorizado en Amazon Q Developer; configurar junto con slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+variable "slack_channel_id" {
+  description = "ID C... o G... del canal Slack base de produccion; configurar junto con slack_workspace_id."
+  type        = string
+  default     = ""
+}
+
+variable "slack_alerts_channel_id" {
+  description = "Canal Slack de alarmas de produccion -criticas y advertencias-. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+variable "slack_infra_channel_id" {
+  description = "Canal Slack de despliegues y eventos de ECS y RDS de produccion. Vacio reutiliza slack_channel_id."
+  type        = string
+  default     = ""
+}
+
+# Solo hace falta el dia que exista guardia: separa lo critico de las
+# advertencias dentro del canal de alarmas.
+variable "slack_critical_channel_id" {
+  description = "Canal Slack dedicado a alarmas criticas de produccion. Vacio las deja en el canal de alarmas."
+  type        = string
+  default     = ""
+}
+
+variable "runbook_url" {
+  description = "URL del runbook citada en cada notificacion enviada a Slack."
+  type        = string
+  default     = ""
 }
 
 variable "monthly_budget_usd" {
   type    = number
   default = 180
+}
+
+# Apagado a proposito, no por olvido. ce:CreateAnomalyMonitor exige que Cost
+# Explorer este habilitado a mano en la cuenta -no se puede por API- y responde
+# "User not enabled for cost explorer access" mientras no lo este. Ademas, al
+# habilitarlo AWS crea por su cuenta un monitor de servicios y la cuota es de
+# uno por cuenta: encender esto sin importar o borrar antes ese monitor rompe el
+# apply de produccion a mitad. Dev ya pago ese peaje; la cuenta de prod es otra
+# y todavia no.
+variable "cost_anomaly_detection_enabled" {
+  description = "Crea el monitor por servicio y la suscripcion de Cost Anomaly Detection. Requiere Cost Explorer habilitado en la cuenta de produccion."
+  type        = bool
+  default     = false
+}
+
+variable "cost_anomaly_threshold_usd" {
+  description = "Impacto absoluto minimo en USD para avisar una anomalia de costo en produccion."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.cost_anomaly_threshold_usd > 0
+    error_message = "cost_anomaly_threshold_usd debe ser mayor que cero."
+  }
 }
 
 variable "log_retention_days" {

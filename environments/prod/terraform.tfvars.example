@@ -32,5 +32,25 @@ api_domain_name = "api.kefaro.tech"
 # valkey_maximum_data_storage_gb  = 10
 # valkey_maximum_ecpu_per_second  = 5000
 
-alarm_email       = "infra@example.com"
+# OBLIGATORIO: no tiene default. Sin destino no se crea el topic SNS y las
+# alarmas se despliegan con alarm_actions vacio, sin fallar el plan ni el apply.
+# La suscripcion llega por correo y hay que confirmarla a mano.
+alarm_email        = "infra@example.com"
 monthly_budget_usd = 180
+
+# Opcional. Vacios dejan Slack apagado sin afectar al correo. Amazon Q Developer
+# > Chat applications > Slack, para obtener los dos IDs.
+# slack_workspace_id        = "T0123456789"
+# slack_channel_id          = "C0123456789"
+# slack_alerts_channel_id   = "C0ALERTAS00"
+# slack_infra_channel_id    = "C0INFRA0000"
+# slack_critical_channel_id = "C0CRITICO00"
+# runbook_url               = "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/main/docs/ALERTAS_OPERATIVAS.md"
+
+# Requiere habilitar Cost Explorer a mano en la cuenta e importar el monitor de
+# servicios que AWS crea al hacerlo. Ver la nota en variables.tf.
+# cost_anomaly_detection_enabled = true
+# cost_anomaly_threshold_usd     = 10
+
+# Reconfirmar con SHOW GLOBAL VARIABLES LIKE 'max_connections' en la instancia.
+# database_max_connections = 120
