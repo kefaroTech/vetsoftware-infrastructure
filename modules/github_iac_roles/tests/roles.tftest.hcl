@@ -437,4 +437,42 @@ run "apply_puede_crear_los_recursos_de_los_modulos" {
     ])
     error_message = "Los dos roles deben poder LEER el trail, el analizador y la funcion; si no, el plan y el drift fallan al refrescarlos."
   }
+
+  # cache: el ejemplo de libro de "que identidad USA el recurso, no cual lo
+  # crea". ElastiCache no cifra con la identidad de quien aplica: pide un grant
+  # sobre la CMK para poder descifrar despues, cuando el rol de apply ya no
+  # existe, y lo emite con las credenciales del llamante. Sin kms:CreateGrant,
+  # CreateServerlessCache muere con un AccessDenied de KMS a mitad de la raiz.
+  #
+  # Se afirman las tres piezas juntas y no solo el nombre de la accion, porque
+  # las otras dos se pueden perder sin que se note: la condicion Bool es lo
+  # unico que impide que el permiso sirva para conceder la clave a un principal
+  # arbitrario, y el ARN acotado es lo que lo separa de un Resource "*", que
+  # seria ir en contra de la reduccion de superficie de este rol.
+  assert {
+    condition = alltrue([
+      for key in ["dev_apply", "prod_apply"] :
+      length([
+        for statement in jsondecode(data.aws_iam_policy_document.apply_regional[key].json).Statement :
+        statement if statement.Sid == "GrantEnvironmentKeyToEncryptingServices"
+        && contains(flatten([statement.Action]), "kms:CreateGrant")
+        && contains(flatten([statement.Resource]), "arn:aws:kms:us-east-1:123456789012:key/*")
+        && contains(flatten([try(statement.Condition.Bool["kms:GrantIsForAWSResource"], [])]), "true")
+      ]) == 1
+    ])
+    error_message = "El rol de apply debe poder crear el grant de KMS que ElastiCache necesita para cifrar con la CMK, acotado a las claves de la cuenta y la region y con kms:GrantIsForAWSResource=true."
+  }
+
+  # Crear un grant es conceder el uso de la clave a un tercero: es una mutacion
+  # y no tiene nada que hacer en el rol que solo planifica.
+  assert {
+    condition = alltrue([
+      for key in ["dev_plan", "prod_plan"] :
+      alltrue([
+        !strcontains(data.aws_iam_policy_document.infrastructure_read[key].json, "kms:CreateGrant"),
+        !strcontains(data.aws_iam_policy_document.state[key].json, "kms:CreateGrant"),
+      ])
+    ])
+    error_message = "El rol de plan nunca debe poder crear grants sobre la CMK."
+  }
 }
