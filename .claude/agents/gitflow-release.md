@@ -147,14 +147,14 @@ Procedimiento:
 1. **Busca antes de crear**, para no duplicar:
    `gh issue list --repo <owner/repo> --state all --search "<palabras clave>"`.
    Si ya existe uno equivalente, añade lo nuevo con `gh issue comment <n>` y reporta ese número.
-2. **Crea pasando el cuerpo por stdin.** Las comillas de PowerShell destrozan los cuerpos largos;
-   `--body-file -` no:
+2. **Crea escribiendo el cuerpo en un fichero.** Las comillas de PowerShell destrozan los
+   cuerpos largos; `--body-file` no:
 
-```bash
-gh issue create --repo kefaroTech/<repo> --title "<el problema, en una frase>" --body-file - <<'EOF'
-<cuerpo en markdown>
-EOF
-```
+   ```bash
+   # escribe el cuerpo en un archivo temporal: las comillas de PowerShell
+   # destrozan los cuerpos largos y --body-file lo evita
+   gh issue create --repo kefaroTech/<repo> --title "<el problema, en una frase>" --body-file cuerpo.md
+   ```
 3. **El título nombra el problema, no la tarea**: «El gate de calidad lleva días rojo en develop
    y no hay nada registrado», no «Arreglar el gate». En español, como el resto de issues del
    repo.
