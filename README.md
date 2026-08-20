@@ -167,8 +167,8 @@ Para repositorios nuevos, obtenga los IDs inmutables antes de aplicar el bootstr
 ```powershell
 gh api orgs/kefaroTech --jq .id
 gh api repos/kefaroTech/vetsoftware-backend --jq .id
-gh api repos/kefaroTech/VetSoftwareFront --jq .id
-gh api repos/kefaroTech/VetSoftwarePublicFront --jq .id
+gh api repos/kefaroTech/vetsoftware-admin-web --jq .id
+gh api repos/kefaroTech/vetsoftware-public-web --jq .id
 gh api repos/kefaroTech/vetsoftware-infrastructure --jq .id
 ```
 
@@ -181,8 +181,8 @@ En cada repositorio GitHub abra **Settings > Environments > production > Environ
 | Repositorio GitHub | `AWS_ECR_PUBLISH_ROLE_ARN` | Variable adicional |
 |---|---|---|
 | `vetsoftware-backend` | output `backend` | — |
-| `VetSoftwareFront` | output `private_front` | — |
-| `VetSoftwarePublicFront` | output `public_front` | `VITE_RECAPTCHA_SITE_KEY` |
+| `vetsoftware-admin-web` | output `private_front` | — |
+| `vetsoftware-public-web` | output `public_front` | `VITE_RECAPTCHA_SITE_KEY` |
 
 En ese mismo environment seleccione **Deployment branches and tags > Selected branches and tags**, agregue únicamente la rama protegida `main`, configure al menos un required reviewer e impida la autoaprobación. Esta regla externa es obligatoria: el subject OIDC demuestra el environment `production`, mientras que la política de deployment de GitHub impide que un workflow modificado en una rama dev llegue a ese environment.
 
