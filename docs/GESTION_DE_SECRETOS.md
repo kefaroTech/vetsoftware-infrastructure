@@ -35,11 +35,20 @@ Secreto **dedicado**, con una sola clave dentro. Lo lee Kinesis Firehose por su 
 
 El token es de una **Cloud Access Policy con el único scope `logs:write`**, distinto del que usa OTLP. Se inyecta por `TF_VAR_grafana_logs_access_key` y se rota subiendo `grafana_logs_secret_version`.
 
-#### En GitHub va como secret de repositorio, no de Environment
+#### En GitHub sigue siendo secret de repositorio, y eso hay que corregirlo
 
-El secret se llama **`TF_VAR_GRAFANA_LOGS_ACCESS_KEY`** y es el único que no vive en un GitHub Environment. La razón es la misma que obliga a prefijar las variables del plan: en un `pull_request`, `Terraform plan dev` corre **sin Environment** —la deployment branch policy nunca casa con `refs/pull/N/merge`— y por tanto no puede leer los secrets de `iac-plan-dev`. Un secret de repositorio sí lo ven los cinco jobs de dev que ejecutan Terraform: `terraform-plan-dev`, `terraform-apply-dev`, `terraform-drift-dev` y las dos fases de `deploy-backend-dev`, porque un job con Environment hereda además los del repositorio. No lleva prefijo `DEV_` porque prod no tiene envío durable de logs y no hay con qué chocar.
+El secret se llama **`TF_VAR_GRAFANA_LOGS_ACCESS_KEY`** y es el único que no vive en un GitHub Environment. No lleva prefijo `DEV_` porque prod no tiene envío durable de logs y no hay con qué chocar.
 
-Y hace falta en **todos** ellos, no solo en el apply: `log_shipping_enabled` viene en `true` y la validación de formato se evalúa en tiempo de plan, así que sin el secret el plan del pull request muere con `Invalid value for variable` antes de tocar AWS. El gate local no lo detecta porque toma el valor del `terraform.tfvars` del disco.
+La razón que se escribió en su día era correcta a medias: en un `pull_request`, `Terraform plan dev` corre **sin Environment** —la deployment branch policy nunca casa con `refs/pull/N/merge`— y por tanto no puede leer los secrets de `iac-plan-dev`. Pero la conclusión que se sacó fue la equivocada. Un secret de repositorio entra en el entorno de un job que dispara **cualquier** `pull_request` contra `develop`, incluidas las de colaboradores con permiso de escritura, y basta con que esa misma PR añada un paso `run:` para sacarlo fuera. Sin Environment, no hay *deployment branch policy* que intervenga en ningún momento. Era el único punto del proyecto donde una credencial viva cruzaba a la superficie de `pull_request`.
+
+Desde el 19 de agosto de 2026 el camino de `pull_request` recibe un **valor sintético** con el formato correcto, `000000:pull-request-placeholder` (`.github/workflows/terraform-plan-dev.yml`). El plan de la PR sigue siendo exacto: la validación sólo comprueba el formato `^[0-9]+:.+$`, y el valor real nunca entra en el state porque `modules/secrets` lo escribe con `secret_string_wo` más `secret_string_wo_version`, así que un valor distinto tampoco produce diff.
+
+Hace falta en todos los jobs de dev que planifican, no sólo en el apply: `log_shipping_enabled` viene en `true` y la validación de formato se evalúa en tiempo de plan, así que sin **algún** valor el plan del pull request muere con `Invalid value for variable` antes de tocar AWS. El gate local no lo detecta porque toma el valor del `terraform.tfvars` del disco.
+
+Quedan dos pasos, los dos fuera del repositorio:
+
+1. **Mover el secret** a los environments `iac-plan-dev` e `iac-apply-dev` y borrarlo del scope de repositorio. Los cuatro jobs que necesitan el valor real —`terraform-apply-dev`, `terraform-drift-dev` y las dos fases de `deploy-backend-dev`— corren siempre con Environment, así que ninguno se rompe, y los workflows no necesitan ningún cambio: la expresión lee igual un secret de repositorio que uno de Environment.
+2. **Rotar la credencial en Grafana Cloud.** Estuvo expuesta a la superficie de `pull_request` todo el tiempo que llevó escrita así.
 
 ```powershell
 gh secret set TF_VAR_GRAFANA_LOGS_ACCESS_KEY --repo kefaroTech/vetsoftware-infrastructure

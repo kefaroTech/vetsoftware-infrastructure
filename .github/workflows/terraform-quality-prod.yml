@@ -1,12 +1,36 @@
 name: Terraform quality prod
 
+# Gemelo de terraform-quality-dev.yml. Los dos ficheros llegaron a divergir en
+# 128 lineas sobre un total de 74, hasta el punto de que el gate de produccion
+# comprobaba menos cosas que el de desarrollo. Se reconciliaron el 19 de agosto
+# de 2026 con un principio: produccion no puede verificar MENOS que desarrollo.
+# Cada diferencia que queda esta comentada abajo con su motivo; si una diferencia
+# no tiene comentario, es deriva y hay que igualarla.
+#
+# Este workflow absorbio las raices de bootstrap igual que su gemelo: existia un
+# 'Terraform quality bootstrap prod' aparte que corria el mismo gate sobre
+# bootstrap y los modulos compartidos. NO volver a partirlo en dos: si se anade
+# una raiz, va en el -Roots del ultimo paso.
+
 on:
   pull_request:
     branches:
       - main
+    # DIFERENCIA INTENCIONAL con dev: aqui no hay filtro de paths. El gemelo de
+    # desarrollo lo lleva para no arrancar un runner por cada PR que solo toca
+    # documentacion, pero los PR contra main son releases y hotfixes -uno cada
+    # varias semanas: este workflow ha corrido una sola vez desde el 4 de
+    # agosto-, asi que filtrar aqui no ahorra practicamente nada y si podria
+    # dejar pasar una release sin gate por una ruta que se olvido de anadir a la
+    # lista. En produccion se prefiere verificar de mas.
   push:
     branches:
       - main
+    # DIFERENCIA INTENCIONAL con dev, que dejo de correr en push para recortar
+    # minutos. En main el push es la integracion de una release o de un hotfix:
+    # es la unica confirmacion de que lo que quedo en la rama de produccion
+    # -incluido el merge commit, que nadie valido como tal- pasa el gate. Se
+    # conserva porque quitarlo seria bajarle la verificacion a produccion.
   workflow_dispatch:
 
 permissions:
@@ -18,9 +42,11 @@ concurrency:
 
 jobs:
   validate:
-    name: Format, lint and validate prod
+    name: Format, lint and validate prod and bootstrap
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45 y no 30, igual que en dev: este job hace ahora el trabajo que antes se
+    # repartian dos.
+    timeout-minutes: 45
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: false
@@ -43,7 +69,7 @@ jobs:
           tflint_version: v0.64.0
           github_token: ${{ github.token }}
 
-      - name: Run the quality gate scoped to the production root
+      - name: Run the quality gate for the prod and bootstrap roots
         # Sin token, la descarga del plugin de TFLint va sin autenticar contra
         # la API de GitHub y comparte el limite de 60 por hora con las demas IP
         # del runner: el gate se cae con un 403 que no tiene nada que ver con el
@@ -51,4 +77,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: ./scripts/quality/terraform-gate.ps1 -Mode ci -Roots environments/prod
+        # Mismas raices compartidas que el gemelo de dev, y por una razon
+        # concreta: bootstrap, modules/ecr, modules/github_iac_roles y
+        # modules/log_shipping no pertenecen a ningun ambiente, pero solo se
+        # validaban en el gate de desarrollo, que se dispara con los PR contra
+        # develop. Un PR de release contra main que tocara cualquiera de esas
+        # cuatro raices no pasaba por su tflint ni por sus .tftest.hcl en
+        # ningun sitio. La validacion es estatica -init -backend=false- asi que
+        # no necesita que prod este aprovisionado.
+        run: >-
+          ./scripts/quality/terraform-gate.ps1 -Mode ci
+          -Roots environments/prod,bootstrap,modules/ecr,modules/github_iac_roles,modules/log_shipping

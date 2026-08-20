@@ -38,22 +38,42 @@ Proteja `iac-bootstrap-dev` para aceptar solo `develop`. Proteja `iac-bootstrap-
 
 | Workflow | Disparador | Credencial AWS | Efecto |
 |---|---|---|---|
-| `Terraform quality dev` | PR y push a `develop` | Ninguna | Gate acotado a `environments/dev`. |
-| `Terraform quality prod` | PR y push a `main` | Ninguna | Gate acotado a `environments/prod`. |
-| `Terraform quality bootstrap dev` | PR y push a `develop` que toquen bootstrap o identidad | Ninguna | Valida el codigo de bootstrap en el ciclo dev. |
-| `Terraform quality bootstrap prod` | PR y push a `main` que toquen bootstrap o identidad | Ninguna | Validacion productiva independiente. |
+| `Terraform quality dev` | PR a `develop`, con filtro de rutas, o manual | Ninguna | Gate de `environments/dev` mas `bootstrap`, `modules/ecr`, `modules/github_iac_roles` y `modules/log_shipping`. |
+| `Terraform quality prod` | PR y push a `main`, sin filtro de rutas, o manual | Ninguna | Las mismas raices compartidas, con `environments/prod` en lugar de dev. |
 | `Terraform plan dev` | PR a `develop` o manual | `iac-plan-dev` | Plan visible de dev; nunca aplica. |
 | `Terraform plan prod` | PR a `main` o manual | `iac-plan-prod` | Plan visible de prod; nunca aplica. |
 | `Terraform apply dev` | Manual desde `develop` | `iac-apply-dev` | Plan fresco y apply exclusivo de dev. |
 | `Terraform apply prod` | Manual desde `main` | `iac-apply-prod` | Plan fresco y apply protegido de prod. |
-| `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply. |
-| `Terraform drift prod` | Diario a las 11:47 UTC o manual | `iac-plan-prod` | Igual para prod, en su propio run. |
+| `Terraform drift dev` | Diario a las 11:17 UTC o manual | `iac-plan-dev` | `plan -refresh-only -detailed-exitcode`, sin apply, con triage y aviso por issue. |
+| `Terraform drift prod` | Manual desde `main`; el cron diario de las 11:47 UTC se salta mientras `PROD_DRIFT_ENABLED` no valga `true` | `iac-plan-prod` | Igual para prod, en su propio run. Ver «Por que el drift de prod nace gateado». |
 | `Start dev environment` | Manual | Roles dev | Arranca la RDS y deja el servicio en una tarea. Unica forma de encender dev: no hay arranque programado. Avisa el desenlace en Slack. |
 | `Stop dev environment` | Manual | Roles dev | Baja el servicio a cero y detiene la RDS, lo mismo que el apagado programado. Avisa el desenlace en Slack. |
 | `Deploy backend image dev` | Manual | Roles dev | Certifica y despliega desde `vetsoftware-dev-backend`. Input unico: la version `X.Y.Z-dev.N`. Avisa el desenlace en Slack. |
 | `Deploy backend image prod` | Manual | Roles prod | Certifica y despliega desde `vetsoftware-backend`. Input unico: la release `X.Y.Z`. |
 
 Los grupos `terraform-bootstrap-dev`, `terraform-bootstrap-prod`, `terraform-dev` y `terraform-prod` son distintos. Un bloqueo, fallo o apply de un ambiente nunca hace esperar al otro.
+
+## El vigilante de deriva: por qué filtra y a quién avisa
+
+Entre el 7 y el 16 de agosto de 2026 el drift de dev encadenó **diez ciclos en rojo**. Los cuatro últimos (5-6 s) fueron el bloqueo de facturación de Actions; los seis anteriores (44 s a 1 m 36 s) arrancaron, planificaron y fallaron de verdad. Nadie los miró, porque el workflow **no avisaba a ningún sitio** y porque los seis decían casi lo mismo. Escondido entre ese «casi» iba un hallazgo real: `module.monitoring.aws_sns_topic_subscription.email[0] has been deleted`, es decir, las alarmas de dev llevaban desde el 7 de agosto sin destinatario de correo.
+
+De ahí salen las dos piezas que hoy envuelven al ciclo:
+
+- **`scripts/quality/drift-triage.ps1`** ejecuta el mismo `plan -refresh-only` de siempre —nunca un apply— y clasifica lo que sale. Silencia únicamente cuatro pares dirección/atributo, cada uno con su motivo escrito en la tabla del propio script: `desired_count` del servicio ECS y `status`/`latest_restorable_time` de la RDS, que los mueve el apagado programado de EventBridge, e `inline_policy` del rol y `layers` de la Lambda de `module.cost_report`, que los reescribe el proveedor de AWS en cada lectura. Todo lo demás deja el job en rojo. El criterio es de **denegación por defecto**: dirección desconocida, atributo no listado, objeto borrado, deriva que el clasificador no supo leer o fallo del ciclo son rojo. Un objeto borrado nunca se silencia, por conocida que sea la dirección.
+- **`scripts/quality/drift-alert.ps1`** convierte el rojo en un aviso. Abre —o comenta— **un issue por ambiente** con el veredicto, el detalle y qué hacer con él, y publica además en Slack si recibe la URL del webhook. Es idempotente: mantiene un único issue abierto y no repite el mismo veredicto dentro de 20 horas.
+
+No se usó `ignore_changes` en los módulos a propósito: eso apagaría también el `apply`, que es justo donde esos atributos tienen que reconciliarse. El filtro vive en el informe, no en la infraestructura.
+
+El aviso va por issue y no por Slack porque el webhook `VETSOFTWARE_GRAFANA_SLACK_WEBHOOK_URL` vive hoy en el environment `iac-apply-dev`, y el drift corre con `iac-plan-dev`, que **no tiene ningún secret**. La expresión está declarada en el workflow: copiar el secret al environment de plan enciende ese canal sin tocar nada más.
+
+### Por qué el drift de prod nace gateado
+
+`terraform-drift-prod.yml` se borró en agosto tras 14 ejecuciones y 0 éxitos, y el diagnóstico era correcto: los `cron` de GitHub corren **siempre sobre la rama por defecto** —aquí `develop`— y la *deployment branch policy* de `iac-plan-prod` sólo admite `main`, así que el job se rechazaba antes del primer paso. Verificado de nuevo contra la API el 19 de agosto de 2026, con dos bloqueos más:
+
+- El rol `vetsoftware-iac-plan-prod` sólo acepta dos sujetos OIDC (`modules/github_iac_roles/main.tf:290-293`): el del environment y el de un job de `pull_request` sin environment. Un `schedule` sin environment tiene sujeto `ref:refs/heads/develop` y **no** puede asumirlo, así que soltar el environment tampoco arregla nada.
+- No existe **ninguna** variable de prod, ni en el repositorio ni en `iac-plan-prod`.
+
+Por eso el fichero está repuesto pero su `cron` va condicionado a la variable de repositorio `PROD_DRIFT_ENABLED`. Mientras no valga `true`, la ejecución programada se **salta** en lugar de fallar: un rojo diario que nadie puede arreglar desde el repositorio es exactamente el ruido que dejó ciego al vigilante de dev. `workflow_dispatch` desde `main` funciona hoy sin depender de esa variable.
 
 ## Informe diario de costos
 
@@ -202,12 +222,27 @@ validacion de `grafana_logs_access_key` —formato `<loki_instance_id>:<token>`�
 `Invalid value for variable` antes de leer nada de AWS: no es un fallo del apply que
 se pueda dejar para despues, tumba el plan del pull request.
 
-A diferencia de los tres anteriores, **este secret va en el scope de repositorio, no
-en un Environment**. El motivo es el mismo que obliga a prefijar las variables del
-plan: en un `pull_request` el job corre sin Environment y no puede leer los secrets de
-`iac-plan-dev`. Un secret de repositorio si lo ven los cinco jobs de dev que ejecutan
-Terraform —plan, apply, drift y las dos fases de `deploy-backend-dev`—, porque los
-jobs con Environment tambien heredan los del repositorio.
+A diferencia de los tres anteriores, **este secret todavia vive en el scope de
+repositorio**, y eso es una deuda abierta, no una decision. El razonamiento original
+era correcto en su premisa —en un `pull_request` el job del plan corre sin Environment
+y no puede leer los secrets de `iac-plan-dev`— pero sacaba la conclusion equivocada:
+un secret de repositorio entra en el entorno de un job que dispara **cualquier**
+`pull_request`, incluido el que propone anadir un paso `run:` que lo exfiltre. Sin
+Environment no hay *deployment branch policy* que intervenga.
+
+Desde el 19 de agosto de 2026 el camino de `pull_request` de `terraform-plan-dev`
+recibe un **valor sintetico** con el formato correcto
+(`000000:pull-request-placeholder`) en lugar de la credencial. El plan solo comprueba
+el formato, y el valor real nunca entra en el state porque `modules/secrets` lo
+escribe con `secret_string_wo` y version, asi que el plan del PR sigue siendo exacto.
+
+Con eso, los cuatro jobs que necesitan el valor real —`terraform-apply-dev`,
+`terraform-drift-dev` y las dos fases de `deploy-backend-dev`— corren **siempre** con
+Environment, de modo que el secret **puede y debe** moverse a `iac-plan-dev` e
+`iac-apply-dev` y borrarse del scope de repositorio. Los workflows no necesitan
+ningun cambio para eso: la expresion lee igual un secret de repositorio que uno de
+Environment. **Y hay que rotar la credencial en Grafana Cloud**, porque ha estado
+expuesta a la superficie de `pull_request` todo el tiempo que llevo escrita asi.
 
 No lleva prefijo `DEV_` porque prod no tiene envio durable de logs: no hay con que
 chocar en un scope plano.

@@ -8,6 +8,8 @@ on:
       - "environments/prod/**"
       - "modules/**"
       - ".github/scripts/terraform-*.ps1"
+      # El manifiesto de endpoints y su verificador: cambiarlos tiene que disparar
+      # el plan, que es donde se comprueba la paridad.
       - ".github/scripts/assert-telemetry-endpoint.ps1"
       - ".github/telemetry-endpoints.json"
       - ".github/workflows/terraform-plan-prod.yml"
@@ -54,6 +56,11 @@ jobs:
       TF_VAR_login_url: ${{ vars.PROD_LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PROD_PASSWORD_RESET_URL }}
       TF_VAR_registration_verification_url: ${{ vars.PROD_REGISTRATION_VERIFICATION_URL }}
+      # DIFERENCIA INTENCIONAL con dev, que aqui inyecta
+      # TF_VAR_grafana_logs_access_key: environments/prod no declara esa
+      # variable -el envio durable de logs por Firehose es de dev- y pasarla
+      # haria fallar el plan con "Value for undeclared variable". No es deriva
+      # ni un secreto que falte.
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 
@@ -63,18 +70,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: 1.15.8
-          terraform_wrapper: false
-
+      # Va antes de instalar Terraform, igual que en el gemelo de dev: si el
+      # endpoint no casa no hace falta gastar el resto del job.
+      #
       # Prod todavia no tiene stack de Grafana Cloud ni valor canonico: el check
       # avisa y deja pasar. Se instala igual para que el dia que se cree el stack
       # el control ya este en su sitio y solo haya que fijar el endpoint.
       - name: Verify OTLP endpoint parity
         shell: pwsh
         run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.PROD_GRAFANA_OTLP_ENDPOINT (repositorio)'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
 
       - name: Validate plan role configuration
         shell: pwsh
