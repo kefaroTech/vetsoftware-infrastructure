@@ -17,18 +17,18 @@ variables {
   repositories = {
     backend = {
       name                    = "vetsoftware-backend"
-      github_repository       = "VetSoftware"
+      github_repository       = "vetsoftware-backend"
       github_repository_id    = "100000001"
       development_publication = false
     }
     private_front = {
       name                 = "vetsoftware-front"
-      github_repository    = "VetSoftwareFront"
+      github_repository    = "vetsoftware-admin-web"
       github_repository_id = "100000002"
     }
     public_front = {
       name                 = "vetsoftware-public-front"
-      github_repository    = "VetSoftwarePublicFront"
+      github_repository    = "vetsoftware-public-web"
       github_repository_id = "100000003"
     }
   }
@@ -151,7 +151,7 @@ run "development_registry_has_no_production_identity" {
     repositories = {
       backend = {
         name                    = "vetsoftware-dev-backend"
-        github_repository       = "VetSoftware"
+        github_repository       = "vetsoftware-backend"
         github_repository_id    = "100000001"
         production_publication  = false
         development_publication = true

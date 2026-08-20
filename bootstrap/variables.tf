@@ -71,8 +71,19 @@ variable "existing_github_oidc_provider_arn" {
   }
 }
 
+# Estos valores son el NOMBRE DEL REPOSITORIO EN GITHUB, no el del directorio
+# local donde se clona. No coinciden: los fronts se clonan en VetSoftwareFront y
+# VetSoftwarePublicFront, pero en GitHub son vetsoftware-admin-web y
+# vetsoftware-public-web. Confundirlos rompe el OIDC sin dar la cara: el nombre
+# entra literal en el subject de la trust policy -modules/ecr/main.tf- y los
+# workflows de bootstrap solo sobrescriben los IDs, nunca los nombres, asi que
+# este default es el que termina escrito en IAM. El rol se crea sin error y quien
+# falla es el AssumeRoleWithWebIdentity del front, mucho despues.
+#
+# Al tocar cualquiera de estos valores, comprobarlo contra la API:
+#   gh api repos/kefaroTech/<nombre> --jq .full_name
 variable "github_repositories" {
-  description = "Repositorios GitHub de aplicaciones e infraestructura."
+  description = "Nombres de los repositorios en GitHub -no los de los directorios locales- de aplicaciones e infraestructura."
   type = object({
     backend       = string
     private_front = string
@@ -81,14 +92,19 @@ variable "github_repositories" {
   })
   default = {
     backend       = "vetsoftware-backend"
-    private_front = "VetSoftwareFront"
-    public_front  = "VetSoftwarePublicFront"
+    private_front = "vetsoftware-admin-web"
+    public_front  = "vetsoftware-public-web"
     iac           = "vetsoftware-infrastructure"
   }
 }
 
+# IDs inmutables del repositorio en GitHub, emparejados con los nombres de
+# github_repositories. Mismo criterio: el ID es el del repositorio remoto
+# -gh api repos/kefaroTech/<nombre> --jq .id-, no el del directorio local. Nombre
+# e ID viajan juntos dentro del mismo subject OIDC, asi que basta con que uno de
+# los dos no corresponda al repositorio real para que la federacion falle.
 variable "github_repository_ids" {
-  description = "IDs numericos inmutables de los repositorios GitHub."
+  description = "IDs numericos inmutables de los repositorios en GitHub, con las mismas claves que github_repositories."
   type = object({
     backend       = string
     private_front = optional(string, "")

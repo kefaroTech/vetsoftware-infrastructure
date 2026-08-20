@@ -8,8 +8,8 @@ Cuenta `Software@kefaro.tech's Account` (`9ee92528fcfa07b620f517a6173eca6b`), zo
 
 | Repositorio | Proyecto Pages | Dominio | Respaldo |
 |---|---|---|---|
-| `VetSoftwareFront` (admin) | `vetsoftware-front-dev` | `dev-admin.kefaro.tech` | `vetsoftware-front-dev.pages.dev` |
-| `VetSoftwarePublicFront` | `vetsoftware-public-front-dev` | `dev-public.kefaro.tech` | `vetsoftware-public-front-dev.pages.dev` |
+| `vetsoftware-admin-web` (admin) | `vetsoftware-front-dev` | `dev-admin.kefaro.tech` | `vetsoftware-front-dev.pages.dev` |
+| `vetsoftware-public-web` | `vetsoftware-public-front-dev` | `dev-public.kefaro.tech` | `vetsoftware-public-front-dev.pages.dev` |
 
 Ambos proyectos son *direct upload* con `production_branch = develop`: no hay integración de Git en Cloudflare. Cada repositorio publica desde `.github/workflows/deploy-dev.yml` con `wrangler pages deploy dist` al hacer push a `develop`.
 
@@ -39,7 +39,7 @@ Cada repositorio de front necesita, en su GitHub Environment `development`:
 |---|---|---|
 | `CLOUDFLARE_ACCOUNT_ID` | secret | `9ee92528fcfa07b620f517a6173eca6b` |
 | `CLOUDFLARE_API_TOKEN` | secret | Token de API con `Cloudflare Pages: Edit` sobre esa cuenta |
-| `VITE_RECAPTCHA_SITE_KEY` | variable | Solo `VetSoftwarePublicFront`; site key pública del dominio dev |
+| `VITE_RECAPTCHA_SITE_KEY` | variable | Solo `vetsoftware-public-web`; site key pública del dominio dev |
 
 El token debe ser distinto del que se use para producción y limitarse a la cuenta. No existe ningún secreto de runtime en Pages: las variables `VITE_*` se resuelven durante el build en el runner de GitHub y quedan incrustadas en el JavaScript entregado al navegador.
 
