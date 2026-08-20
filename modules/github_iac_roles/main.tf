@@ -528,6 +528,46 @@ data "aws_iam_policy_document" "apply_regional" {
       values   = [var.aws_region]
     }
   }
+
+  # ElastiCache no cifra con la identidad de quien aplica. Al crear el cache
+  # serverless con una clave gestionada por el cliente le pide a KMS un GRANT
+  # sobre la CMK, que es lo que le permitira descifrar los datos despues, cuando
+  # el rol de apply ya no exista. Ese CreateGrant lo emite con las credenciales
+  # del llamante, asi que sin este permiso CreateServerlessCache muere con un
+  # AccessDenied de KMS y deja la raiz a medio aplicar. El mensaje nombra la
+  # clave y no el permiso que falta, que es lo que despista la primera vez.
+  #
+  # El Resource no es el ARN literal de la CMK a proposito: la clave la crea el
+  # apply del entorno -modules/kms- y este rol lo crea bootstrap/, que corre
+  # ANTES y no puede conocer el key id -un UUID que KMS genera al crearla- sin
+  # leer el state del entorno, lo que invertiria el orden de creacion. El patron
+  # de ARN acotado a esta cuenta y esta region es la acotacion mas estrecha que
+  # si se puede expresar aqui.
+  #
+  # kms:ResourceAliases bajaria hasta la clave del entorno por su alias, pero se
+  # autoriza contra el alias YA asociado: Terraform puede crear el cache antes
+  # que el aws_kms_alias -nada ordena esas dos- y la asociacion es de
+  # consistencia eventual, asi que fallaria de forma intermitente en un entorno
+  # nuevo. Se descarto por eso, no por alcance.
+  #
+  # La condicion Bool es lo que hace inocuo el comodin del ARN: solo autoriza
+  # los grants que un servicio AWS crea para si mismo al cifrar un recurso,
+  # nunca conceder la clave a un principal arbitrario.
+  #
+  # kms:DescribeKey no se repite aqui: ya lo cubre el statement de lecturas
+  # -global_infrastructure_read_actions, sobre "*"- en los cuatro roles.
+  statement {
+    sid       = "GrantEnvironmentKeyToEncryptingServices"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant"]
+    resources = ["arn:${var.aws_partition}:kms:${var.aws_region}:${var.aws_account_id}:key/*"]
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "apply_regional" {
