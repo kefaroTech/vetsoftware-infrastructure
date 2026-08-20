@@ -25,7 +25,7 @@
 # script pensado para credenciales a un job que no debe tenerlas. Lo unico realmente
 # comun es "yq -o=json <fichero>", tres lineas, que es lo que se repite aqui.
 #
-# Codigo de salida: 0 si pasan las 7 comprobaciones, 1 si falla cualquiera.
+# Codigo de salida: 0 si pasan las 8 comprobaciones, 1 si falla cualquiera.
 
 [CmdletBinding()]
 param(
@@ -377,6 +377,61 @@ foreach ($entry in $parsedFiles) {
 Write-Host "C7: $templatesChecked cadenas con plantilla Go revisadas."
 
 # ---------------------------------------------------------------------------
+# C8 - Ningun uid de mas de 40 caracteres
+# ---------------------------------------------------------------------------
+#
+# Grafana valida la longitud del uid al CREAR el objeto y responde 400
+# ("cannot create rule with UID '...': UID is longer than 40 symbols"). El
+# limite es de la API, no del fichero: el YAML parsea igual, el fichero es
+# valido, y las comprobaciones C1-C7 -que miran forma, anclas y plantillas- lo
+# dan por bueno. El fallo solo aparece al aplicar.
+#
+# YA OCURRIO, y por eso esto existe: la regla
+# `vetsw-scheduled-job-failing-critical-slow` (41 caracteres) paso el gate en el
+# PR #162 y reventó el apply a dev (run 32331306479). Lo caro no fue el rojo,
+# fue el ESTADO PARCIAL: apply-grafana-provisioning.ps1 va objeto a objeto y
+# sale con exit 1 en el primer no-2xx (Assert-Success), asi que las dos reglas
+# anteriores del grupo quedaron ya actualizadas con su matcher NUEVO -que
+# excluye los jobs DIAN- y la que debia recogerlos nunca se creo. Resultado:
+# los jobs de facturacion electronica se quedaron sin alerta critica y nada lo
+# dijo, porque el rojo estaba en el workflow y no en Grafana.
+#
+# Se comprueban los uid de REGLA y los de CONTACT POINT: son el mismo validador
+# de Grafana sobre el mismo camino de apply, y un contact point que no se puede
+# crear deja sin destino a todas las alertas que lo referencian.
+
+$MaxUidLength = 40
+
+$uids = [System.Collections.Generic.List[object]]::new()
+foreach ($r in $rules) {
+    if ([string]::IsNullOrWhiteSpace($r.Uid)) { continue }
+    $uids.Add([pscustomobject]@{ Kind = "regla '$($r.Title)'"; File = $r.File; Uid = $r.Uid })
+}
+foreach ($entry in $parsedFiles) {
+    foreach ($cp in @(Get-Prop -Object $entry.Data -Name "contactPoints")) {
+        if ($null -eq $cp) { continue }
+        $cpName = Get-Prop -Object $cp -Name "name"
+        foreach ($receiver in @(Get-Prop -Object $cp -Name "receivers")) {
+            if ($null -eq $receiver) { continue }
+            $cpUid = Get-Prop -Object $receiver -Name "uid"
+            if ([string]::IsNullOrWhiteSpace($cpUid)) { continue }
+            $uids.Add([pscustomobject]@{ Kind = "contact point '$cpName'"; File = $entry.Path; Uid = $cpUid })
+        }
+    }
+}
+
+$longest = 0
+foreach ($u in $uids) {
+    $len = $u.Uid.Length
+    if ($len -gt $longest) { $longest = $len }
+    if ($len -gt $MaxUidLength) {
+        $excess = $len - $MaxUidLength
+        Add-Failure -Check "C8" -Message "El uid '$($u.Uid)' de la $($u.Kind) ($($u.File)) mide $len caracteres y el maximo de Grafana son $MaxUidLength (sobran $excess). La API responde 400 al crearlo y el apply aborta ahi: los objetos aplicados ANTES quedan con su definicion nueva y los de despues no se aplican, o sea el stack a medias entre dos versiones. Acortelo sin perder el prefijo de familia (p.ej. 'critical' -> 'crit') y actualice TODAS sus referencias: runbook, notification policy y comentarios."
+    }
+}
+Write-Host "C8: $($uids.Count) uid revisados, el mas largo mide $longest de $MaxUidLength permitidos."
+
+# ---------------------------------------------------------------------------
 # Resultado
 # ---------------------------------------------------------------------------
 
@@ -391,7 +446,7 @@ if ($script:Failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host "OK: $($rules.Count) reglas, $withRunbook anotaciones runbook, $($headings.Count) secciones del runbook, $($parsedFiles.Count) ficheros YAML y $templatesChecked plantillas Go verificadas."
+Write-Host "OK: $($rules.Count) reglas, $withRunbook anotaciones runbook, $($headings.Count) secciones del runbook, $($parsedFiles.Count) ficheros YAML, $templatesChecked plantillas Go y $($uids.Count) uid verificados."
 if ($env:GITHUB_STEP_SUMMARY) {
     @(
         "## Calidad de alertas Grafana-managed",
@@ -404,7 +459,8 @@ if ($env:GITHUB_STEP_SUMMARY) {
         "| C4 prefijo de URL exigido | $withRunbook/$withRunbook |",
         "| C5 metricas en '_seconds_' | 0 |",
         "| C6 el YAML parsea | $($parsedFiles.Count)/$($files.Count) |",
-        "| C7 plantillas Go balanceadas | $templatesChecked |"
+        "| C7 plantillas Go balanceadas | $templatesChecked |",
+        "| C8 uid dentro del limite de $MaxUidLength | $($uids.Count) uid, el mayor de $longest |"
     ) -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 }
 exit 0

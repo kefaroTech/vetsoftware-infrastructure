@@ -41,7 +41,7 @@ ausente, y por eso la que todavía no mide va primero.
 | `VetSoftwareHttpP99LatencyCritical` | ~~Igual. Además, un p99 sobre 20 muestras es la petición más lenta, no un percentil~~ → **CORREGIDO 2026-08-19**: misma exclusión, y la guarda **sube** a ≥ 100 = 1/(1−0,99) precisamente por eso |
 | `VetSoftwareSecurityTokenTableGrowth` | ~~**Se rompe en cada despliegue.** Con dos `service_version` vivas, `group_left()` falla por serie duplicada~~ → **CORREGIDO 2026-08-19**: el join va por `(job, instance, service_version)` y el lado derecho se agrega con `max by (...)`, así que no puede volver a duplicarse. `execErrState: Error` **se mantiene** deliberadamente, con la descripción corregida para que un estado de Error no se lea como crecimiento de tokens |
 | `VetSoftwareScheduledJobFailing` (critical) | ~~**Falso positivo estructural.** `security.tokens.cleanup` solo emite `no_work` y nunca `success`, así que un fallo aislado cumplía «ningún éxito en 2 h» al instante~~ → **CORREGIDO 2026-08-19** con una guarda de repetición `>= 2`. **Ojo: NO se arregla metiendo `no_work` en el lado excluido** —se probó y deja muda la alerta de la reconciliación DIAN, que alterna `no_work` con `failure`. Ver la sección de la alerta |
-| `VetSoftwareScheduledJobFailing` (las tres) | ~~**Muda para los jobs DIAN.** El backend los espació de 10 min a **12 h** (commit `dffef716`) y la ventana siguió en `[2h]`: con un ciclo de 12 h nunca hay dos incrementos en 2 horas, así que el `>= 2` es **aritméticamente** inalcanzable. La advertencia se rompía igual, por el borde `for: 30m` / ventana `[30m]`~~ → **CORREGIDO 2026-08-19**: advertencia a `[2h]`, crítica rápida a `[3h]` y una segunda crítica `-critical-slow` con `[26h]` para los jobs de ciclo largo, que además es el cajón por defecto. **La ventana es la cadencia del job en tiempo de reloj: si cambia un `fixedDelayString` en el backend, hay que volver aquí, y nada lo comprueba.** Ver la sección de la alerta |
+| `VetSoftwareScheduledJobFailing` (las tres) | ~~**Muda para los jobs DIAN.** El backend los espació de 10 min a **12 h** (commit `dffef716`) y la ventana siguió en `[2h]`: con un ciclo de 12 h nunca hay dos incrementos en 2 horas, así que el `>= 2` es **aritméticamente** inalcanzable. La advertencia se rompía igual, por el borde `for: 30m` / ventana `[30m]`~~ → **CORREGIDO 2026-08-19**: advertencia a `[2h]`, crítica rápida a `[3h]` y una segunda crítica `-crit-slow` con `[26h]` para los jobs de ciclo largo, que además es el cajón por defecto. **La ventana es la cadencia del job en tiempo de reloj: si cambia un `fixedDelayString` en el backend, hay que volver aquí, y nada lo comprueba.** Ver la sección de la alerta |
 
 Y un punto ciego que no es una regla rota sino una que no puede ver su fallo más probable:
 **`VetSoftwareEmailSendFailing`** no dispara si falta `RESEND_API_KEY`, porque
@@ -2287,8 +2287,8 @@ de reloj. Estado a 19-08-2026, leído en el backend:
 
 | `job_name` | Cadencia (`fixedDelay`) | Declarada en | Regla crítica que lo cubre |
 |---|---|---|---|
-| `dian.pending.reconciliation` | **12 h** | `PendingReconciliationJob.java:66` (`43200000`) | `-critical-slow`, ventana `[26h]` |
-| `dian.contingency.retry` | **12 h** | `ContingencyRetryJob.java:84` (`43200000`) | `-critical-slow`, ventana `[26h]` |
+| `dian.pending.reconciliation` | **12 h** | `PendingReconciliationJob.java:66` (`43200000`) | `-crit-slow`, ventana `[26h]` |
+| `dian.contingency.retry` | **12 h** | `ContingencyRetryJob.java:84` (`43200000`) | `-crit-slow`, ventana `[26h]` |
 | `security.tokens.cleanup` | **1 h** | `TokenCleanupJob.java:33` (`PT1H`) | `-critical`, ventana `[3h]` |
 
 Los dos jobs DIAN pasaron de 10 y 5 minutos a 12 horas en el commit `dffef716` del backend; los
@@ -2322,7 +2322,7 @@ unless
 (sum by (job_name) (increase(tasks_scheduled_execution_milliseconds_count{job="mainvet/vetsoftware",job_name="security.tokens.cleanup",job_outcome=~"success|partial_failure"}[3h])) > 0)
 ```
 
-*Crítica, familia lenta y cajón por defecto* (`uid: vetsw-scheduled-job-failing-critical-slow`,
+*Crítica, familia lenta y cajón por defecto* (`uid: vetsw-scheduled-job-failing-crit-slow`,
 `severity=critical`): lo mismo para **todos los demás** `job_name` —hoy los dos DIAN, y cualquier
 job futuro que nadie clasifique— con ventana `[26h]`, que son dos ciclos de 12 h más 2 h de
 margen:
@@ -2504,7 +2504,7 @@ sola vez en la transición a agotado, no en cada pasada.
 
   > Aquellas cifras se midieron con la cadencia **vieja** de 10 minutos, la única que existía a
   > esa hora. Ese job corre hoy cada 12 h y ya no lo cubre la regla `-critical`, sino la
-  > `-critical-slow`. La conclusión sobre `no_work` no depende de la cadencia y sigue vigente;
+  > `-crit-slow`. La conclusión sobre `no_work` no depende de la cadencia y sigue vigente;
   > los números, sí, y por eso quedan fechados.
 
   *El arreglo real*, dos cambios independientes: (1) el lado excluido pasa a
@@ -2523,7 +2523,7 @@ sola vez en la transición a agotado, no en cada pasada.
   igual, por el borde `for: 30m` / ventana `[30m]`. Se corrigió con tres cambios: ventana de la
   advertencia a `[2h]`, ventana de la crítica rápida a `[3h]` (el `2,02` de antes era una
   casualidad de la extrapolación de `increase()`, no un margen) y una segunda crítica
-  `-critical-slow` con ventana `[26h]` para los jobs de ciclo largo, que además es el **cajón por
+  `-crit-slow` con ventana `[26h]` para los jobs de ciclo largo, que además es el **cajón por
   defecto** de cualquier job nuevo. Meterlos a todos en una sola ventana de 26 h habría
   reintroducido el falso positivo de `security.tokens.cleanup` a escala 13x.
 - **Nada comprueba que la ventana siga cuadrando con la cadencia.** Es el defecto de proceso que

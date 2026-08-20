@@ -23,7 +23,7 @@
 # ejemplo) se compactan en una sola notificación.
 #
 # Consecuencia de la partición por cadencia de VetSoftwareScheduledJobFailing (19-08-2026):
-# sus DOS reglas críticas —`-critical` para los jobs de ciclo corto y `-critical-slow` para
+# sus DOS reglas críticas —`-critical` para los jobs de ciclo corto y `-crit-slow` para
 # los de ciclo largo— comparten alertname y severity, así que caen en el MISMO grupo y llegan
 # en una sola notificación. Es lo deseable: al de guardia le importa qué jobs están rotos, no
 # de qué regla salió cada línea; y `{{ $labels.job_name }}` distingue una instancia de otra

@@ -96,10 +96,18 @@ groups:
   #     solo decide cuánto tiempo sigue viva la alerta después del fallo. Por eso no se parte:
   #     `[2h]` sirve a las dos familias.
   #   · La crítica SÍ cuenta ciclos, y es la única que se parte:
-  #       - vetsw-scheduled-job-failing-critical      -> familia RÁPIDA (ciclo <= 2 h):
+  #       - vetsw-scheduled-job-failing-critical  -> familia RÁPIDA (ciclo <= 2 h):
   #         matcher `job_name="security.tokens.cleanup"`, ventana [3h].
-  #       - vetsw-scheduled-job-failing-critical-slow -> familia LENTA y CAJÓN POR DEFECTO:
+  #       - vetsw-scheduled-job-failing-crit-slow -> familia LENTA y CAJÓN POR DEFECTO:
   #         matcher `job_name!="" , job_name!="security.tokens.cleanup"`, ventana [26h].
+  #
+  #     `crit-slow` y no `critical-slow`: Grafana rechaza con HTTP 400 todo uid de más de
+  #     40 caracteres («UID is longer than 40 symbols») y `vetsw-scheduled-job-failing-
+  #     critical-slow` mide 41. No es una preferencia de estilo — con el nombre largo la
+  #     regla NO se puede crear. Lo aprendimos aplicando: el apply de dev abortó en esa
+  #     regla (run 32331306479) y dejó las otras dos ya actualizadas, o sea el grupo a
+  #     medias y los jobs DIAN sin crítica ninguna. Desde entonces lo comprueba C8 de
+  #     .github/scripts/check-grafana-alert-quality.ps1, en el PR y no en el apply.
   #
   # Los dos matchers son mutuamente excluyentes —Prometheus admite varios matchers sobre la
   # misma etiqueta y los combina con AND—, así que ningún job casa las dos reglas y nadie
@@ -202,7 +210,7 @@ groups:
       # Variante critical, FAMILIA RÁPIDA (ciclo <= 2 h; hoy solo `security.tokens.cleanup`,
       # que corre cada hora): el job lleva al menos DOS ejecuciones fallidas en 3 horas y ni
       # una sola en la que procesara bien algún elemento. Fallo determinista, sistémico y
-      # repetido. La hermana `-critical-slow`, justo debajo, hace lo mismo para los jobs de
+      # repetido. La hermana `-crit-slow`, justo debajo, hace lo mismo para los jobs de
       # ciclo largo con una ventana de 26 h; el porqué de la partición está en la cabecera
       # del grupo.
       #
@@ -254,7 +262,7 @@ groups:
               #
               # (Aquellas cifras se midieron con la cadencia VIEJA de 10 min, la única que
               # existía a esa hora. Hoy ese job corre cada 12 h y ya no lo cubre esta regla,
-              # sino su hermana `-critical-slow`. La conclusión sobre `no_work` no depende de
+              # sino su hermana `-crit-slow`. La conclusión sobre `no_work` no depende de
               # la cadencia y sigue vigente; los números, sí, y por eso quedan fechados.)
               #
               # Lo que se hace en su lugar, dos cambios independientes:
@@ -293,7 +301,7 @@ groups:
               # innecesario el `job_name!=""` de la warning: un nombre exacto ya excluye la
               # serie sin `job_name` de `BusinessGaugeMetrics.refresh`. Si algún día hay más
               # de un job rápido, pasa a `job_name=~"security\\.tokens\\.cleanup|el.nuevo"` y
-              # acuérdate de excluirlo también en la regla `-critical-slow`, o el crítico
+              # acuérdate de excluirlo también en la regla `-crit-slow`, o el crítico
               # llegará por duplicado.
               expr: |
                 (
@@ -349,7 +357,7 @@ groups:
       # ciclos fallidos que contar. Para el aviso temprano de documentos fiscales atascados
       # está el backlog (`vetsoftware_business_dian_backlog_documents`), que es independiente
       # de la cadencia del job y hoy no tiene alerta.
-      - uid: vetsw-scheduled-job-failing-critical-slow
+      - uid: vetsw-scheduled-job-failing-crit-slow
         title: VetSoftwareScheduledJobFailing
         condition: C
         data:
