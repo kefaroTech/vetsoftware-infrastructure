@@ -7,11 +7,21 @@ name: Terraform quality dev
 # runner para un trabajo que cabe en una sola invocacion. NO volver a partirlo
 # en dos: si se anade una raiz, va en el -Roots del ultimo paso, y su ruta en
 # el paths: de arriba.
+#
+# Gemelo de terraform-quality-prod.yml, reconciliado el 19 de agosto de 2026.
+# Las dos unicas diferencias que quedan estan en el disparador y son
+# intencionales, con su motivo escrito en el fichero de prod: alli no hay filtro
+# de paths y ademas corre en push a main. Todo lo demas -acciones, versiones,
+# permisos, timeout y raices- es identico a proposito. Si vuelven a separarse en
+# otra cosa, es deriva.
 
 on:
   pull_request:
     branches:
       - develop
+    # DIFERENCIA INTENCIONAL con prod: aqui si se filtra por rutas. Los PR
+    # contra develop son muchos y arrancar el gate por un cambio de
+    # documentacion solo gasta minutos.
     paths:
       - "environments/dev/**"
       - "modules/**"

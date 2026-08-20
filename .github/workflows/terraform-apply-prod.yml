@@ -55,6 +55,10 @@ jobs:
       TF_VAR_application_secrets_json: ${{ secrets.APPLICATION_SECRETS_JSON }}
       TF_VAR_cloudflare_tunnel_token: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
       TF_VAR_grafana_secrets_json: ${{ secrets.GRAFANA_SECRETS_JSON }}
+      # DIFERENCIA INTENCIONAL con dev, que aqui inyecta
+      # TF_VAR_grafana_logs_access_key: environments/prod no declara esa
+      # variable -el envio durable de logs por Firehose es de dev- y pasarla
+      # haria fallar el ciclo con "Value for undeclared variable".
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 
@@ -64,16 +68,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # Contraparte del mismo control en el plan del PR: alli se compara la
+      # variable de repositorio y aqui la del Environment, contra el mismo
+      # canonico. Va antes de instalar Terraform, igual que en el gemelo de dev.
+      # Sin valor canonico para prod el check solo avisa; ver el manifiesto.
+      - name: Verify OTLP endpoint parity
+        shell: pwsh
+        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-prod)'
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
-
-      # Sin valor canonico para prod el check solo avisa; ver el manifiesto.
-      - name: Verify OTLP endpoint parity
-        shell: pwsh
-        run: ./.github/scripts/assert-telemetry-endpoint.ps1 -Environment prod -Source 'vars.GRAFANA_OTLP_ENDPOINT (environment iac-apply-prod)'
 
       - name: Validate apply role configuration
         shell: pwsh

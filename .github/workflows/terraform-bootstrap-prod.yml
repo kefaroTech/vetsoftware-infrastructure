@@ -1,4 +1,8 @@
 name: Terraform bootstrap prod
+# Igual que en dev: el run-name deja ver en el listado desde que rama y con que
+# usuario se lanzo un bootstrap, que es lo primero que se pregunta cuando uno
+# aparece sin explicacion.
+run-name: Terraform bootstrap prod · ${{ github.ref_name }} · ${{ github.actor }}
 
 on:
   workflow_dispatch:
