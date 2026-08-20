@@ -9,6 +9,16 @@ locals {
 
   private_zone_name = "${var.environment}.${var.project_name}.internal"
 
+  # El rol que asume "Terraform apply prod" y que sera tambien el que publique el
+  # aviso de despliegue. El nombre lo fija el bootstrap:
+  # <proyecto>-iac-<funcion>-<ambiente> -modules/github_iac_roles/main.tf:302-.
+  deployment_notifier_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-apply-${var.environment}"
+
+  # El informe de costos no cambia nada: consulta Cost Explorer y publica el
+  # aviso. Por eso se autoriza al rol de plan y no al de apply -un cron sin
+  # supervision no tiene por que poder aplicar infraestructura-.
+  cost_reporter_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-iac-plan-${var.environment}"
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE              = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY     = "framework"

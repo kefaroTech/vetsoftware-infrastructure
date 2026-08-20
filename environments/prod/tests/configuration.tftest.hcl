@@ -26,10 +26,56 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_partition" {
+    defaults = {
+      partition = "aws"
+    }
+  }
+
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
+  }
+}
+
+# El ARN de un topic SNS no existe hasta el apply, y lo que hay que verificar
+# -que produccion tenga a donde publicar- se decide en plan. El override no
+# debilita la asercion: el indice [0] solo existe si el modulo creo el topico, y
+# si no lo creara el output volveria a ser null y la asercion caeria igual.
+override_resource {
+  target          = module.monitoring.aws_sns_topic.alarms[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-prod-alarms"
+  }
+}
+
+override_resource {
+  target          = module.monitoring.aws_sns_topic.alarms_critical[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-prod-alarms-critical"
+  }
+}
+
+override_resource {
+  target          = module.monitoring.aws_sns_topic.events[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-prod-events"
+  }
+}
+
+override_resource {
+  target          = module.monitoring.aws_sns_topic.finops[0]
+  override_during = plan
+
+  values = {
+    arn = "arn:aws:sns:us-east-1:123456789012:vetsoftware-prod-finops"
   }
 }
 
@@ -44,33 +90,40 @@ override_resource {
   }
 }
 
+# Las variables obligatorias del root se declaran una sola vez para todo el
+# archivo: cada `run` las hereda y solo sobrescribe lo que su asercion mide. Sin
+# esto, el run que comprueba que alarm_email es obligatorio tendria que repetir
+# el bloque entero y fallaria por la variable equivocada.
+variables {
+  backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  application_secrets_json = jsonencode({
+    JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
+    RESEND_API_KEY   = "test-only-resend-key"
+    RECAPTCHA_SECRET = "test-only-recaptcha-key"
+  })
+
+  grafana_secrets_json = jsonencode({
+    OTLP_USERNAME = "test-only-user"
+    OTLP_API_KEY  = "test-only-api-key"
+  })
+
+  cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+
+  grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
+  api_domain_name               = "api.example.test"
+  cors_allowed_origins          = ["https://app.example.test"]
+  email_from                    = "VetSoftware <noreply@example.test>"
+  registration_verification_url = "https://app.example.test/verify"
+  password_reset_url            = "https://app.example.test/reset"
+  login_url                     = "https://app.example.test/login"
+  alarm_email                   = "alertas@example.test"
+}
+
 run "production_configuration_plans" {
   command = plan
 
   variables {
-    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME = "test-only-user"
-      OTLP_API_KEY  = "test-only-api-key"
-    })
-
-    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
-
-    grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
-    api_domain_name               = "api.example.test"
-    cors_allowed_origins          = ["https://app.example.test"]
-    email_from                    = "VetSoftware <noreply@example.test>"
-    registration_verification_url = "https://app.example.test/verify"
-    password_reset_url            = "https://app.example.test/reset"
-    login_url                     = "https://app.example.test/login"
-
     monthly_budget_usd = 0
   }
 
@@ -151,4 +204,89 @@ run "production_configuration_plans" {
     condition     = output.cloudflare_tunnel_origin_url == "http://localhost:8080"
     error_message = "El hostname prod de Cloudflare Tunnel debe apuntar al backend local de la misma tarea."
   }
+
+  # INF-37 / #108. Lo que se afirma aqui no es como se comporta el modulo de
+  # monitoreo -se comporta exactamente como esta escrito- sino como lo invoca
+  # produccion. El estado degradado que esto impide no fallaba: creaba las
+  # alarmas con alarm_actions vacio y salia verde.
+  #
+  # Este run no configura Slack a proposito. Que los cuatro topicos existan con
+  # slack_enabled en falso es justo la regresion que hay que impedir: el destino
+  # de una alarma de produccion no puede depender de que alguien haya rellenado
+  # dos IDs de Slack.
+  assert {
+    condition = (
+      output.alarm_destinations.email_enabled &&
+      !output.alarm_destinations.slack_enabled &&
+      output.alarm_destinations.warning_topic_arn != null &&
+      output.alarm_destinations.critical_topic_arn != null &&
+      output.alarm_destinations.events_topic_arn != null &&
+      output.alarm_destinations.finops_topic_arn != null
+    )
+    error_message = "Produccion debe crear los cuatro topicos SNS y suscribir el correo aunque Slack no este configurado."
+  }
+
+  # El mismo valor que recibe module.account_baseline. Nulo aqui significa que
+  # la regla de EventBridge que rutea los hallazgos de GuardDuty no se crea
+  # -modules/account_baseline/main.tf:369-, y el detector queda sin destino el
+  # dia que se encienda.
+  assert {
+    condition     = output.alarm_destinations.guardduty_routing_topic_arn != null
+    error_message = "El topic de alarmas debe existir para que account_baseline pueda rutear los hallazgos de GuardDuty."
+  }
+
+  # Las dos compuestas correlacionan senales que por separado no son incidente.
+  # Cuelgan de que exista topico: sin destino no se crean, y con ellas se pierde
+  # la unica alarma que dice "la base se cae en los proximos minutos".
+  assert {
+    condition     = length(output.alerting.composite_alarm_names) == 2
+    error_message = "Produccion debe crear las alarmas compuestas de saturacion de RDS y degradacion del backend."
+  }
+
+  # El circuito de eventos es lo unico que detecta una tarea que muere y no
+  # vuelve: CPU y memoria miden una tarea viva. Container Insights sigue apagado
+  # -se factura por metrica-, y por eso el interruptor de hombre muerto es nulo.
+  assert {
+    condition = (
+      output.alerting.ecs_events_enabled &&
+      output.alerting.database_events_enabled &&
+      !output.alerting.container_insights_alarms &&
+      output.alerting.backend_dead_mans_switch == null
+    )
+    error_message = "Produccion debe observar eventos de ECS y RDS; las alarmas que dependen de Container Insights quedan fuera mientras siga apagado."
+  }
+
+  # Los umbrales de conexiones cuelgan de max_connections, no de un numero
+  # escrito a mano. El default del modulo -60- es el de una clase micro: con la
+  # db.t4g.small de prod abriria la advertencia a 42 conexiones.
+  assert {
+    condition = (
+      output.alerting.database.max_connections == 120 &&
+      output.alerting.database.connections_warning == 84 &&
+      output.alerting.database.connections_critical == 108
+    )
+    error_message = "Los umbrales de conexiones de prod deben derivarse de max_connections: 70% advertencia y 90% critico sobre 120."
+  }
+
+  # Ninguna alarma avisa al recuperarse: el OK duplicaria el ruido sin anadir
+  # una decision. Se afirma porque es exactamente lo que alguien vuelve a pegar.
+  assert {
+    condition     = !output.alerting.notify_on_recovery
+    error_message = "Las alarmas de produccion no deben notificar la recuperacion."
+  }
+}
+
+# La otra mitad del contrato: que el estado degradado sea imposible, no solo que
+# hoy no se de. Con el correo vacio -que era el default- el plan de produccion
+# tiene que detenerse en la validacion de la variable, antes de tocar AWS.
+run "produccion_no_puede_planificarse_sin_destino_de_alarma" {
+  command = plan
+
+  variables {
+    alarm_email = ""
+  }
+
+  expect_failures = [
+    var.alarm_email,
+  ]
 }

@@ -71,6 +71,29 @@ output "network_egress_profile" {
   })
 }
 
+# A donde va a parar una alarma de produccion. Se expone aparte del contrato de
+# alertas porque la pregunta que responde es la que quedo sin respuesta durante
+# meses: no "que se vigila" sino "quien se entera". El ultimo campo es
+# literalmente el valor que recibe account_baseline: si es nulo, la regla de
+# EventBridge que rutearia los hallazgos de GuardDuty tampoco se crea.
+output "alarm_destinations" {
+  description = "Destinos efectivos de las alarmas de produccion: correo suscrito, Slack y topicos por severidad."
+  value = {
+    email_enabled               = trimspace(var.alarm_email) != ""
+    slack_enabled               = module.monitoring.alerting.slack_enabled
+    warning_topic_arn           = module.monitoring.alerting.warning_topic_arn
+    critical_topic_arn          = module.monitoring.alerting.critical_topic_arn
+    events_topic_arn            = module.monitoring.alerting.events_topic_arn
+    finops_topic_arn            = module.monitoring.alerting.finops_topic_arn
+    guardduty_routing_topic_arn = module.monitoring.alarm_topic_arn
+  }
+}
+
+output "alerting" {
+  description = "Contrato de alertas operativas de produccion: severidades, umbrales derivados y circuitos de eventos activos."
+  value       = module.monitoring.alerting
+}
+
 output "traceability" {
   value = module.account_baseline.traceability
 }
