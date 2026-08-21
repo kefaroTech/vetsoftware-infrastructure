@@ -23,6 +23,71 @@ documentación, configuración o mantenimiento.
 - Las validaciones previas al commit (`mvn verify`, `npm run quality`, el gate de Terraform)
   se lanzan **en paralelo entre repos** y en serie dentro de cada uno.
 
+## Esperas largas — prohibido quedarse mirando la barra
+
+**Regla dura, sin excepciones.** Todo comando que tarde más de ~30 s —`mvn verify`, `mvn test`,
+cualquier cosa con Testcontainers, `npm run build`, `npm run test:coverage`, Playwright,
+`terraform init`/`plan`, un `docker` que baje imágenes, un `gh run watch`— **se lanza en segundo
+plano** (`run_in_background`) y **en el mismo mensaje** declaras qué vas a adelantar mientras
+corre. Lanzar una tarea larga en primer plano y quedarte esperando su salida sin hacer nada más
+es el desperdicio más caro que puedes cometer: ese turno muerto se paga entero y no produce nada.
+
+**El orden importa tanto como el paralelismo.** Coloca la tarea larga lo más temprano que el
+trabajo permita: en cuanto el árbol de archivos esté en un estado consistente, arráncala.
+Guardarte el `verify` para el final convierte toda su duración en tiempo muerto; arrancarlo
+pronto la solapa con el resto de tu trabajo.
+
+**Mientras corre, lo que SIEMPRE adelantas** (nada de esto toca lo que el comando está leyendo):
+
+- **Todo lo de solo lectura**: CodeGraph por shell (`explore` o `query`, según el repo del diff)
+  primero, luego `Read`/`Grep`/`Glob` e IntelliJ MCP. No interfieren con nada y son lo más barato
+  que tienes.
+- **Tu contrato de salida y tu informe**, redactados ya, con los huecos del resultado por rellenar.
+- **El cierre obligatorio**: busca duplicados con `gh issue list --repo <owner/repo> --state all
+  --search "<palabras clave>"` y deja escritos los cuerpos de los issues en archivos, listos para
+  disparar `gh issue create --body-file` en cuanto termine la espera.
+- **El commit y el PR, ya redactados** —nunca ejecutados—: durante la espera, deja listos el
+  mensaje de commit conforme a GitFlow, el cuerpo del PR, la lista de archivos y el bloque de
+  solicitud de aprobación, todo listo para disparar en cuanto llegue el visto bueno.
+- **Revisión de tu propio cambio en lectura pura**: `git status`, `git diff`, `git log` no escriben
+  nada y son seguros durante un build.
+- **Los comandos siguientes ya escritos**, para dispararlos en el mismo turno en que llegue el
+  resultado, sin un viaje extra.
+- **Mientras se espera la aprobación humana** (que puede tardar lo que tarde el humano), adelanta
+  TODO lo que no sea la escritura: `git status`/`git diff`/`git log` de los cuatro repos, verifica
+  el nombre de rama contra la política, revisa problemas de fichero con IntelliJ MCP, describe el
+  cambio con CodeGraph y deja el bloque de solicitud listo.
+- **Mientras corre el pre-commit** (gitleaks en contenedor Docker, y el OpenAPI con
+  Testcontainers), no toques el árbol de trabajo ni el índice: prepara en su lugar el cuerpo del
+  PR y el siguiente repo, ya que los cuatro repos son independientes y se pueden inspeccionar en
+  paralelo.
+- **Mientras corren los checks de CI de un PR** (`gh pr checks` / `gh run watch`), prepara el
+  siguiente repo del lote y redacta el informe; y recuerda la trampa conocida del proyecto: un
+  check rojo de 2–3 segundos con cero steps es bloqueo de facturación de Actions, no código — mira
+  duración y anotaciones antes de ponerte a depurar.
+- **Aviso propio**: desde un `git worktree` el gate de gitleaks del pre-commit es un falso verde
+  que no escanea nada; no lo des por bueno.
+
+**Lo que NUNCA haces mientras una tarea larga corre:**
+
+- **Editar archivos que el comando está compilando, leyendo o sirviendo.** El resultado dejaría de
+  corresponder al árbol y no valdría nada: habría que repetir la espera entera. Si necesitas
+  editar, prepara la edición como texto y aplícala cuando termine.
+- **Pelear por el mismo recurso**: mismo `target/`, mismo repositorio local de Maven, mismo
+  `node_modules`, mismo puerto de dev, mismo navegador de Playwright, mismo `.terraform` o lock de
+  estado, mismo índice de git, o dos comandos que levanten contenedores Docker a la vez.
+- **La escritura de git, aquí sí es competencia tuya, pero con dos límites que no ceden**:
+  commitear sin aprobación humana escrita (regla dura del proyecto, sin excepciones), y mover la
+  rama, hacer `checkout`/`stash`/`rebase` o commitear mientras un build o un hook está corriendo
+  sobre ese mismo árbol de trabajo, porque invalida el resultado y puede dejar el índice a medias.
+  Nunca dos escrituras a la vez sobre el mismo repo.
+- **Dormir o encuestar en bucle.** Nada de `sleep`, nada de repetir el mismo `status` cada pocos
+  segundos. Se espera a la notificación de fin o se lee la salida cuando ya está.
+
+**Al terminar la espera, reconcilia.** Contrasta lo adelantado contra el resultado real: si el
+comando falló y lo que redactaste asumía que pasaba, dilo y rehazlo. Reporta siempre la salida
+real, nunca la que esperabas, y cierra con una línea de qué adelantaste mientras esperabas.
+
 ## Aprobación humana obligatoria antes de TODO commit
 
 **Nunca creas un commit por iniciativa propia.** Una petición de implementar, modificar,
