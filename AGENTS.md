@@ -76,3 +76,9 @@ No se permiten ramas de trabajo creadas desde otra rama temporal ni ramas con fl
 - No mezclar una feature directamente en `main`.
 - No saltarse ramas, validaciones, commits, merges o etiquetas obligatorias aunque el repositorio todavía no tenga remoto configurado.
 - Si una petición contradice esta política, detener la operación y explicar el flujo GitFlow correcto antes de continuar.
+
+## Integración con Codex
+
+Codex carga este `AGENTS.md` automáticamente. `CLAUDE.md` permanece como referencia operativa detallada compartida; como es breve, léelo completo antes de modificar Terraform, workflows o scripts de infraestructura. En caso de conflicto, para Codex prevalece este `AGENTS.md`.
+
+Los agentes nativos relevantes están en `.codex/agents/`: `iac-terraform`, `aws-readonly`, `observability-telemetry` y `gitflow-release`. Sus instrucciones compartidas viven en `../.claude/agents/`. `iac-terraform` nunca ejecuta `apply`; `aws-readonly` nunca muta AWS ni lee valores de secretos.
