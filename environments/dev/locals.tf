@@ -74,7 +74,25 @@ locals {
     PASSWORD_RESET_URL                  = var.password_reset_url
     CODE_RECOVERY_LOGIN_URL             = var.login_url
     EMPLOYEE_LOGIN_URL                  = var.login_url
-    RECAPTCHA_ENABLED                   = tostring(var.recaptcha_enabled)
+    # Alta de superadministradores de plataforma. Sin estas cuatro el contenedor NO
+    # arranca: con el correo habilitado ResendPlatformAccessEmailSender las valida al
+    # construir el bean y lanza IllegalStateException, el health check falla y ECS
+    # reintenta en bucle. Van a la CONSOLA DE PLATAFORMA (dev-admin), no a la app del
+    # tenant de las dos lineas de arriba: reutilizar var.login_url mandaria al
+    # superadministrador recien creado a una aplicacion donde su codigo no sirve.
+    PLATFORM_APPROVER_EMAIL         = var.platform_approver_email
+    PLATFORM_ACCESS_REVIEW_BASE_URL = var.platform_access_review_base_url
+    PLATFORM_INVITATION_BASE_URL    = var.platform_invitation_base_url
+    PLATFORM_ACCESS_LOGIN_URL       = var.platform_access_login_url
+    # Los cuatro UUID de plantilla de Resend de ese mismo flujo. Las plantillas se crean
+    # A MANO en el panel de Resend; aqui solo viaja el identificador. Sin ellas el bean
+    # tampoco se construye: valida las OCHO claves de vetsoftware.platform-access de una
+    # vez, y en el application.yml del backend las cuatro llegan con default vacio.
+    PLATFORM_ACCESS_REQUEST_TEMPLATE_ID  = var.platform_access_request_template_id
+    PLATFORM_ACCESS_APPROVED_TEMPLATE_ID = var.platform_access_approved_template_id
+    PLATFORM_ACCESS_REJECTED_TEMPLATE_ID = var.platform_access_rejected_template_id
+    PLATFORM_ACCESS_WELCOME_TEMPLATE_ID  = var.platform_access_welcome_template_id
+    RECAPTCHA_ENABLED                    = tostring(var.recaptcha_enabled)
     # dev no despliega el modulo storage_audit, asi que no hay delivery stream ni permiso
     # firehose:PutRecordBatch en el task role (ecs_backend.firehose_stream_arn queda vacio).
     # Ambas banderas deben ir apagadas: publisher-enabled es la que instancia el FirehoseClient.

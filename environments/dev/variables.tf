@@ -326,6 +326,64 @@ variable "login_url" {
   type = string
 }
 
+# Alta de superadministradores de plataforma. En el perfil que carga el contenedor de
+# dev estas cuatro claves NO tienen default a proposito: con el correo habilitado,
+# ResendPlatformAccessEmailSender las valida al construir el bean y lanza
+# IllegalStateException si falta una, asi que el contenedor no arranca, el health
+# check falla y ECS entra en bucle. Antes arrancaba, respondia 202 y descartaba el
+# correo con un warn: la solicitud moria sin que nadie se enterase.
+#
+# Las tres URLs apuntan a la CONSOLA DE PLATAFORMA (dev-admin.kefaro.tech) y NO se
+# pueden sustituir por var.login_url, que es la app del tenant (dev-public): las
+# pantallas /aprobar-acceso, /aceptar-invitacion y /login de este flujo solo existen
+# en la consola, y el correo de bienvenida es el unico sitio donde el
+# superadministrador recien creado conoce su codigo de usuario.
+variable "platform_approver_email" {
+  description = "Destinatario del correo de solicitud de acceso de plataforma; quien aprueba o rechaza el alta de un superadministrador."
+  type        = string
+}
+
+variable "platform_access_review_base_url" {
+  description = "URL base de la pantalla de revision de solicitudes en la consola de plataforma; recibe ?token=... para aprobar o rechazar."
+  type        = string
+}
+
+variable "platform_invitation_base_url" {
+  description = "URL base de la pantalla de aceptacion de invitacion en la consola de plataforma; recibe ?token=... para aceptar el alta."
+  type        = string
+}
+
+variable "platform_access_login_url" {
+  description = "URL de login de la consola de plataforma que viaja en el correo de bienvenida; unico canal por el que el superadministrador conoce su codigo de acceso."
+  type        = string
+}
+
+# Los cuatro UUID de plantilla de Resend del mismo flujo. Las plantillas se crean A
+# MANO en el panel de Resend y ningun test las cubre: aqui solo viaja su identificador.
+# Se declaran sin default, igual que las cuatro de arriba, para que la falta salte en el
+# plan y no en el arranque: ResendPlatformAccessEmailSender valida las OCHO claves de
+# vetsoftware.platform-access al construirse, y el application.yml del backend las trae
+# con default vacio a proposito.
+variable "platform_access_request_template_id" {
+  description = "UUID de la plantilla de Resend del aviso de solicitud que recibe el aprobador; variables FULL_NAME, REQUESTER_EMAIL, REASON, REQUESTED_AT y REVIEW_URL."
+  type        = string
+}
+
+variable "platform_access_approved_template_id" {
+  description = "UUID de la plantilla de Resend del correo de invitacion que recibe el solicitante aprobado; variables FULL_NAME e INVITATION_URL."
+  type        = string
+}
+
+variable "platform_access_rejected_template_id" {
+  description = "UUID de la plantilla de Resend del correo de rechazo de la solicitud de acceso de plataforma; variable FULL_NAME."
+  type        = string
+}
+
+variable "platform_access_welcome_template_id" {
+  description = "UUID de la plantilla de Resend del correo de bienvenida tras aceptar la invitacion; unico canal por el que la cuenta nueva conoce el SYSTEM_USER_CODE con el que entra."
+  type        = string
+}
+
 variable "recaptcha_enabled" {
   type    = bool
   default = true
