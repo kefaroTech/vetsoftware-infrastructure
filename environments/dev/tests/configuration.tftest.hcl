@@ -102,17 +102,13 @@ run "development_cost_profile_plans" {
   variables {
     backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME              = "test-only-user"
-      OTLP_API_KEY               = "test-only-api-key"
-      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
-    })
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
     grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
@@ -456,17 +452,13 @@ run "durable_log_shipping_contract" {
   variables {
     backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME              = "test-only-user"
-      OTLP_API_KEY               = "test-only-api-key"
-      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
-    })
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
     grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
@@ -682,17 +674,13 @@ run "la_clave_de_acceso_exige_el_instance_id_delante" {
 
     backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME              = "test-only-user"
-      OTLP_API_KEY               = "test-only-api-key"
-      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
-    })
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 
@@ -730,17 +718,13 @@ run "el_sidecar_apagado_devuelve_la_exportacion_directa" {
 
     backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME              = "test-only-user"
-      OTLP_API_KEY               = "test-only-api-key"
-      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
-    })
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
     grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
@@ -814,17 +798,13 @@ run "el_sidecar_encendido_pone_la_cola_en_disco_sin_tocar_los_logs" {
 
     backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-    application_secrets_json = jsonencode({
-      JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-      RESEND_API_KEY   = "test-only-resend-key"
-      RECAPTCHA_SECRET = "test-only-recaptcha-key"
-    })
-
-    grafana_secrets_json = jsonencode({
-      OTLP_USERNAME              = "test-only-user"
-      OTLP_API_KEY               = "test-only-api-key"
-      OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Basic dGVzdDp0ZXN0"
-    })
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
     cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
     grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"

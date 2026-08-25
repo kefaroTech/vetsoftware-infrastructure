@@ -2,36 +2,101 @@ variable "name" {
   type = string
 }
 
-variable "application_secrets_json" {
-  description = "JSON con JWT_SECRET, RESEND_API_KEY y RECAPTCHA_SECRET. No se persiste en state."
+# ---------------------------------------------------------------------------
+# Un secreto, una variable. El JSON lo compone este modulo.
+#
+# Antes entraban dos blobs JSON ya armados desde fuera y eso tenia dos costes.
+# La validacion solo podia mirar dentro con jsondecode envuelto en try, asi que
+# un JSON mal formado no distinguia "falta una clave" de "faltan las comillas".
+# Y quien producia el blob -un secreto de GitHub, de solo escritura- decidia los
+# nombres de clave sin que nada los verificase.
+#
+# Los nombres de clave del JSON son CONTRATO: las definiciones de tarea de ECS
+# los leen por sufijo -"<arn>:JWT_SECRET::"- en los dos entornos. Renombrar una
+# clave aqui no rompe ningun plan: rompe el arranque del contenedor.
+# ---------------------------------------------------------------------------
+
+variable "jwt_secret" {
+  description = "Clave de firma de los JWT; viaja al secreto de aplicacion bajo la clave JWT_SECRET. No se persiste en state."
   type        = string
   sensitive   = true
   ephemeral   = true
 
   validation {
-    condition = try(
-      length(jsondecode(var.application_secrets_json).JWT_SECRET) >= 32 &&
-      length(jsondecode(var.application_secrets_json).RESEND_API_KEY) > 0 &&
-      length(jsondecode(var.application_secrets_json).RECAPTCHA_SECRET) > 0,
-      false
-    )
-    error_message = "application_secrets_json debe incluir JWT_SECRET (mínimo 32 caracteres), RESEND_API_KEY y RECAPTCHA_SECRET no vacíos."
+    condition     = length(var.jwt_secret) >= 32
+    error_message = "jwt_secret debe tener al menos 32 caracteres."
   }
 }
 
-variable "grafana_secrets_json" {
-  description = "JSON con OTLP_USERNAME y OTLP_API_KEY; puede incluir OTEL_EXPORTER_OTLP_HEADERS para exportación directa. No se persiste en state."
+variable "resend_api_key" {
+  description = "Clave de API de Resend para el envio de correo; clave RESEND_API_KEY del secreto de aplicacion. No se persiste en state."
   type        = string
   sensitive   = true
   ephemeral   = true
 
   validation {
-    condition = try(
-      length(jsondecode(var.grafana_secrets_json).OTLP_USERNAME) > 0 &&
-      length(jsondecode(var.grafana_secrets_json).OTLP_API_KEY) > 0,
-      false
-    )
-    error_message = "grafana_secrets_json debe incluir OTLP_USERNAME y OTLP_API_KEY no vacíos."
+    condition     = length(var.resend_api_key) > 0
+    error_message = "resend_api_key no puede estar vacio."
+  }
+}
+
+variable "recaptcha_secret" {
+  description = "Secreto de servidor de reCAPTCHA; clave RECAPTCHA_SECRET del secreto de aplicacion. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.recaptcha_secret) > 0
+    error_message = "recaptcha_secret no puede estar vacio."
+  }
+}
+
+variable "dian_enc_key" {
+  description = "Clave AES-256 -32 bytes en base64- del cifrado de campos DIAN; clave DIAN_ENC_KEY del secreto de aplicacion. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.dian_enc_key) > 0
+    error_message = "dian_enc_key no puede estar vacio."
+  }
+}
+
+variable "otlp_username" {
+  description = "Numeric instance ID de Grafana Cloud usado como usuario OTLP; clave OTLP_USERNAME del secreto de Grafana. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.otlp_username) > 0
+    error_message = "otlp_username no puede estar vacio."
+  }
+}
+
+variable "otlp_api_key" {
+  description = "Token de la Cloud Access Policy usado como contrasena OTLP; clave OTLP_API_KEY del secreto de Grafana. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.otlp_api_key) > 0
+    error_message = "otlp_api_key no puede estar vacio."
+  }
+}
+
+variable "otel_exporter_otlp_headers" {
+  description = "Cabecera ya construida -Authorization=Basic <base64 usuario:token>- que exporta el SDK; clave OTEL_EXPORTER_OTLP_HEADERS del secreto de Grafana. No se persiste en state."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.otel_exporter_otlp_headers) > 0
+    error_message = "otel_exporter_otlp_headers no puede estar vacio."
   }
 }
 

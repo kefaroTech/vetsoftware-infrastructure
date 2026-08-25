@@ -16,7 +16,9 @@ Ambos son *write-only* (`secret_string_wo` en `modules/secrets/main.tf`): Terraf
 
 ### `vetsoftware-dev/grafana-cloud` — telemetría de la aplicación
 
-Se inyecta entero como JSON por `TF_VAR_grafana_secrets_json`; la versión es `grafana_secret_version`.
+Ya no se inyecta como un JSON entero. Cada clave llega por su propia variable —`TF_VAR_otlp_username`, `TF_VAR_otlp_api_key` y `TF_VAR_otel_exporter_otlp_headers`— y el JSON lo compone `modules/secrets/main.tf` con `jsonencode`, igual que el secreto de logs de más abajo. La versión sigue siendo `grafana_secret_version`.
+
+Los nombres de clave de la tabla son **contrato**: las definiciones de tarea de ECS los leen por sufijo (`"<arn>:OTEL_EXPORTER_OTLP_HEADERS::"`), así que renombrar uno no rompe ningún plan —rompe el arranque del contenedor—. Por eso los fija el módulo y no quien rellena el secret de GitHub.
 
 | Clave | Quién la consume | Para qué |
 |---|---|---|

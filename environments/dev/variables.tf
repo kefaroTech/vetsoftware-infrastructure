@@ -206,22 +206,27 @@ variable "valkey_maximum_ecpu_per_second" {
 }
 
 # El secreto de aplicacion es write-only: Terraform solo lo reescribe cuando cambia
-# esta version. Subirla a 2 empuja el JSON que ahora incluye DIAN_ENC_KEY; sin el
-# bump, APPLICATION_SECRETS_JSON puede tener la clave y Secrets Manager seguir
-# sirviendo el contenido viejo.
+# esta version. Subirla a 3 empuja el JSON que ahora COMPONE el modulo a partir de
+# cuatro variables sueltas -jwt_secret, resend_api_key, recaptcha_secret y
+# dian_enc_key- en lugar del blob APPLICATION_SECRETS_JSON. Sin el bump el apply
+# sale verde y Secrets Manager sigue sirviendo el contenido viejo: el cambio
+# entero seria invisible.
 variable "application_secret_version" {
   type    = number
-  default = 2
+  default = 3
 }
 
 # El envio de logs por Firehose NO vive en este secreto: tiene el suyo propio
-# -grafana_logs_access_key- y por eso este no se reescribe y la version se queda
-# donde estaba. Es justo la ventaja de separarlos: los secretos de GitHub son de
-# solo escritura, asi que anadir una clave aqui obligaba a reescribir a ciegas
-# unas credenciales OTLP que ya funcionan.
+# -grafana_logs_access_key-, y por eso no aparece entre las tres variables que
+# ahora componen este JSON.
+#
+# Sube a 2 porque el contenido ya no viene de GRAFANA_SECRETS_JSON: lo compone el
+# modulo con otlp_username, otlp_api_key y otel_exporter_otlp_headers. El
+# atributo es write-only, asi que sin este bump el secreto se quedaria con el
+# blob anterior y el cambio no llegaria a Secrets Manager.
 variable "grafana_secret_version" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "cloudflare_tunnel_token_version" {
@@ -229,41 +234,86 @@ variable "cloudflare_tunnel_token_version" {
   default = 1
 }
 
-variable "application_secrets_json" {
-  description = "JSON con JWT_SECRET, RESEND_API_KEY, RECAPTCHA_SECRET y DIAN_ENC_KEY (AES-256, 32 bytes en base64)."
+# ---------------------------------------------------------------------------
+# Los siete secretos de runtime, uno por variable.
+#
+# Antes eran dos blobs JSON -APPLICATION_SECRETS_JSON y GRAFANA_SECRETS_JSON-
+# armados a mano en los secretos de GitHub. El JSON lo compone ahora
+# modules/secrets, que es quien fija los nombres de clave; aqui solo viajan los
+# valores. Las claves del secreto NO cambian: las leen por sufijo las
+# definiciones de tarea de ECS en locals.tf.
+#
+# Todas son ephemeral: no entran al state ni al plan.
+# ---------------------------------------------------------------------------
+
+variable "jwt_secret" {
+  description = "Clave de firma de los JWT de dev, minimo 32 caracteres; inyectar mediante TF_VAR_jwt_secret."
   type        = string
   sensitive   = true
   ephemeral   = true
 }
 
-variable "grafana_secrets_json" {
-  description = "JSON con OTLP_USERNAME, OTLP_API_KEY y OTEL_EXPORTER_OTLP_HEADERS."
+variable "resend_api_key" {
+  description = "Clave de API de Resend usada por dev para enviar correo; inyectar mediante TF_VAR_resend_api_key."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "recaptcha_secret" {
+  description = "Secreto de servidor de reCAPTCHA de dev; inyectar mediante TF_VAR_recaptcha_secret."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "dian_enc_key" {
+  description = "Clave AES-256 -32 bytes en base64- del cifrado de campos DIAN; la lee EncryptedStringConverter con System.getenv al cargar la clase, no como propiedad de Spring."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+# El sidecar no usa la cabecera OTLP ya construida: se autentica con la extension
+# basicauth, que quiere usuario y contrasena por separado. Son estas dos
+# -otlp_username es el numeric ID de la instancia, otlp_api_key el token- y de
+# ellas sale precisamente el Basic de otel_exporter_otlp_headers. Si faltan, el
+# colector arranca, encola en disco y cada entrega rebota con 401: un fallo que
+# solo se ve en su propio log group, nunca en la aplicacion, y que ademas llena
+# la cola hasta empezar a descartar.
+variable "otlp_username" {
+  description = "Numeric instance ID de Grafana Cloud usado como usuario OTLP; lo consume el sidecar colector con basicauth."
   type        = string
   sensitive   = true
   ephemeral   = true
 
   validation {
-    condition = try(
-      length(jsondecode(var.grafana_secrets_json).OTEL_EXPORTER_OTLP_HEADERS) > 0,
-      false
-    )
-    error_message = "grafana_secrets_json debe incluir OTEL_EXPORTER_OTLP_HEADERS para exportación directa."
+    condition     = !var.telemetry_sidecar_enabled || length(var.otlp_username) > 0
+    error_message = "Con telemetry_sidecar_enabled, otlp_username es obligatoria: el sidecar se autentica con basicauth, no con la cabecera ya construida."
   }
+}
 
-  # El sidecar no usa la cabecera OTLP ya construida: se autentica con la
-  # extension basicauth, que quiere usuario y contrasena por separado. Son las
-  # dos claves que ya viven en este secreto -OTLP_USERNAME es el numeric ID de la
-  # instancia, OTLP_API_KEY el token- y de las que sale precisamente el Basic de
-  # OTEL_EXPORTER_OTLP_HEADERS. Si faltan, el colector arranca, encola en disco y
-  # cada entrega rebota con 401: un fallo que solo se ve en su propio log group,
-  # nunca en la aplicacion, y que ademas llena la cola hasta empezar a descartar.
+variable "otlp_api_key" {
+  description = "Token de la Cloud Access Policy de Grafana Cloud usado como contrasena OTLP; lo consume el sidecar colector con basicauth."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
   validation {
-    condition = !var.telemetry_sidecar_enabled || try(
-      length(jsondecode(var.grafana_secrets_json).OTLP_USERNAME) > 0 &&
-      length(jsondecode(var.grafana_secrets_json).OTLP_API_KEY) > 0,
-      false
-    )
-    error_message = "Con telemetry_sidecar_enabled, grafana_secrets_json debe incluir OTLP_USERNAME y OTLP_API_KEY: el sidecar se autentica con basicauth, no con la cabecera ya construida."
+    condition     = !var.telemetry_sidecar_enabled || length(var.otlp_api_key) > 0
+    error_message = "Con telemetry_sidecar_enabled, otlp_api_key es obligatoria: el sidecar se autentica con basicauth, no con la cabecera ya construida."
+  }
+}
+
+variable "otel_exporter_otlp_headers" {
+  description = "Cabecera Authorization=Basic <base64 usuario:token> con la que el backend exporta directo a Grafana Cloud; sin ella cada envio rebota con 401 y RemoteConnectionValidator impide arrancar."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(var.otel_exporter_otlp_headers) > 0
+    error_message = "otel_exporter_otlp_headers es obligatoria para la exportación directa."
   }
 }
 
@@ -576,8 +626,8 @@ variable "log_shipping_enabled" {
   default     = true
 }
 
-# La clave de acceso del endpoint de logs, en su propio secreto y no dentro de
-# grafana_secrets_json. Va aparte porque AWS solo documenta que Firehose "falla al
+# La clave de acceso del endpoint de logs, en su propio secreto y no como una
+# cuarta clave del de Grafana Cloud. Va aparte porque AWS solo documenta que Firehose "falla al
 # conectar si el secreto no tiene el formato JSON correcto", sin aclarar si
 # tolera claves hermanas, y ese fallo es silencioso y en tiempo de entrega.
 #

@@ -208,11 +208,25 @@ desde el alias `alias/vetsoftware-<ambiente>-tfstate`. Definir `TF_STATE_BUCKET`
 `TF_STATE_KMS_KEY_ARN` sigue funcionando y tiene prioridad sobre lo derivado; solo
 hace falta cuando el backend no sigue la convencion.
 
-Configure unicamente en los Environments de apply:
+Configure unicamente en los Environments de apply. Son ocho, uno por secreto: los
+dos blobs JSON `APPLICATION_SECRETS_JSON` y `GRAFANA_SECRETS_JSON` desaparecieron
+porque el JSON que llega a Secrets Manager lo compone `modules/secrets`, no quien
+rellena el secret. Los nombres de clave del JSON no cambiaron -las definiciones de
+tarea de ECS los leen por sufijo-, solo cambio quien los escribe.
 
-- `APPLICATION_SECRETS_JSON`
+- `JWT_SECRET` - minimo 32 caracteres; la validacion corre en tiempo de plan
+- `RESEND_API_KEY`
+- `RECAPTCHA_SECRET`
+- `DIAN_ENC_KEY` - AES-256: base64 de 32 bytes exactos
+- `OTLP_USERNAME`
+- `OTLP_API_KEY`
+- `OTEL_EXPORTER_OTLP_HEADERS` - `Authorization=Basic <base64 usuario:token>`
 - `CLOUDFLARE_TUNNEL_TOKEN`
-- `GRAFANA_SECRETS_JSON`
+
+`OTEL_EXPORTER_OTLP_HEADERS` tambien hace falta en produccion, y eso es nuevo: el
+secreto de Grafana de prod solo tenia las dos credenciales que Alloy extrae con `jq`,
+pero el modulo es compartido y compone el JSON entero. Sin ella el apply de prod se
+detiene en la validacion del modulo.
 
 ### El unico secret que va a nivel de repositorio: `TF_VAR_GRAFANA_LOGS_ACCESS_KEY`
 

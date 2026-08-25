@@ -366,11 +366,16 @@ function New-OptionalVariableFile {
     }
 
     $forbiddenVariables = @(
-        "application_secrets_json",
         "backend_image_uri",
         "cloudflare_tunnel_token",
+        "dian_enc_key",
         "environment",
-        "grafana_secrets_json"
+        "jwt_secret",
+        "otel_exporter_otlp_headers",
+        "otlp_api_key",
+        "otlp_username",
+        "recaptcha_secret",
+        "resend_api_key"
     )
     $configuredVariables = @($configuration.PSObject.Properties.Name)
     $forbiddenConfigured = @($configuredVariables | Where-Object { $_ -in $forbiddenVariables })
@@ -728,17 +733,35 @@ if ($Mode -eq "Unlock") {
 
 if ($Mode -eq "Apply") {
     @(
-        "TF_VAR_application_secrets_json",
-        "TF_VAR_cloudflare_tunnel_token",
-        "TF_VAR_grafana_secrets_json"
+        "TF_VAR_jwt_secret",
+        "TF_VAR_resend_api_key",
+        "TF_VAR_recaptcha_secret",
+        "TF_VAR_dian_enc_key",
+        "TF_VAR_otlp_username",
+        "TF_VAR_otlp_api_key",
+        "TF_VAR_otel_exporter_otlp_headers",
+        "TF_VAR_cloudflare_tunnel_token"
     ) | ForEach-Object { Assert-RequiredEnvironmentVariable -Name $_ }
 }
 else {
     # Plan y drift no reciben secretos de runtime. Los valores write-only son
     # ephemeral y sus versiones controlan cualquier rotacion intencional.
-    $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"terraform-plan-placeholder-32chars","RESEND_API_KEY":"not-used","RECAPTCHA_SECRET":"not-used"}'
+    #
+    # Un marcador por secreto, ya no dos JSON: el JSON lo compone modules/secrets.
+    # Cada valor tiene que pasar la validacion de su propia variable en tiempo de
+    # plan -jwt_secret exige 32 caracteres o mas y las otras seis no pueden quedar
+    # vacias- sin dejar de gritar que es un marcador.
+    $env:TF_VAR_jwt_secret = "terraform-plan-placeholder-32chars"
+    $env:TF_VAR_resend_api_key = "not-used"
+    $env:TF_VAR_recaptcha_secret = "not-used"
+    # DIAN_ENC_KEY se decodifica como AES-256, asi que tiene que ser base64 de 32
+    # bytes exactos. Este decodifica a 32 letras "A": entropia baja a proposito,
+    # porque un relleno legible dispara la regla generic-api-key de gitleaks (#196).
+    $env:TF_VAR_dian_enc_key = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+    $env:TF_VAR_otlp_username = "not-used"
+    $env:TF_VAR_otlp_api_key = "not-used"
+    $env:TF_VAR_otel_exporter_otlp_headers = "Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="
     $env:TF_VAR_cloudflare_tunnel_token = "terraform-plan-placeholder-32chars"
-    $env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="}'
 }
 
 Resolve-StateBackend
