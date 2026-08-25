@@ -6,8 +6,17 @@ resource "aws_secretsmanager_secret" "application" {
 }
 
 resource "aws_secretsmanager_secret_version" "application" {
-  secret_id                = aws_secretsmanager_secret.application.id
-  secret_string_wo         = var.application_secrets_json
+  secret_id = aws_secretsmanager_secret.application.id
+
+  # Las claves son el contrato que leen las definiciones de tarea de ECS por
+  # sufijo -"<arn>:JWT_SECRET::"-. No se renombran.
+  secret_string_wo = jsonencode({
+    JWT_SECRET       = var.jwt_secret
+    RESEND_API_KEY   = var.resend_api_key
+    RECAPTCHA_SECRET = var.recaptcha_secret
+    DIAN_ENC_KEY     = var.dian_enc_key
+  })
+
   secret_string_wo_version = var.application_secret_version
 }
 
@@ -19,8 +28,16 @@ resource "aws_secretsmanager_secret" "grafana" {
 }
 
 resource "aws_secretsmanager_secret_version" "grafana" {
-  secret_id                = aws_secretsmanager_secret.grafana.id
-  secret_string_wo         = var.grafana_secrets_json
+  secret_id = aws_secretsmanager_secret.grafana.id
+
+  # OTEL_EXPORTER_OTLP_HEADERS la lee el backend por su nombre exacto; las otras
+  # dos las consumen el sidecar colector -basicauth- y Alloy.
+  secret_string_wo = jsonencode({
+    OTLP_USERNAME              = var.otlp_username
+    OTLP_API_KEY               = var.otlp_api_key
+    OTEL_EXPORTER_OTLP_HEADERS = var.otel_exporter_otlp_headers
+  })
+
   secret_string_wo_version = var.grafana_secret_version
 }
 

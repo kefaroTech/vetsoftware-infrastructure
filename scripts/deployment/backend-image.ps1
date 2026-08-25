@@ -439,11 +439,16 @@ function New-OptionalVariableFile {
     # backend_image_uri lo fija este script con el digest ya certificado, y el resto
     # son secretos que nunca deben viajar en una variable de repositorio.
     $forbiddenVariables = @(
-        "application_secrets_json",
         "backend_image_uri",
         "cloudflare_tunnel_token",
+        "dian_enc_key",
         "environment",
-        "grafana_secrets_json"
+        "jwt_secret",
+        "otel_exporter_otlp_headers",
+        "otlp_api_key",
+        "otlp_username",
+        "recaptcha_secret",
+        "resend_api_key"
     )
     $forbiddenConfigured = @(@($configuration.PSObject.Properties.Name) | Where-Object {
         $_ -in $forbiddenVariables
@@ -945,9 +950,21 @@ if ($Version -notmatch $versionPattern) {
 # The image-only workflow must never receive runtime secrets. These ephemeral
 # placeholders only satisfy root-module validation. Any attempted secret change
 # appears outside the ECS allowlist and is rejected before apply.
-$env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"image-only-plan-placeholder-32chars","RESEND_API_KEY":"not-used","RECAPTCHA_SECRET":"not-used"}'
+# One placeholder per secret: modules/secrets composes the JSON now. Each value
+# must satisfy its own variable validation at plan time -jwt_secret needs 32
+# characters or more, the other six must not be empty- while still reading as an
+# obvious placeholder.
+$env:TF_VAR_jwt_secret = "image-only-plan-placeholder-32chars"
+$env:TF_VAR_resend_api_key = "not-used"
+$env:TF_VAR_recaptcha_secret = "not-used"
+# DIAN_ENC_KEY is decoded as AES-256, so it must be base64 of exactly 32 bytes.
+# This one decodes to 32 "X" characters: deliberately low entropy, because a
+# readable placeholder trips the gitleaks generic-api-key rule (#196).
+$env:TF_VAR_dian_enc_key = "WFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg="
+$env:TF_VAR_otlp_username = "not-used"
+$env:TF_VAR_otlp_api_key = "not-used"
+$env:TF_VAR_otel_exporter_otlp_headers = "Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="
 $env:TF_VAR_cloudflare_tunnel_token = "image-only-plan-placeholder-32chars"
-$env:TF_VAR_grafana_secrets_json = '{"OTLP_USERNAME":"not-used","OTLP_API_KEY":"not-used","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Basic bm90LXVzZWQ6bm90LXVzZWQ="}'
 
 $accountId = (& aws sts get-caller-identity --query Account --output text)
 if ($LASTEXITCODE -ne 0 -or $accountId -notmatch '^[0-9]{12}$') {

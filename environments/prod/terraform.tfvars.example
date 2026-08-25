@@ -18,7 +18,22 @@ login_url                      = "https://app.example.com/login"
 api_domain_name = "api.kefaro.tech"
 # En Cloudflare Tunnel publique este host con origen http://localhost:8080.
 
-# Variable ephemeral adicional, nunca tfvars:
+# Variables ephemeral, NUNCA tfvars. Un secreto, una variable: el JSON que acaba en
+# Secrets Manager lo compone modules/secrets. Los nombres de clave del secreto no
+# cambian -los leen por sufijo las definiciones de tarea de ECS-.
+# $env:TF_VAR_jwt_secret       = "REEMPLAZAR_MINIMO_32_CARACTERES"
+# $env:TF_VAR_resend_api_key   = "re_REEMPLAZAR"
+# $env:TF_VAR_recaptcha_secret = "REEMPLAZAR_SECRETO_DE_SERVIDOR_RECAPTCHA"
+# DIAN_ENC_KEY es AES-256: exactamente 32 bytes codificados en base64.
+# $env:TF_VAR_dian_enc_key = "REEMPLAZAR_32_BYTES_EN_BASE64"
+#
+# Alloy extrae del secreto OTLP_USERNAME y OTLP_API_KEY con jq. La cabecera ya
+# construida se escribe igual porque el modulo es compartido con dev.
+# $env:TF_VAR_otlp_username = "REEMPLAZAR_NUMERIC_INSTANCE_ID"
+# $env:TF_VAR_otlp_api_key  = "glc_REEMPLAZAR"
+# $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$env:TF_VAR_otlp_username:$env:TF_VAR_otlp_api_key"))
+# $env:TF_VAR_otel_exporter_otlp_headers = "Authorization=Basic $basic"
+#
 # $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-prod"
 
 # Para comenzar más pequeño:

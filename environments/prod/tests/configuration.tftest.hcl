@@ -97,16 +97,13 @@ override_resource {
 variables {
   backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-  application_secrets_json = jsonencode({
-    JWT_SECRET       = "test-only-jwt-secret-with-sufficient-length"
-    RESEND_API_KEY   = "test-only-resend-key"
-    RECAPTCHA_SECRET = "test-only-recaptcha-key"
-  })
-
-  grafana_secrets_json = jsonencode({
-    OTLP_USERNAME = "test-only-user"
-    OTLP_API_KEY  = "test-only-api-key"
-  })
+  jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+  resend_api_key             = "test-only-resend-key"
+  recaptcha_secret           = "test-only-recaptcha-key"
+  dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+  otlp_username              = "test-only-user"
+  otlp_api_key               = "test-only-api-key"
+  otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
 
   cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 

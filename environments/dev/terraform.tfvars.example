@@ -43,10 +43,23 @@ backend_log_retention_days         = 14
 log_shipping_backup_retention_days = 30
 # grafana_logs_firehose_endpoint = "https://aws-logs-prod-042.grafana.net/aws-logs/api/v1/push"
 
-# Variables ephemeral recomendadas, no tfvars:
-# $env:TF_VAR_application_secrets_json = '{"JWT_SECRET":"...mínimo-32...","RESEND_API_KEY":"re_xxx","RECAPTCHA_SECRET":"xxx"}'
-# $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("OTLP_USERNAME:OTLP_API_KEY"))
-# $env:TF_VAR_grafana_secrets_json = "{`"OTLP_USERNAME`":`"...`",`"OTLP_API_KEY`":`"...`",`"OTEL_EXPORTER_OTLP_HEADERS`":`"Authorization=Basic $basic`"}"
+# Variables ephemeral recomendadas, NUNCA tfvars. Un secreto, una variable: el JSON
+# que acaba en Secrets Manager lo compone modules/secrets, no usted. Los nombres de
+# clave del secreto -JWT_SECRET, RESEND_API_KEY, ...- siguen siendo los mismos: los
+# leen por sufijo las definiciones de tarea de ECS.
+# $env:TF_VAR_jwt_secret       = "REEMPLAZAR_MINIMO_32_CARACTERES"
+# $env:TF_VAR_resend_api_key   = "re_REEMPLAZAR"
+# $env:TF_VAR_recaptcha_secret = "REEMPLAZAR_SECRETO_DE_SERVIDOR_RECAPTCHA"
+# DIAN_ENC_KEY es AES-256: exactamente 32 bytes codificados en base64.
+# $env:TF_VAR_dian_enc_key = "REEMPLAZAR_32_BYTES_EN_BASE64"
+#
+# Las tres de Grafana Cloud. otel_exporter_otlp_headers NO es un tercer secreto que
+# se invente: es el Basic que sale de las otras dos, por eso se compone aqui.
+# $env:TF_VAR_otlp_username = "REEMPLAZAR_NUMERIC_INSTANCE_ID"
+# $env:TF_VAR_otlp_api_key  = "glc_REEMPLAZAR"
+# $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$env:TF_VAR_otlp_username:$env:TF_VAR_otlp_api_key"))
+# $env:TF_VAR_otel_exporter_otlp_headers = "Authorization=Basic $basic"
+#
 # $env:TF_VAR_cloudflare_tunnel_token = "token-del-tunel-dev"
 #
 # La clave que lee Kinesis Firehose va en SU PROPIO secreto, no dentro del anterior.

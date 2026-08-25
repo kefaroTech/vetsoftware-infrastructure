@@ -68,11 +68,21 @@ jobs:
       TF_VAR_platform_access_rejected_template_id: ${{ vars.PLATFORM_ACCESS_REJECTED_TEMPLATE_ID }}
       TF_VAR_platform_access_welcome_template_id: ${{ vars.PLATFORM_ACCESS_WELCOME_TEMPLATE_ID }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
-      TF_VAR_application_secrets_json: ${{ secrets.APPLICATION_SECRETS_JSON }}
+      # Un secreto de GitHub por secreto de runtime. Antes eran dos blobs JSON
+      # -APPLICATION_SECRETS_JSON y GRAFANA_SECRETS_JSON- que alguien tenia que
+      # armar a mano: un JSON mal escrito no lo veia nadie, porque el secreto es
+      # de solo escritura y el valor no aparece en el plan. Ahora el JSON lo
+      # compone modules/secrets y aqui solo viajan valores.
+      TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+      TF_VAR_resend_api_key: ${{ secrets.RESEND_API_KEY }}
+      TF_VAR_recaptcha_secret: ${{ secrets.RECAPTCHA_SECRET }}
+      TF_VAR_dian_enc_key: ${{ secrets.DIAN_ENC_KEY }}
+      TF_VAR_otlp_username: ${{ secrets.OTLP_USERNAME }}
+      TF_VAR_otlp_api_key: ${{ secrets.OTLP_API_KEY }}
+      TF_VAR_otel_exporter_otlp_headers: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
       TF_VAR_cloudflare_tunnel_token: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-      TF_VAR_grafana_secrets_json: ${{ secrets.GRAFANA_SECRETS_JSON }}
-      # Clave del envio durable de logs. Va en su propio secret, no dentro de
-      # GRAFANA_SECRETS_JSON, y es de REPOSITORIO porque el plan de un PR corre
+      # Clave del envio durable de logs. Va en su propio secret, separada de las
+      # tres de Grafana Cloud, y es de REPOSITORIO porque el plan de un PR corre
       # sin environment y necesita el mismo valor.
       TF_VAR_grafana_logs_access_key: ${{ secrets.TF_VAR_GRAFANA_LOGS_ACCESS_KEY }}
       TF_IN_AUTOMATION: true

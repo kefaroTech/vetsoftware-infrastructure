@@ -52,9 +52,21 @@ jobs:
       TF_VAR_login_url: ${{ vars.LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
-      TF_VAR_application_secrets_json: ${{ secrets.APPLICATION_SECRETS_JSON }}
+      # Un secreto de GitHub por secreto de runtime. Antes eran dos blobs JSON
+      # -APPLICATION_SECRETS_JSON y GRAFANA_SECRETS_JSON- armados a mano; el JSON
+      # lo compone ahora modules/secrets y aqui solo viajan valores.
+      #
+      # OTEL_EXPORTER_OTLP_HEADERS es NUEVA en produccion: el secreto de Grafana
+      # de prod tenia solo las dos credenciales que Alloy extrae con jq, pero el
+      # modulo es compartido y compone el JSON entero.
+      TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+      TF_VAR_resend_api_key: ${{ secrets.RESEND_API_KEY }}
+      TF_VAR_recaptcha_secret: ${{ secrets.RECAPTCHA_SECRET }}
+      TF_VAR_dian_enc_key: ${{ secrets.DIAN_ENC_KEY }}
+      TF_VAR_otlp_username: ${{ secrets.OTLP_USERNAME }}
+      TF_VAR_otlp_api_key: ${{ secrets.OTLP_API_KEY }}
+      TF_VAR_otel_exporter_otlp_headers: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
       TF_VAR_cloudflare_tunnel_token: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-      TF_VAR_grafana_secrets_json: ${{ secrets.GRAFANA_SECRETS_JSON }}
       # DIFERENCIA INTENCIONAL con dev, que aqui inyecta
       # TF_VAR_grafana_logs_access_key: environments/prod no declara esa
       # variable -el envio durable de logs por Firehose es de dev- y pasarla

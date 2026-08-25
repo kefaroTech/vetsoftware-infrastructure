@@ -267,17 +267,21 @@ variable "valkey_maximum_ecpu_per_second" {
 }
 
 # El secreto de aplicacion es write-only: Terraform solo lo reescribe cuando cambia
-# esta version. Subirla a 2 empuja el JSON que ahora incluye DIAN_ENC_KEY; sin el
-# bump, APPLICATION_SECRETS_JSON puede tener la clave y Secrets Manager seguir
-# sirviendo el contenido viejo.
+# esta version. Subirla a 3 empuja el JSON que ahora COMPONE el modulo a partir de
+# cuatro variables sueltas -jwt_secret, resend_api_key, recaptcha_secret y
+# dian_enc_key- en lugar del blob APPLICATION_SECRETS_JSON. Sin el bump el apply
+# sale verde y Secrets Manager sigue sirviendo el contenido viejo.
 variable "application_secret_version" {
   type    = number
-  default = 2
+  default = 3
 }
 
+# Sube a 2 por el mismo motivo: el JSON de Grafana ya no llega armado desde
+# GRAFANA_SECRETS_JSON, lo compone el modulo con otlp_username, otlp_api_key y
+# otel_exporter_otlp_headers.
 variable "grafana_secret_version" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "cloudflare_tunnel_token_version" {
@@ -285,15 +289,67 @@ variable "cloudflare_tunnel_token_version" {
   default = 1
 }
 
-variable "application_secrets_json" {
-  description = "JSON: JWT_SECRET, RESEND_API_KEY, RECAPTCHA_SECRET, DIAN_ENC_KEY (AES-256, 32 bytes en base64)."
+# ---------------------------------------------------------------------------
+# Los siete secretos de runtime, uno por variable.
+#
+# Antes eran dos blobs JSON -APPLICATION_SECRETS_JSON y GRAFANA_SECRETS_JSON-
+# armados a mano en los secretos de GitHub. El JSON lo compone ahora
+# modules/secrets, que fija los nombres de clave; aqui solo viajan los valores.
+# Las claves NO cambian: las leen por sufijo las definiciones de tarea de ECS en
+# locals.tf.
+#
+# otel_exporter_otlp_headers es NUEVA en produccion. El secreto de Grafana de
+# prod tenia solo OTLP_USERNAME y OTLP_API_KEY, que son las dos que Alloy extrae
+# con jq en su user-data -templates/alloy-user-data.sh.tftpl:22-; la tercera
+# clave le es indiferente porque lee por nombre, pero el modulo es compartido y
+# compone el JSON entero. Sin valor, el apply de produccion se detiene en la
+# validacion del modulo.
+# ---------------------------------------------------------------------------
+
+variable "jwt_secret" {
+  description = "Clave de firma de los JWT de produccion, minimo 32 caracteres; inyectar mediante TF_VAR_jwt_secret."
   type        = string
   sensitive   = true
   ephemeral   = true
 }
 
-variable "grafana_secrets_json" {
-  description = "JSON: OTLP_USERNAME, OTLP_API_KEY."
+variable "resend_api_key" {
+  description = "Clave de API de Resend usada por produccion para enviar correo; inyectar mediante TF_VAR_resend_api_key."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "recaptcha_secret" {
+  description = "Secreto de servidor de reCAPTCHA de produccion; inyectar mediante TF_VAR_recaptcha_secret."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "dian_enc_key" {
+  description = "Clave AES-256 -32 bytes en base64- del cifrado de campos DIAN; la lee EncryptedStringConverter con System.getenv al cargar la clase, no como propiedad de Spring."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "otlp_username" {
+  description = "Numeric instance ID de Grafana Cloud usado como usuario OTLP; Alloy lo extrae del secreto en su user-data."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "otlp_api_key" {
+  description = "Token de la Cloud Access Policy de Grafana Cloud usado como contrasena OTLP; Alloy lo extrae del secreto en su user-data."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "otel_exporter_otlp_headers" {
+  description = "Cabecera Authorization=Basic <base64 usuario:token>; la escribe el secreto compartido aunque en produccion la telemetria salga por Alloy."
   type        = string
   sensitive   = true
   ephemeral   = true

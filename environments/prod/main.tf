@@ -27,9 +27,17 @@ module "security" {
 module "secrets" {
   source = "../../modules/secrets"
 
-  name                            = local.name
-  application_secrets_json        = var.application_secrets_json
-  grafana_secrets_json            = var.grafana_secrets_json
+  name = local.name
+
+  # Siete valores sueltos: el JSON y los nombres de clave los pone el modulo.
+  jwt_secret                 = var.jwt_secret
+  resend_api_key             = var.resend_api_key
+  recaptcha_secret           = var.recaptcha_secret
+  dian_enc_key               = var.dian_enc_key
+  otlp_username              = var.otlp_username
+  otlp_api_key               = var.otlp_api_key
+  otel_exporter_otlp_headers = var.otel_exporter_otlp_headers
+
   application_secret_version      = var.application_secret_version
   grafana_secret_version          = var.grafana_secret_version
   cloudflare_tunnel_token         = var.cloudflare_tunnel_token
