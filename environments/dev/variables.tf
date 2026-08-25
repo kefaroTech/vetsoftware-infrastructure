@@ -382,10 +382,12 @@ variable "login_url" {
 # del backend y ningun perfil los sobreescribia, asi que el identificador iba dentro de
 # la imagen y los tres entornos apuntaban siempre a la misma plantilla de Resend.
 #
-# Se declaran sin default, como los cuatro de platform-access de mas abajo, para que la
-# falta salte en el plan. Ojo al modo de fallo si faltan una vez vaciado el default del
-# backend: no hay excepcion ni arranque roto -ResendEmailClient con templateId vacio
-# escribe un warning y retorna-, el correo simplemente no sale y nadie se entera.
+# Se declaran sin default, para que la falta salte en el plan. Y ojo al modo de fallo,
+# porque cambio: el backend ya NO descarta el correo en silencio. Sus cuatro remitentes
+# validan la clave al construir el bean y lanzan IllegalStateException, guardados por el
+# interruptor del correo, asi que un entorno con el correo habilitado y una de estas
+# variables vacia NO ARRANCA y ECS entra en bucle de health check. Desplegar esta
+# configuracion ANTES que la imagen del backend deja de ser una recomendacion.
 variable "registration_verification_template_id" {
   description = "UUID de la plantilla de Resend del correo de verificacion de registro; alimenta vetsoftware.registration.verification-template-id en el backend."
   type        = string
