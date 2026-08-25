@@ -358,6 +358,32 @@ variable "platform_access_login_url" {
   type        = string
 }
 
+# Los cuatro UUID de plantilla de Resend del mismo flujo. Las plantillas se crean A
+# MANO en el panel de Resend y ningun test las cubre: aqui solo viaja su identificador.
+# Se declaran sin default, igual que las cuatro de arriba, para que la falta salte en el
+# plan y no en el arranque: ResendPlatformAccessEmailSender valida las OCHO claves de
+# vetsoftware.platform-access al construirse, y el application.yml del backend las trae
+# con default vacio a proposito.
+variable "platform_access_request_template_id" {
+  description = "UUID de la plantilla de Resend del aviso de solicitud que recibe el aprobador; variables FULL_NAME, REQUESTER_EMAIL, REASON, REQUESTED_AT y REVIEW_URL."
+  type        = string
+}
+
+variable "platform_access_approved_template_id" {
+  description = "UUID de la plantilla de Resend del correo de invitacion que recibe el solicitante aprobado; variables FULL_NAME e INVITATION_URL."
+  type        = string
+}
+
+variable "platform_access_rejected_template_id" {
+  description = "UUID de la plantilla de Resend del correo de rechazo de la solicitud de acceso de plataforma; variable FULL_NAME."
+  type        = string
+}
+
+variable "platform_access_welcome_template_id" {
+  description = "UUID de la plantilla de Resend del correo de bienvenida tras aceptar la invitacion; unico canal por el que la cuenta nueva conoce el SYSTEM_USER_CODE con el que entra."
+  type        = string
+}
+
 variable "recaptcha_enabled" {
   type    = bool
   default = true

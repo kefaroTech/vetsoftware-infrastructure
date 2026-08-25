@@ -57,6 +57,15 @@ jobs:
       TF_VAR_platform_access_review_base_url: ${{ vars.PLATFORM_ACCESS_REVIEW_BASE_URL }}
       TF_VAR_platform_approver_email: ${{ vars.PLATFORM_APPROVER_EMAIL }}
       TF_VAR_platform_invitation_base_url: ${{ vars.PLATFORM_INVITATION_BASE_URL }}
+      # Los cuatro UUID de plantilla de Resend del mismo alta. Las plantillas se crean
+      # A MANO en el panel de Resend; aqui solo viaja el identificador. El bean valida
+      # las OCHO claves de vetsoftware.platform-access de una sola vez, asi que faltar
+      # una plantilla tumba el arranque igual que faltar una URL. SIN prefijo: las lee
+      # del environment del job.
+      TF_VAR_platform_access_request_template_id: ${{ vars.PLATFORM_ACCESS_REQUEST_TEMPLATE_ID }}
+      TF_VAR_platform_access_approved_template_id: ${{ vars.PLATFORM_ACCESS_APPROVED_TEMPLATE_ID }}
+      TF_VAR_platform_access_rejected_template_id: ${{ vars.PLATFORM_ACCESS_REJECTED_TEMPLATE_ID }}
+      TF_VAR_platform_access_welcome_template_id: ${{ vars.PLATFORM_ACCESS_WELCOME_TEMPLATE_ID }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
       # El drift ejecuta un plan completo: la validacion de formato de
       # grafana_logs_access_key tambien lo detiene, asi que necesita el valor.

@@ -28,6 +28,14 @@ platform_access_review_base_url = "https://dev-admin.kefaro.tech/aprobar-acceso"
 platform_invitation_base_url    = "https://dev-admin.kefaro.tech/aceptar-invitacion"
 platform_access_login_url       = "https://dev-admin.kefaro.tech/login"
 
+# Los cuatro UUID de plantilla de Resend. Las plantillas se crean A MANO en el panel de
+# Resend: copie aqui el identificador de cada una, nunca deje el marcador. El bean valida
+# las OCHO claves de este bloque al construirse, no una a una.
+platform_access_request_template_id  = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+platform_access_approved_template_id = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+platform_access_rejected_template_id = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+platform_access_welcome_template_id  = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+
 # Envio durable de logs a Grafana Cloud por Kinesis Firehose. El endpoint es el del
 # stack y ya viene por defecto; solo se declara aqui si cambia de stack.
 log_shipping_enabled               = true
