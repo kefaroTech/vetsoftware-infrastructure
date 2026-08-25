@@ -67,6 +67,16 @@ jobs:
       TF_VAR_platform_access_rejected_template_id: ${{ vars.PLATFORM_ACCESS_REJECTED_TEMPLATE_ID }}
       TF_VAR_platform_access_welcome_template_id: ${{ vars.PLATFORM_ACCESS_WELCOME_TEMPLATE_ID }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      # Los cuatro UUID de plantilla de Resend del producto -verificacion de registro,
+      # restablecimiento, invitacion de empleado y confirmacion de cita-. Dejan de ser un
+      # default commiteado en el application.yml del backend: el identificador ya no viaja
+      # dentro de la imagen y cada entorno apunta a las suyas. SIN prefijo: las lee del
+      # environment del job. Van en los DOS bloques env, plan y apply: tenerlas en uno
+      # solo hace divergir el plan del apply.
+      TF_VAR_registration_verification_template_id: ${{ vars.REGISTRATION_VERIFICATION_TEMPLATE_ID }}
+      TF_VAR_password_reset_template_id: ${{ vars.PASSWORD_RESET_TEMPLATE_ID }}
+      TF_VAR_employee_invitation_template_id: ${{ vars.EMPLOYEE_INVITATION_TEMPLATE_ID }}
+      TF_VAR_appointment_confirmation_template_id: ${{ vars.APPOINTMENT_CONFIRMATION_TEMPLATE_ID }}
       # El circuito de imagen ejecuta plan y apply completos del root de dev, asi
       # que tambien pasa por la validacion de grafana_logs_access_key. Secret de
       # repositorio, el mismo que usan plan, apply y drift.
@@ -154,6 +164,16 @@ jobs:
       TF_VAR_platform_access_rejected_template_id: ${{ vars.PLATFORM_ACCESS_REJECTED_TEMPLATE_ID }}
       TF_VAR_platform_access_welcome_template_id: ${{ vars.PLATFORM_ACCESS_WELCOME_TEMPLATE_ID }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
+      # Los cuatro UUID de plantilla de Resend del producto -verificacion de registro,
+      # restablecimiento, invitacion de empleado y confirmacion de cita-. Dejan de ser un
+      # default commiteado en el application.yml del backend: el identificador ya no viaja
+      # dentro de la imagen y cada entorno apunta a las suyas. SIN prefijo: las lee del
+      # environment del job. Van en los DOS bloques env, plan y apply: tenerlas en uno
+      # solo hace divergir el plan del apply.
+      TF_VAR_registration_verification_template_id: ${{ vars.REGISTRATION_VERIFICATION_TEMPLATE_ID }}
+      TF_VAR_password_reset_template_id: ${{ vars.PASSWORD_RESET_TEMPLATE_ID }}
+      TF_VAR_employee_invitation_template_id: ${{ vars.EMPLOYEE_INVITATION_TEMPLATE_ID }}
+      TF_VAR_appointment_confirmation_template_id: ${{ vars.APPOINTMENT_CONFIRMATION_TEMPLATE_ID }}
       # El circuito de imagen ejecuta plan y apply completos del root de dev, asi
       # que tambien pasa por la validacion de grafana_logs_access_key. Secret de
       # repositorio, el mismo que usan plan, apply y drift.

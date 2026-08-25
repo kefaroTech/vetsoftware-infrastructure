@@ -107,14 +107,18 @@ variables {
 
   cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
 
-  grafana_otlp_endpoint         = "https://otlp.example.test/otlp"
-  api_domain_name               = "api.example.test"
-  cors_allowed_origins          = ["https://app.example.test"]
-  email_from                    = "VetSoftware <noreply@example.test>"
-  registration_verification_url = "https://app.example.test/verify"
-  password_reset_url            = "https://app.example.test/reset"
-  login_url                     = "https://app.example.test/login"
-  alarm_email                   = "alertas@example.test"
+  grafana_otlp_endpoint                 = "https://otlp.example.test/otlp"
+  api_domain_name                       = "api.example.test"
+  cors_allowed_origins                  = ["https://app.example.test"]
+  email_from                            = "VetSoftware <noreply@example.test>"
+  registration_verification_url         = "https://app.example.test/verify"
+  password_reset_url                    = "https://app.example.test/reset"
+  login_url                             = "https://app.example.test/login"
+  registration_verification_template_id = "55555555-5555-4555-8555-555555555555"
+  password_reset_template_id            = "66666666-6666-4666-8666-666666666666"
+  employee_invitation_template_id       = "77777777-7777-4777-8777-777777777777"
+  appointment_confirmation_template_id  = "88888888-8888-4888-8888-888888888888"
+  alarm_email                           = "alertas@example.test"
 }
 
 run "production_configuration_plans" {

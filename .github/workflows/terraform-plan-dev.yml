@@ -80,6 +80,16 @@ jobs:
       TF_VAR_platform_access_rejected_template_id: ${{ vars.DEV_PLATFORM_ACCESS_REJECTED_TEMPLATE_ID }}
       TF_VAR_platform_access_welcome_template_id: ${{ vars.DEV_PLATFORM_ACCESS_WELCOME_TEMPLATE_ID }}
       TF_VAR_registration_verification_url: ${{ vars.DEV_REGISTRATION_VERIFICATION_URL }}
+      # Los cuatro UUID de plantilla de Resend del producto -verificacion de registro,
+      # restablecimiento, invitacion de empleado y confirmacion de cita-. Dejan de ser un
+      # default commiteado en el application.yml del backend: el identificador ya no viaja
+      # dentro de la imagen y cada entorno apunta a las suyas. Con prefijo DEV_ y desde el
+      # repositorio, como las de arriba: el job corre en pull_request y ahi el environment
+      # queda vacio.
+      TF_VAR_registration_verification_template_id: ${{ vars.DEV_REGISTRATION_VERIFICATION_TEMPLATE_ID }}
+      TF_VAR_password_reset_template_id: ${{ vars.DEV_PASSWORD_RESET_TEMPLATE_ID }}
+      TF_VAR_employee_invitation_template_id: ${{ vars.DEV_EMPLOYEE_INVITATION_TEMPLATE_ID }}
+      TF_VAR_appointment_confirmation_template_id: ${{ vars.DEV_APPOINTMENT_CONFIRMATION_TEMPLATE_ID }}
       # log_shipping_enabled viene en true y la validacion de
       # grafana_logs_access_key -formato <loki_instance_id>:<token>, regex
       # ^[0-9]+:.+$ en environments/dev/variables.tf:539- corre en tiempo de

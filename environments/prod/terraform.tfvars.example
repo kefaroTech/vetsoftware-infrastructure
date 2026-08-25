@@ -14,6 +14,15 @@ registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
 
+# Los cuatro UUID de plantilla de Resend del producto. Las plantillas se crean A MANO en
+# el panel de Resend: copie aqui el identificador de cada una, nunca deje el marcador.
+# Antes eran default commiteado en el application.yml del backend; ahora cada entorno
+# apunta a las suyas sin recompilar la imagen.
+registration_verification_template_id = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+password_reset_template_id            = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+employee_invitation_template_id       = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+appointment_confirmation_template_id  = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+
 # Cloudflare termina el TLS público; el origen local no requiere certificado ACM.
 api_domain_name = "api.kefaro.tech"
 # En Cloudflare Tunnel publique este host con origen http://localhost:8080.

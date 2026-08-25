@@ -376,6 +376,38 @@ variable "login_url" {
   type = string
 }
 
+# Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
+# restablecimiento de contrasena, invitacion de empleado y confirmacion de cita. Hasta
+# ahora NO llegaban por entorno: viajaban como default commiteado en el application.yml
+# del backend y ningun perfil los sobreescribia, asi que el identificador iba dentro de
+# la imagen y los tres entornos apuntaban siempre a la misma plantilla de Resend.
+#
+# Se declaran sin default, para que la falta salte en el plan. Y ojo al modo de fallo,
+# porque cambio: el backend ya NO descarta el correo en silencio. Sus cuatro remitentes
+# validan la clave al construir el bean y lanzan IllegalStateException, guardados por el
+# interruptor del correo, asi que un entorno con el correo habilitado y una de estas
+# variables vacia NO ARRANCA y ECS entra en bucle de health check. Desplegar esta
+# configuracion ANTES que la imagen del backend deja de ser una recomendacion.
+variable "registration_verification_template_id" {
+  description = "UUID de la plantilla de Resend del correo de verificacion de registro; alimenta vetsoftware.registration.verification-template-id en el backend."
+  type        = string
+}
+
+variable "password_reset_template_id" {
+  description = "UUID de la plantilla de Resend del correo de restablecimiento de contrasena; alimenta vetsoftware.password-reset.template-id en el backend."
+  type        = string
+}
+
+variable "employee_invitation_template_id" {
+  description = "UUID de la plantilla de Resend del correo de invitacion a un empleado; alimenta vetsoftware.employee.invitation-template-id en el backend."
+  type        = string
+}
+
+variable "appointment_confirmation_template_id" {
+  description = "UUID de la plantilla de Resend del correo de confirmacion de cita; alimenta vetsoftware.appointment.confirmation-template-id en el backend."
+  type        = string
+}
+
 # Alta de superadministradores de plataforma. En el perfil que carga el contenedor de
 # dev estas cuatro claves NO tienen default a proposito: con el correo habilitado,
 # ResendPlatformAccessEmailSender las valida al construir el bean y lanza
