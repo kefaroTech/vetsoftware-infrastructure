@@ -74,6 +74,14 @@ locals {
     PASSWORD_RESET_URL                  = var.password_reset_url
     CODE_RECOVERY_LOGIN_URL             = var.login_url
     EMPLOYEE_LOGIN_URL                  = var.login_url
+    # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
+    # commiteado en el application.yml del backend: el identificador viajaba dentro de la
+    # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por
+    # variable de entorno, que es justo lo que el placeholder del application.yml lee.
+    REGISTRATION_VERIFICATION_TEMPLATE_ID = var.registration_verification_template_id
+    PASSWORD_RESET_TEMPLATE_ID            = var.password_reset_template_id
+    EMPLOYEE_INVITATION_TEMPLATE_ID       = var.employee_invitation_template_id
+    APPOINTMENT_CONFIRMATION_TEMPLATE_ID  = var.appointment_confirmation_template_id
     # Alta de superadministradores de plataforma. Sin estas cuatro el contenedor NO
     # arranca: con el correo habilitado ResendPlatformAccessEmailSender las valida al
     # construir el bean y lanza IllegalStateException, el health check falla y ECS

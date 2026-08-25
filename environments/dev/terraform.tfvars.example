@@ -20,6 +20,15 @@ registration_verification_url = "https://dev-public.kefaro.tech/verify-email"
 password_reset_url             = "https://dev-public.kefaro.tech/restablecer-contrasena"
 login_url                      = "https://dev-public.kefaro.tech/login"
 
+# Los cuatro UUID de plantilla de Resend del producto. Las plantillas se crean A MANO en
+# el panel de Resend: copie aqui el identificador de cada una, nunca deje el marcador.
+# Antes eran default commiteado en el application.yml del backend; ahora cada entorno
+# apunta a las suyas sin recompilar la imagen.
+registration_verification_template_id = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+password_reset_template_id            = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+employee_invitation_template_id       = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+appointment_confirmation_template_id  = "REEMPLAZAR_UUID_PLANTILLA_RESEND"
+
 # Alta de superadministradores de plataforma: CONSOLA DE PLATAFORMA (dev-admin), no la
 # app del tenant de las tres lineas de arriba. Sin las cuatro el backend no arranca;
 # ResendPlatformAccessEmailSender las exige al construir el bean con el correo activo.

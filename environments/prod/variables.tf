@@ -387,6 +387,36 @@ variable "login_url" {
   type = string
 }
 
+# Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
+# restablecimiento de contrasena, invitacion de empleado y confirmacion de cita. Hasta
+# ahora NO llegaban por entorno: viajaban como default commiteado en el application.yml
+# del backend y ningun perfil los sobreescribia, asi que el identificador iba dentro de
+# la imagen y los tres entornos apuntaban siempre a la misma plantilla de Resend.
+#
+# Se declaran sin default para que la falta salte en el plan. Ojo al modo de fallo si
+# faltan una vez vaciado el default del backend: no hay excepcion ni arranque roto
+# -ResendEmailClient con templateId vacio escribe un warning y retorna-, el correo
+# simplemente no sale y nadie se entera.
+variable "registration_verification_template_id" {
+  description = "UUID de la plantilla de Resend del correo de verificacion de registro; alimenta vetsoftware.registration.verification-template-id en el backend."
+  type        = string
+}
+
+variable "password_reset_template_id" {
+  description = "UUID de la plantilla de Resend del correo de restablecimiento de contrasena; alimenta vetsoftware.password-reset.template-id en el backend."
+  type        = string
+}
+
+variable "employee_invitation_template_id" {
+  description = "UUID de la plantilla de Resend del correo de invitacion a un empleado; alimenta vetsoftware.employee.invitation-template-id en el backend."
+  type        = string
+}
+
+variable "appointment_confirmation_template_id" {
+  description = "UUID de la plantilla de Resend del correo de confirmacion de cita; alimenta vetsoftware.appointment.confirmation-template-id en el backend."
+  type        = string
+}
+
 variable "recaptcha_enabled" {
   type    = bool
   default = true
