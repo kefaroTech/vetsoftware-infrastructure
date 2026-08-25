@@ -20,6 +20,14 @@ registration_verification_url = "https://dev-public.kefaro.tech/verify-email"
 password_reset_url             = "https://dev-public.kefaro.tech/restablecer-contrasena"
 login_url                      = "https://dev-public.kefaro.tech/login"
 
+# Alta de superadministradores de plataforma: CONSOLA DE PLATAFORMA (dev-admin), no la
+# app del tenant de las tres lineas de arriba. Sin las cuatro el backend no arranca;
+# ResendPlatformAccessEmailSender las exige al construir el bean con el correo activo.
+platform_approver_email         = "software@kefaro.tech"
+platform_access_review_base_url = "https://dev-admin.kefaro.tech/aprobar-acceso"
+platform_invitation_base_url    = "https://dev-admin.kefaro.tech/aceptar-invitacion"
+platform_access_login_url       = "https://dev-admin.kefaro.tech/login"
+
 # Envio durable de logs a Grafana Cloud por Kinesis Firehose. El endpoint es el del
 # stack y ya viene por defecto; solo se declara aqui si cambia de stack.
 log_shipping_enabled               = true

@@ -50,6 +50,13 @@ jobs:
       TF_VAR_grafana_otlp_endpoint: ${{ vars.GRAFANA_OTLP_ENDPOINT }}
       TF_VAR_login_url: ${{ vars.LOGIN_URL }}
       TF_VAR_password_reset_url: ${{ vars.PASSWORD_RESET_URL }}
+      # Alta de superadministradores de plataforma. Sin estas cuatro el plan de deriva
+      # ni siquiera arranca -no tienen default- y su rojo se confundiria con deriva
+      # real. SIN prefijo: el job declara environment: iac-plan-dev y lee sus vars.
+      TF_VAR_platform_access_login_url: ${{ vars.PLATFORM_ACCESS_LOGIN_URL }}
+      TF_VAR_platform_access_review_base_url: ${{ vars.PLATFORM_ACCESS_REVIEW_BASE_URL }}
+      TF_VAR_platform_approver_email: ${{ vars.PLATFORM_APPROVER_EMAIL }}
+      TF_VAR_platform_invitation_base_url: ${{ vars.PLATFORM_INVITATION_BASE_URL }}
       TF_VAR_registration_verification_url: ${{ vars.REGISTRATION_VERIFICATION_URL }}
       # El drift ejecuta un plan completo: la validacion de formato de
       # grafana_logs_access_key tambien lo detiene, asi que necesita el valor.

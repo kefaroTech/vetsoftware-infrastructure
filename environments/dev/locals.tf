@@ -74,7 +74,17 @@ locals {
     PASSWORD_RESET_URL                  = var.password_reset_url
     CODE_RECOVERY_LOGIN_URL             = var.login_url
     EMPLOYEE_LOGIN_URL                  = var.login_url
-    RECAPTCHA_ENABLED                   = tostring(var.recaptcha_enabled)
+    # Alta de superadministradores de plataforma. Sin estas cuatro el contenedor NO
+    # arranca: con el correo habilitado ResendPlatformAccessEmailSender las valida al
+    # construir el bean y lanza IllegalStateException, el health check falla y ECS
+    # reintenta en bucle. Van a la CONSOLA DE PLATAFORMA (dev-admin), no a la app del
+    # tenant de las dos lineas de arriba: reutilizar var.login_url mandaria al
+    # superadministrador recien creado a una aplicacion donde su codigo no sirve.
+    PLATFORM_APPROVER_EMAIL         = var.platform_approver_email
+    PLATFORM_ACCESS_REVIEW_BASE_URL = var.platform_access_review_base_url
+    PLATFORM_INVITATION_BASE_URL    = var.platform_invitation_base_url
+    PLATFORM_ACCESS_LOGIN_URL       = var.platform_access_login_url
+    RECAPTCHA_ENABLED               = tostring(var.recaptcha_enabled)
     # dev no despliega el modulo storage_audit, asi que no hay delivery stream ni permiso
     # firehose:PutRecordBatch en el task role (ecs_backend.firehose_stream_arn queda vacio).
     # Ambas banderas deben ir apagadas: publisher-enabled es la que instancia el FirehoseClient.
