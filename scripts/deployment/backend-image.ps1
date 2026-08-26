@@ -244,11 +244,9 @@ function Get-ImageScanState {
         }
 
         $scan = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-        $counts = $scan.imageScanFindings.findingSeverityCounts
-        $critical = 0
-        $high = 0
-        if ($null -ne $counts.CRITICAL) { $critical = [int]$counts.CRITICAL }
-        if ($null -ne $counts.HIGH) { $high = [int]$counts.HIGH }
+        $efectivos = Resolve-EffectiveCounts -Scan $scan
+        $critical = $efectivos.Critical
+        $high = $efectivos.High
 
         return [PSCustomObject]@{
             Status      = [string]$scan.imageScanStatus.status
@@ -260,6 +258,78 @@ function Get-ImageScanState {
     finally {
         Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Excepciones del escaneo, con caducidad OBLIGATORIA.
+#
+# Una excepcion sin fecha deja de ser una excepcion: se convierte en un punto ciego
+# permanente que nadie recuerda haber concedido. Por eso cada entrada caduca, y al
+# caducar el gate vuelve a bloquear diciendo por que.
+#
+# Solo se justifica cuando NO hay arreglo disponible. Si el paquete tiene version
+# parcheada, lo que toca es reconstruir la imagen, no perdonar el hallazgo.
+$scanWaivers = @{
+    "CVE-2026-8932" = @{
+        Until  = "2026-09-25"
+        Reason = "curl/libcurl4t64 8.5.0-2ubuntu10.12 es la ultima que Ubuntu publica para noble: no existe version parcheada que instalar. curl esta en la imagen solo para el health check contra localhost. Seguimiento: sacar curl y comprobar la salud con un binario estatico."
+    }
+}
+
+# Descuenta de los conteos los hallazgos perdonados que siguen vigentes.
+#
+# Un perdon caducado NO descuenta: vuelve a bloquear, que es lo unico que hace que la
+# fecha signifique algo. Y un perdon que ya no corresponde a ningun hallazgo se avisa
+# para que se retire, porque una lista de excepciones que nadie poda acaba tapando
+# hallazgos nuevos con el mismo identificador.
+function Resolve-EffectiveCounts {
+    param([Parameter(Mandatory)]$Scan)
+
+    $counts = $Scan.imageScanFindings.findingSeverityCounts
+    $critical = 0
+    $high = 0
+    if ($null -ne $counts.CRITICAL) { $critical = [int]$counts.CRITICAL }
+    if ($null -ne $counts.HIGH) { $high = [int]$counts.HIGH }
+
+    $hallazgos = @()
+    foreach ($f in @($Scan.imageScanFindings.findings)) {
+        if ($f.name) { $hallazgos += [PSCustomObject]@{ Id = [string]$f.name; Severity = [string]$f.severity } }
+    }
+    foreach ($f in @($Scan.imageScanFindings.enhancedFindings)) {
+        $id = [string]$f.packageVulnerabilityDetails.vulnerabilityId
+        if ($id) { $hallazgos += [PSCustomObject]@{ Id = $id; Severity = [string]$f.severity } }
+    }
+
+    # Sin lista de hallazgos no se puede descontar sin adivinar: se devuelven los
+    # conteos crudos y que el gate decida con ellos. Fallar cerrado, no abierto.
+    if ($hallazgos.Count -eq 0) {
+        return [PSCustomObject]@{ Critical = $critical; High = $high }
+    }
+
+    $hoy = (Get-Date).Date
+    foreach ($entrada in $scanWaivers.GetEnumerator()) {
+        $id = $entrada.Key
+        $hasta = [datetime]::ParseExact($entrada.Value.Until, "yyyy-MM-dd", $null)
+        $coincidencias = @($hallazgos | Where-Object { $_.Id -eq $id -and $_.Severity -in @("CRITICAL", "HIGH") })
+
+        if ($coincidencias.Count -eq 0) {
+            Write-Host "[ECR] La excepcion de $id ya no corresponde a ningun hallazgo: retirala de scanWaivers." -ForegroundColor Yellow
+            continue
+        }
+
+        if ($hoy -gt $hasta) {
+            Write-Warning "[ECR] La excepcion de $id caduco el $($entrada.Value.Until) y ya NO descuenta: el gate bloquea. Renuevala con motivo o arregla el hallazgo."
+            continue
+        }
+
+        foreach ($c in $coincidencias) {
+            if ($c.Severity -eq "CRITICAL") { $critical-- } else { $high-- }
+        }
+        Write-Host "[ECR] Perdonado $id ($($coincidencias.Count) hallazgo(s)) hasta $($entrada.Value.Until). Motivo: $($entrada.Value.Reason)" -ForegroundColor Yellow
+    }
+
+    if ($critical -lt 0) { $critical = 0 }
+    if ($high -lt 0) { $high = 0 }
+    return [PSCustomObject]@{ Critical = $critical; High = $high }
 }
 
 # SCAN_ON_PUSH solo alcanza a las imagenes empujadas despues de configurarlo. Para
