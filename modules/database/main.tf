@@ -72,6 +72,26 @@ resource "aws_db_instance" "this" {
   db_name  = var.database_name
   username = var.master_username
 
+  # RDS gestiona la contrasena maestra y la guarda en un secreto propio, cuyo ARN
+  # exportamos y consume la definicion de tarea del backend como DB_PASSWORD.
+  #
+  # NO lo pongas en false para "quitar la rotacion". Ese flag no controla la rotacion:
+  # controla si RDS gestiona el secreto. En false, el secreto DESAPARECE, el output
+  # master_secret_arn deja de existir y el backend se queda sin contrasena.
+  #
+  # La rotacion automatica -cada 7 dias- se desactivo el 2026-08-25 desde Secrets
+  # Manager con `aws secretsmanager cancel-rotate-secret`, y NO se puede declarar aqui:
+  # aws_db_instance no expone ese atributo, asi que Terraform ni la ve ni la revierte.
+  # Esta linea queda como el unico sitio donde consta la decision.
+  #
+  # El motivo: la aplicacion lee la contrasena una sola vez, al arrancar. Cuando el
+  # secreto rotaba, toda tarea arrancada antes se quedaba con credenciales muertas y
+  # fallaba al abrir la siguiente conexion -pool vacio, "Access denied"- mientras el
+  # health check seguia en verde, porque no comprueba la base. Paso el 2026-08-25.
+  #
+  # El arreglo de fondo no es dejar la contrasena fija para siempre, es que la rotacion
+  # deje de cortar: releer el secreto al fallar la autenticacion, o disparar un
+  # redespliegue desde el evento de rotacion. Mientras eso no exista, esto se queda asi.
   manage_master_user_password         = true
   iam_database_authentication_enabled = true
 
