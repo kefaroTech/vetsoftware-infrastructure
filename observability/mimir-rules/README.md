@@ -59,6 +59,7 @@ re-derivarla, aplicarla):
 | umbrales p95 > 1 / p99 > 2 (segundos) | > 1000 / > 2000 (milisegundos) |
 | `jvm_threads_live_threads` | `jvm_threads_live` |
 | resto de `jvm_*` / `process_*` / `hikaricp_*` / `vetsoftware_business_*` | idénticos (`vetsoftware_business_metrics_snapshot_age_seconds` es gauge y conserva `_seconds`) |
+| `vetsoftware_database_reachable` / `vetsoftware_database_outage_duration_seconds` | idénticos — mismo caso que el gauge de arriba: la unidad solo se traduce a milisegundos en **timers**, y estos dos son gauges (`DatabaseAvailabilityProbe`) |
 
 Bordes `le` reales publicados en cloud: HTTP `250, 500, 1000, 2000, 5000, 30000`;
 DIAN duration `2000, 5000, 15000, 30000, 60000`. Un umbral de SLI **debe** coincidir con un

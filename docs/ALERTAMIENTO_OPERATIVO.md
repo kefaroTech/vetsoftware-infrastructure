@@ -2059,6 +2059,98 @@ Es `warning` y no `critical` porque hay recuperación real: el hilo acaba consig
 
 ---
 
+### VetSoftwareDatabaseUnreachable
+
+**Qué significa** — La aplicación no consigue una conexión válida con la base de datos. Ojo a la redacción: **no dice que el servidor esté caído**, dice que el backend no puede llegar a él. Son cosas distintas y la diferencia importa al depurar — el 2026-08-25 por la tarde hubo una tarea viva, `HEALTHY` para ECS, con la RDS `available` y respondiendo perfectamente, que no lograba abrir ni una conexión porque su contraseña había quedado obsoleta tras rotarse el secreto.
+
+Es la única alerta de esta sección que emite el backend por su cuenta: la publica `DatabaseAvailabilityProbe`, un job que cada 15 segundos pide una conexión al pool y la valida con `isValid`.
+
+**Qué la dispara** —
+
+```promql
+vetsoftware_database_reachable{job="mainvet/vetsoftware"}
+```
+
+con umbral `< 1` y `for: 2m`. El medidor solo vale 0 o 1 por construcción. Dos minutos sobre una sonda de 15 s son ocho pasadas consecutivas, por encima de las cuatro que la aplicación ya exige para escribir su ERROR: cuando esta alerta dispara, el log lleva un minuto contando el suceso.
+
+**Por qué existe teniendo tres alertas de base de datos al lado.** Porque **las tres son ciegas a este fallo**. Medido en dev durante el corte del 2026-08-25: con la base parada, `hikaricp_connections_active` se quedó en **0 todo el apagón**, y el log lo confirmó con `total=0, active=0, idle=0, waiting=0`. `VetSoftwareDatabasePoolSaturated` (`active/max > 0.85`) y `VetSoftwareDatabaseConnectionPending` (`pending > 0`) miden **congestión**, que es el fallo contrario: un pool que no consigue abrir ni una conexión no parece saturado, parece **ocioso**. La única que lo veía era `VetSoftwareDatabaseConnectionTimeouts`, y es un contador que parpadea con cada scrape; esta es la afirmación estable sobre la que un `for:` significa algo.
+
+**Primero mirar** —
+
+1. ¿Está la instancia RDS arriba? Es la respuesta más frecuente y la más rápida de descartar.
+
+   ```bash
+   aws rds describe-db-instances --db-instance-identifier vetsoftware-dev-mysql \
+     --query 'DBInstances[0].DBInstanceStatus'
+   aws rds describe-events --source-identifier vetsoftware-dev-mysql \
+     --source-type db-instance --duration 180
+   ```
+
+   En dev, `DB instance stopped` a las 20:15 de un día laborable es el apagado programado (`vetsoftware-dev-database-stop`), no una avería. Ver «Cuándo NO es un incidente».
+
+2. ¿Cuánto lleva caída? El propio backend lo publica:
+
+   ```promql
+   vetsoftware_database_outage_duration_seconds{job="mainvet/vetsoftware"}
+   ```
+
+3. Si la RDS está `available`, el problema está entre la aplicación y ella. Empieza por las credenciales, que es el caso que ninguna otra señal distingue:
+
+   ```bash
+   aws secretsmanager describe-secret --secret-id <arn-del-secreto-maestro> \
+     --query '{cambiado:LastChangedDate,rotado:LastRotatedDate}'
+   ```
+
+   **Compara esas fechas con el arranque de la tarea.** ECS inyecta los secretos al arrancar y no los relee: una tarea anterior a la última rotación tiene la contraseña vieja para siempre.
+
+   ```bash
+   aws ecs describe-tasks --cluster <cluster> --tasks <arn> --query 'tasks[0].startedAt'
+   ```
+
+4. El log del backend, que ya trae el diagnóstico en una sola línea:
+
+   ```logql
+   {service_name="vetsoftware", telemetry_source="firehose"} | json | event="database_unreachable"
+   ```
+
+   Y su cierre, con la duración del corte escrita:
+
+   ```logql
+   {service_name="vetsoftware", telemetry_source="firehose"} | json | event="database_reachable"
+   ```
+
+**Causas habituales** —
+
+1. **La instancia RDS está parada o reiniciando.** En dev, casi siempre el apagado programado o un `Start dev environment` a medias.
+2. **Credenciales obsoletas tras rotar el secreto.** La tarea sigue viva y sana para ECS; solo hace falta reiniciarla para que relea el secreto. Es el caso que más tarda en diagnosticarse porque todo lo demás está verde.
+3. **Red**: grupo de seguridad, subred o tabla de rutas modificados en un despliegue de infraestructura.
+4. **Agotamiento total del pool** por retención de conexiones. Aquí llegarían primero `Pending` y `Saturated`; si esas dos están en OK, no es esto.
+
+**Qué hacer** —
+
+*Mitigación inmediata.* Si la RDS está parada, arráncala y **después** reinicia la tarea: Hikari marcó el pool como roto y no conviene fiarse de que se recupere solo. `Start dev environment` hace las dos cosas en orden y espera a `available` entre medias.
+
+```bash
+aws ecs update-service --cluster <cluster> --service <servicio> --force-new-deployment
+```
+
+Si la RDS está arriba y la causa son las credenciales, el reinicio de la tarea es todo el arreglo.
+
+*Arreglo de fondo.* Que una rotación de secreto deje a la aplicación sin acceso hasta que alguien la reinicie es un defecto de diseño, no una operación normal: o el contenedor relee el secreto, o la rotación dispara el redespliegue. La rotación automática del maestro de RDS está **desactivada** desde el 2026-08-25 precisamente por esto.
+
+**Cuándo NO es un incidente** —
+
+- **Dev, entre semana, a partir de las 20:15.** `vetsoftware-dev-database-stop` para la instancia con `cron(15 20 ? * MON-FRI)` en `America/Bogota`. Lo normal es que ni siquiera llegue a dispararse: `vetsoftware-dev-backend-stop` mata el backend quince minutos antes, así que a esa hora no queda nadie vivo para sondear. Verificado sobre siete días de métrica: **cero timeouts en cinco apagados programados**. Si suena, es porque alguien levantó el ambiente entre los dos schedules — exactamente lo que pasó el 2026-08-25 a las 20:04.
+- **Los primeros segundos tras un despliegue**, si la sonda corre antes de que el pool termine de poblarse. El `initialDelay` de 15 s más el umbral de cuatro pasadas lo cubren con margen, pero un arranque muy lento puede rozarlo.
+
+**Defectos conocidos de la señal** —
+
+- **La emite el propio proceso.** Si el proceso muere, la serie desaparece y `noDataState: OK` la lee como salud. No es un descuido de esta regla sino de su naturaleza, y por eso no se tapa desde aquí: en producción lo cubre `VetSoftwareBackendTelemetryAbsent`, que invierte la lógica con `absent_over_time` para que la ausencia produzca datos. **En dev no lo cubre nadie**: ese heartbeat no se sincroniza a dev a propósito, y el interruptor de hombre muerto de ECS cuelga de Container Insights, que en dev está desactivado (issue #150 de este repositorio).
+- **El planificador del backend tiene un solo hilo.** Si otro job lo retiene, la sonda no corre y el medidor deja de actualizarse. No se corrompe —la duración se deriva de un instante, no de un acumulador— pero puede quedarse estancado.
+- La sonda pide conexiones al pool a propósito, así que durante una caída **mantiene viva por sí sola** a `VetSoftwareDatabaseConnectionTimeouts` aunque no haya tráfico de usuario. Es deliberado: convierte a esa alerta en una señal de disponibilidad y no en una señal de uso. Espera las dos juntas.
+
+---
+
 ### VetSoftwareValkeyCommandsFailing
 
 **Qué significa** — El cliente Lettuce está recibiendo errores al hablar con Valkey (ElastiCache Serverless). Valkey sostiene dos cosas que importan: la caché de permisos y el rate limiting de login de bucket4j. Con Valkey degradado, **el freno de fuerza bruta del login deja de ser fiable y no hay ninguna otra señal que lo sustituya**.

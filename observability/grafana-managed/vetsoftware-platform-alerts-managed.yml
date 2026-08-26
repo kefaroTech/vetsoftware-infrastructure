@@ -491,6 +491,62 @@ groups:
           description: "HikariCP registró al menos un timeout de conexión durante los últimos cinco minutos."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseconnectiontimeouts"
 
+      # Señal PROPIA, no de HikariCP: la publica DatabaseAvailabilityProbe, un job del
+      # backend que cada 15 s pide una conexión al pool y comprueba isValid.
+      #
+      # Convive con las tres de arriba sin sustituirlas, porque miden cosas distintas y
+      # las tres anteriores son CIEGAS a este fallo. Medido en dev durante el corte del
+      # 2026-08-25: con la base parada, `hikaricp_connections_active` se quedó en 0 todo
+      # el apagón y el log confirmó `total=0, active=0, idle=0, waiting=0`. Un pool que no
+      # consigue abrir ni una conexión no parece saturado: parece OCIOSO. Saturation
+      # (`active/max > 0.85`) y Pending (`pending > 0`) miden congestión, que es el fallo
+      # contrario. Solo Timeouts lo veía, y es un contador que parpadea con cada scrape.
+      # Esta regla es la afirmación estable —«no hay base»— sobre la que se puede poner un
+      # `for:` con sentido.
+      #
+      # `== 0` y no `< 1`: el medidor solo vale 0 o 1 por construcción, y el igual dice
+      # qué se está afirmando.
+      #
+      # noDataState: OK como el resto del fichero, y por el mismo motivo de la cabecera:
+      # dev se apaga cada noche y su serie desaparece. Es también el límite de esta señal
+      # —la emite el propio proceso, así que un proceso muerto se lee como salud— y no se
+      # tapa desde aquí: lo cubren el heartbeat VetSoftwareBackendTelemetryAbsent en prod
+      # y las alarmas de ECS del lado de AWS.
+      - uid: vetsw-database-unreachable
+        title: VetSoftwareDatabaseUnreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                vetsoftware_database_reachable{job="mainvet/vetsoftware"}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        noDataState: OK
+        execErrState: Error
+        # 2m sobre una sonda de 15 s son ocho pasadas: por encima del umbral de cuatro
+        # que la aplicación ya exige para escribir su ERROR, así que cuando la alerta
+        # dispara el log lleva un minuto contando el suceso.
+        for: 2m
+        labels:
+          severity: critical
+          domain: database
+          service: vetsoftware
+        annotations:
+          summary: "La aplicación no consigue conexión con la base de datos"
+          description: "La sonda de disponibilidad lleva dos minutos sin obtener una conexión válida del pool. No dice que el servidor esté caído: dice que la aplicación no puede llegar a él, lo que incluye credenciales obsoletas tras una rotación de secreto, red y pool agotado."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaredatabaseunreachable"
+
   # ─────────────────────── Tokens de seguridad ───────────────────────
   - orgId: 1
     name: vetsoftware-security-token-retention
