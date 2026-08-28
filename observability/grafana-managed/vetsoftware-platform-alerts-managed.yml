@@ -664,3 +664,207 @@ groups:
           summary: "Una tabla de tokens de seguridad supera el umbral de crecimiento"
           description: "La tabla indicada por token_type lleva al menos treinta minutos por encima de su umbral de crecimiento; el valor es el exceso de filas sobre el umbral. Si esta notificación llega en estado Error NO habla de tokens: la consulta no pudo evaluarse y el motivo está en la anotación Error."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwaresecuritytokentablegrowth"
+
+  # ══════════════════════ Entitlements (#608) ══════════════════════
+  #
+  # Gemelo cloud de docker/prometheus-platform-alerts.yml, grupo `vetsoftware-entitlements`.
+  # Traducción aplicada: `job="vetsoftware"` → `job="mainvet/vetsoftware"`, el comparador final
+  # sale del PromQL y pasa al threshold de refId C, y el runbook es la URL absoluta de
+  # docs/ALERTAMIENTO_OPERATIVO.md en vez de la ruta relativa del backend.
+  #
+  # POR QUÉ ESTAS DOS SÍ TIENEN GEMELO Y LAS DE NEGOCIO NO. Las cuatro de
+  # prometheus-business-alerts.yml se retiraron de aquí por decisión de producto. Estas no son
+  # de negocio: describen un CORTE DE ACCESO. Una empresa sin entitlements es una clínica cuyos
+  # empleados reciben 403 en todo, sin ningún mensaje que lo explique — ya pasó dos veces
+  # (#410, #472) y las dos se descubrieron porque el cliente llamó.
+  #
+  # `vetsoftware_entitlement_resolution_empty_total` YA LLEGA a grafanacloud-prom: verificado en
+  # vivo el 2026-08-26 con list_prometheus_metric_names. No hay que esperar a nada.
+  - orgId: 1
+    name: vetsoftware-entitlements
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-entitlement-resolution-empty
+        title: VetSoftwareEntitlementResolutionEmpty
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum(increase(vetsoftware_entitlement_resolution_empty_total{job="mainvet/vetsoftware",cause="company_without_entitlements"}[15m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # `sum(...)` colapsa las etiquetas a propósito: con dos tareas durante un despliegue
+        # habría dos series y dos notificaciones del mismo hecho. Lo que se ha perdido —qué
+        # empresa— no estaba en la métrica de todos modos, y NO debe estarlo: 500 clínicas por
+        # serie es el fallo de cardinalidad más caro que existe. La empresa sale del log.
+        #
+        # noDataState OK por el mismo motivo que el resto del fichero: el backend de dev se
+        # apaga a las 20:00 por EventBridge y la serie desaparece cada noche. NoData aquí
+        # significa "no hay proceso", no "hay una empresa sin permisos", y eso lo vigilan el
+        # heartbeat y las alarmas de infraestructura.
+        noDataState: OK
+        execErrState: Error
+        # Sin `for`. Es un evento discreto y el contador se registra ansiosamente en cero, así
+        # que el primer incremento ya es información completa. Un `for` aquí solo retrasaría un
+        # aviso cuyo coste de detección tardía es un tenant entero sin acceso.
+        for: 0m
+        labels:
+          severity: critical
+          domain: entitlements
+          service: vetsoftware
+        annotations:
+          summary: "Una empresa se quedó sin entitlements y sus empleados no pueden entrar"
+          description: "Al menos una resolución de permisos efectivos devolvió el conjunto vacío porque la empresa no tiene ni una fila en company_entitlements: corte total de acceso para ese tenant. Qué empresa NO está aquí a propósito (etiquetar por empresa multiplicaría las series por 500): sale del log de JpaEntitlementEffectivePermissionResolver, campo actor.companyId. OJO al consultarlo: desde el 18-08-2026 los logs van por CloudWatch/Firehose y NO llevan trace_id ni scope_name como etiquetas de Loki; los atributos están dentro del cuerpo, hay que filtrar con | json. Arreglo: RecalculateCompanyEntitlementsUseCase, que es idempotente."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareentitlementresolutionempty"
+
+      - uid: vetsw-entitlement-contract-restricted
+        title: VetSoftwareEntitlementContractRestricted
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 4200, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum(increase(vetsoftware_entitlement_resolution_empty_total{job="mainvet/vetsoftware",cause="contract_restricted"}[1h]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        # `for: 15m` y no 0m: aquí la población es más ancha —cualquier empleado cuyo rol quede
+        # entero fuera del contrato— así que se le da margen a que un downgrade en curso termine
+        # de propagarse antes de avisar. La crítica de arriba no lo lleva porque su hecho no
+        # tiene "en curso" posible: o la empresa tiene filas o no las tiene.
+        for: 15m
+        labels:
+          severity: warning
+          domain: entitlements
+          service: vetsoftware
+        annotations:
+          summary: "Un empleado se quedó sin ningún permiso efectivo dentro de su contrato"
+          description: "Todos sus permisos base caen fuera de lo que el contrato de su empresa concede, así que recibe 403 en todo. Dos causas: el contrato perdió una línea que sí paga —la carrera del recálculo, que borra y reinserta la tabla entera sin tomar el candado del contrato— o un downgrade dejó roles asignados que ya no cubre. El umbral es CERO deliberadamente: si esto resulta rutinario, el arreglo es el flujo de downgrade, no subir el umbral hasta que deje de sonar."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareentitlementcontractrestricted"
+
+  # ══════════════════ Barridos programados (#609) ══════════════════
+  #
+  # Gemelo cloud del grupo `vetsoftware-scheduled-jobs`. Complementa —no sustituye—
+  # `VetSoftwareScheduledJobFailing` de vetsoftware-cloud-additions-managed.yml: aquella cuenta
+  # ejecuciones con job_outcome de fallo y detecta que un job FALLÓ; estas detectan que NO SE
+  # EJECUTÓ, que es el caso sin ninguna otra señal —ni contador, ni log, ni serie que cambie—.
+  #
+  # ANTES NO SE PODÍAN ESCRIBIR. Los ocho barridos usaban `fixedDelay`, así que su hora era la
+  # del último despliegue y no había umbral que fijar. El paso a `cron` con zona
+  # (ScheduledJobCatalog) es lo que las hace posibles.
+  #
+  # EL UMBRAL VIAJA COMO SERIE. `vetsoftware_scheduled_job_expected_interval_seconds` lo deriva
+  # el proceso de su propia expresión cron, así que cambiar la cadencia mueve la alerta con
+  # ella. Con el umbral escrito aquí, cambiar la cadencia dejaría la alerta vigilando una hora
+  # que ya no existe — y eso no rompe nada visiblemente, solo ciega.
+  - orgId: 1
+    name: vetsoftware-scheduled-jobs
+    folder: VetSoftware
+    interval: 1m
+    rules:
+      - uid: vetsw-scheduled-job-overdue
+        title: VetSoftwareScheduledJobOverdue
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # `max by (job_name)` de los dos lados y no una comparación serie a serie: durante
+              # un despliegue conviven dos tareas y la vieja arrastra un heartbeat que se queda
+              # atrás por definición. Con el máximo, basta que UNA réplica haya terminado bien
+              # dentro de la ventana — que es exactamente la pregunta: «¿corrió el barrido?»,
+              # no «¿corrió en este proceso?».
+              expr: |
+                time()
+                - max by (job_name) (vetsoftware_scheduled_job_last_success_timestamp_seconds{job="mainvet/vetsoftware"})
+                - on(job_name) group_left()
+                (max by (job_name) (vetsoftware_scheduled_job_expected_interval_seconds{job="mainvet/vetsoftware"}) * 1.25)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        # El backend de dev se apaga a las 20:00 y con él desaparecen los dos gauges. NoData
+        # significa "no hay proceso", no "el barrido no corrió": la ausencia del proceso la
+        # vigilan el heartbeat y las alarmas de infraestructura.
+        #
+        # CONSECUENCIA ASUMIDA Y DECLARADA: en dev, el apagado nocturno reinicia el heartbeat
+        # cada mañana, así que un barrido de las 03:10 NUNCA corre en dev y esta alerta NUNCA
+        # suena allí. Es correcto y no es un umbral mal puesto — la calibración de este fichero
+        # es la de PROD, igual que las tres reglas HTTP. En dev la cobertura de "¿el backend
+        # responde?" es del heartbeat.
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+          domain: scheduling
+          service: vetsoftware
+        annotations:
+          summary: "El barrido {{ $labels.job_name }} no ha terminado bien dentro de su ventana"
+          description: "Han pasado más de 1,25 intervalos esperados desde su último final correcto. NO es lo mismo que un fallo: VetSoftwareScheduledJobFailing vigila los que fallan, esta vigila los que no se ejecutan. Un partial_failure SÍ sella el heartbeat a propósito —el job corrió—, así que si esta suena, el barrido no llegó a arrancar. Un despliegue reinicia el reloj de esta alerta, así que si va y viene, mirar primero la estabilidad del proceso."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjoboverdue"
+
+      - uid: vetsw-scheduled-job-multiple-replicas
+        title: VetSoftwareScheduledJobMultipleReplicas
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                count by (job_name) (vetsoftware_scheduled_job_expected_interval_seconds{job="mainvet/vetsoftware",single_writer="true"})
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+        noDataState: OK
+        execErrState: Error
+        # `for: 15m` y no 5m como en el plano local: en cloud las series llegan por push OTLP y
+        # un despliegue solapa dos tareas durante varios minutos legítimamente. Quince minutos
+        # de solape ya no son un despliegue, son un escalado.
+        for: 15m
+        labels:
+          severity: critical
+          domain: scheduling
+          service: vetsoftware
+        annotations:
+          summary: "Más de una réplica está ejecutando el barrido {{ $labels.job_name }}"
+          description: "Cuatro de los siete barridos recorren su tabla con un cursor y no arbitran nada entre réplicas; lo único que impedía que duplicaran trabajo era que el servicio corre con UNA tarea, y eso es una propiedad del despliegue, no del código. Con fixedDelay dos réplicas se escalonaban por accidente; con cron arrancan a la vez. Qué se rompe: el barrido de facturación emite los cargos del cierre de mes dos veces (subscription_charges no tiene llave antiduplicados) y el de cobranza degrada dos veces al mismo moroso. Dos salidas y solo dos: volver a una tarea, o implementar el candado distribuido antes del siguiente cierre de mes. Los DIAN no aparecen aquí porque reclaman su lote con DianJobLeasePort."
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarescheduledjobmultiplereplicas"
