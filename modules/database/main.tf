@@ -39,6 +39,63 @@ resource "aws_db_parameter_group" "this" {
     value = "2"
   }
 
+  # ATENCION: esto RELAJA UNA COMPROBACION DE SEGURIDAD del motor. No es un ajuste
+  # rutinario y no se toca sin leer los cuatro parrafos siguientes.
+  #
+  # POR QUE HACE FALTA
+  # El changelog de Liquibase 346_create_accounting_period_triggers.xml crea siete
+  # disparadores, entre ellos el que impide escribir en un periodo contable cerrado y
+  # el que garantiza que siempre quede al menos un periodo abierto. Con el log binario
+  # activo, MySQL rechaza CREATE TRIGGER salvo que el creador tenga SUPER o el
+  # privilegio dinamico que lo sustituye:
+  #
+  #   ERROR 1419 (HY000): You do not have the SUPER privilege and binary logging is
+  #   enabled (you *might* want to use the less safe log_bin_trust_function_creators
+  #   variable)
+  #
+  # Aqui se cumplen las dos condiciones y no son evitables:
+  #   - El log binario esta encendido porque var.backup_retention_period es >= 7 -lo
+  #     obliga la precondition de aws_db_instance.this-, y RDS activa el binlog en
+  #     cuanto hay backups automaticos. Apagarlo no es una opcion.
+  #   - RDS NUNCA concede SUPER al usuario maestro: es un servicio gestionado. Y el
+  #     backend se conecta precisamente como el maestro (var.master_username, con la
+  #     contrasena de manage_master_user_password), asi que es el maestro quien corre
+  #     la migracion.
+  #
+  # Sin esto Liquibase falla en el changeset 346, y cuando Liquibase falla la
+  # aplicacion no arranca: no es una degradacion, es que el servicio no levanta.
+  #
+  # POR QUE ESTE CAMINO Y NO EL PRIVILEGIO
+  # La alternativa correcta a largo plazo es GRANT SET_ANY_DEFINER -SET_USER_ID antes
+  # de MySQL 8.2- al usuario que migra. No es declarable aqui: es un GRANT dentro del
+  # motor, el proveedor de AWS no lo modela, y anadir el proveedor mysql exigiria que
+  # el runner de CI alcanzara la instancia, que vive en subredes privadas sin ruta
+  # desde GitHub Actions. Este parametro es la unica palanca declarable en Terraform y
+  # es la que AWS documenta para el error 1419 en RDS.
+  #
+  # QUE SE PIERDE AL PONERLO EN 1
+  # La comprobacion existe para que un usuario sin privilegios no pueda crear un
+  # disparador que luego se replique y se ejecute en la replica con los permisos de su
+  # DEFINER. En 1, cualquiera con CREATE ROUTINE o TRIGGER en esta instancia puede
+  # crear disparadores que acaban en el binlog. Se acepta porque el unico usuario de la
+  # instancia es el maestro que usa la aplicacion, no hay replicas de lectura y el
+  # acceso de red esta cerrado al security group del backend. Si algun dia se crean
+  # usuarios de aplicacion separados, o una replica de lectura, HAY QUE REVISAR ESTA
+  # DECISION y migrar al GRANT.
+  #
+  # VERSION Y REINICIO
+  # El parametro esta deprecado desde MySQL 8.0.34 y desaparecera en una version
+  # futura; el sustituto es el GRANT descrito arriba. Sigue existiendo y siendo
+  # modificable en la familia mysql8.4 que usa esta instancia -verificado contra la
+  # API de AWS con
+  #   aws rds describe-engine-default-parameters --db-parameter-group-family mysql8.4
+  # que lo devuelve con ApplyType "dynamic" e IsModifiable true-. Al ser dinamico, RDS
+  # lo aplica en caliente: NO exige reinicio de la instancia ni en dev ni en prod.
+  parameter {
+    name  = "log_bin_trust_function_creators"
+    value = "1"
+  }
+
   lifecycle {
     create_before_destroy = true
   }

@@ -2377,14 +2377,30 @@ por su cuenta: si el job no funciona, el trabajo se acumula en silencio.
 la ventana de cada regla no es un número redondo elegido a ojo: es la cadencia traducida a tiempo
 de reloj. Estado a 19-08-2026, leído en el backend:
 
-| `job_name` | Cadencia (`fixedDelay`) | Declarada en | Regla crítica que lo cubre |
-|---|---|---|---|
-| `dian.pending.reconciliation` | **12 h** | `PendingReconciliationJob.java:66` (`43200000`) | `-crit-slow`, ventana `[26h]` |
-| `dian.contingency.retry` | **12 h** | `ContingencyRetryJob.java:84` (`43200000`) | `-crit-slow`, ventana `[26h]` |
-| `security.tokens.cleanup` | **1 h** | `TokenCleanupJob.java:33` (`PT1H`) | `-critical`, ventana `[3h]` |
+> **ACTUALIZADO (backend #609): ya no hay `fixedDelay`.** Los siete barridos de calendario pasaron
+> a `cron` con zona `America/Bogota`, declarados en un único sitio —`ScheduledJobCatalog`— del que
+> cuelgan además los umbrales de `VetSoftwareScheduledJobOverdue`. Antes de este cambio la hora de
+> cada barrido era **la del último despliegue**, así que ninguna ventana de este runbook podía
+> afirmar a qué hora se esperaba nada.
 
-Los dos jobs DIAN pasaron de 10 y 5 minutos a 12 horas en el commit `dffef716` del backend; los
-mismos `43200000` ms son el valor por defecto en `application.yml:301` y `:313`.
+| `job_name` | Cron (`America/Bogota`) | Hora | Regla crítica que lo cubre |
+|---|---|---|---|
+| `subscription.lifecycle` | `0 10 3 * * *` | 03:10 | `-crit-slow`, ventana `[26h]` |
+| `quote.expiration` | `0 25 3 * * *` | 03:25 | `-crit-slow`, ventana `[26h]` |
+| `subscription.dunning` | `0 40 3 * * *` | 03:40 | `-crit-slow`, ventana `[26h]` |
+| `usage.reconciliation` | `0 10 4 * * *` | 04:10 | `-crit-slow`, ventana `[26h]` |
+| `dian.contingency.retry` | `0 15 2,14 * * *` | 02:15 y 14:15 | `-crit-slow`, ventana `[26h]` |
+| `dian.pending.reconciliation` | `0 30 2,14 * * *` | 02:30 y 14:30 | `-crit-slow`, ventana `[26h]` |
+| `dian.delivery.retry` | `0 45 2,14 * * *` | 02:45 y 14:45 | `-crit-slow`, ventana `[26h]` |
+| `security.tokens.cleanup` | `0 20 * * * *` | cada hora, :20 | `-critical`, ventana `[3h]` |
+
+`database.availability` y `business.metrics.snapshot` **no** están en esa tabla y siguen con
+`fixedDelay`: son muestreo continuo, no calendario, y su retraso ya lo vigilan sus propias señales.
+
+**Las ventanas `[26h]` y `[3h]` de las reglas de abajo siguen siendo correctas** con estas horas
+—cubren un ciclo completo con margen— así que no se han tocado. Lo que sí cambia es que ahora
+existe una alerta hermana para el caso que estas NO cubren: `VetSoftwareScheduledJobOverdue`
+detecta el barrido que **no se ejecutó**, cosa que un contador de fallos no puede ver.
 
 **Qué la dispara** — Las tres viven en `observability/grafana-managed/vetsoftware-cloud-additions-managed.yml`,
 grupo `vetsoftware-scheduled-jobs`, evaluación cada 1 m, y las tres con `for: 30m`.
@@ -3363,6 +3379,148 @@ deben estar cableadas en prod, no solo en dev.
   Grafana Cloud; lo ejecuta el dueño de la cuenta, no quien atiende la alerta.
 
 ---
+
+### VetSoftwareEntitlementResolutionEmpty
+
+**Qué significa** — Una empresa se quedó **sin ninguna fila en `company_entitlements`**. Sus
+empleados reciben 403 en **todos** los endpoints, sin ningún mensaje que lo explique: desde el
+navegador parece un problema de permisos del usuario, y no lo es. Es un corte total de acceso para
+ese tenant.
+
+**Ya pasó dos veces** (backend #410, #472) y las dos se descubrieron porque el cliente llamó a
+soporte. La ventana entre «el login funcionó» y «hay rastro del problema» es de **una petición**:
+la primera `GET /auth/me` tras el login pasa por el resolutor y ya incrementa el contador. Esa
+latencia de detección tan buena se desperdiciaba entera porque nadie miraba el contador.
+
+**Qué la dispara** —
+`increase(vetsoftware_entitlement_resolution_empty_total{cause="company_without_entitlements"}[15m]) > 0`,
+sin `for`. El contador se registra **de forma ansiosa y en cero** en el arranque del backend
+(`JpaEntitlementEffectivePermissionResolver:96-99`) precisamente para que este `> 0` funcione desde
+el primer scrape en vez de depender de que la serie nazca justo durante el incidente.
+
+**Por qué no lleva la empresa** — Con 500 clínicas, una etiqueta por empresa multiplica cada serie
+por 500. El plan Free admite 15.000 series activas y al 100 % Grafana Cloud **rechaza la ingesta y
+se pierde toda la telemetría en silencio**. La empresa viaja por el registro y por el span, que es
+donde la alta cardinalidad no cuesta.
+
+**Cómo se investiga** — La empresa sale del `WARN` de `JpaEntitlementEffectivePermissionResolver`,
+que la nombra en el mensaje y la lleva en `actor.companyId`.
+
+> ⚠️ **La consulta de Loki no se escribe como antes.** Desde el 18-08-2026 los registros van por
+> CloudWatch/Firehose y **ya no llevan `trace_id` ni `scope_name` como etiquetas de Loki**. Una
+> consulta escrita con el estilo antiguo devuelve vacío y parece que la tubería murió. Los
+> atributos viajan **dentro del cuerpo del mensaje**: hay que atravesarlo con `| json` y filtrar
+> por el campo, no por la etiqueta.
+
+**Cómo se arregla** — Ejecutar `RecalculateCompanyEntitlementsUseCase` para esa empresa
+(`POST /company-entitlements/recalculate`, principal SYSTEM). Es idempotente: borra y reinserta las
+filas derivándolas del contrato vigente, así que ejecutarlo dos veces produce el mismo estado.
+
+**Antes de cerrar** — Averiguar por qué se quedó sin filas. Lo normal es que un cambio de contrato
+no llamara al recálculo, y eso lo dice
+`vetsoftware_business_subscription_entitlement_recalculations_total{result="failed"}`, que existe
+desde backend #606.
+
+### VetSoftwareEntitlementContractRestricted
+
+**Qué significa** — Un empleado resolvió sus permisos efectivos y **todos** sus permisos base
+cayeron fuera de lo que el contrato de su empresa concede. Resultado idéntico al de la alerta
+anterior —403 en todo— pero por otro motivo, y con otro dueño.
+
+**No es «un cliente que bajó de plan», y por eso el umbral es cero.** Un downgrade correcto retira
+módulos y deja al empleado con el resto de su rol. Que se quede con **cero** authorities significa
+una de dos cosas, las dos accionables:
+
+1. **El contrato perdió una línea que sí paga.** Es la carrera que abre la capa de límites del
+   modelo: el recálculo borra y reinserta la tabla entera de la empresa **sin tomar el candado del
+   contrato**, así que un otrosí confirmado en medio reinserta sin la línea nueva.
+   `company_without_entitlements` no subiría —la empresa sigue teniendo filas— y este sí. Es la
+   única señal en tiempo real de que el arbitraje de permisos acaba de dejar a alguien fuera de un
+   módulo que **está pagando**. Se comprueba cruzando `subscription_items` vigentes contra
+   `company_entitlements`; el arreglo es volver a recalcular.
+2. **Un downgrade dejó roles asignados que el plan nuevo ya no cubre.** Arreglo de negocio:
+   reasignar el rol del empleado.
+
+**Si esto resulta ser rutinario, el arreglo NO es subir el umbral.** Es corregir el flujo de
+downgrade para que reasigne el rol. Subirlo convertiría a un cliente sin acceso en ruido tolerado,
+que es exactamente cómo muere una alerta.
+
+**Qué la dispara** —
+`increase(vetsoftware_entitlement_resolution_empty_total{cause="contract_restricted"}[1h]) > 0` con
+`for: 15m`. El `for` le da margen a que un downgrade en curso termine de propagarse; la alerta
+crítica hermana no lo lleva porque su hecho no tiene «en curso» posible.
+
+### VetSoftwareScheduledJobOverdue
+
+**Qué significa** — El barrido nombrado por `job_name` **no ha terminado bien dentro de su
+ventana**. Han pasado más de 1,25 intervalos esperados desde su último final correcto.
+
+**No es lo mismo que `VetSoftwareScheduledJobFailing`, y la diferencia es toda la razón de ser de
+esta alerta.** Aquella cuenta ejecuciones con `job_outcome` de fallo: detecta que un job **falló**.
+Esta detecta que **no se ejecutó**, que es el caso que no deja ninguna otra señal — ni contador, ni
+log, ni serie que cambie. Un `@Scheduled` que no llegó a registrarse por un fallo de arranque, un
+contenedor que se reinició dentro de la ventana, una expresión cron que alguien rompió: en los tres
+casos el sistema entero se ve igual de sano que el día anterior y el trabajo pendiente se acumula.
+Se descubría tres días después, cuando alguien preguntaba por qué no se degradó a un moroso.
+
+**Un `partial_failure` SÍ sella el heartbeat, a propósito.** El barrido corrió; que además fallara
+en parte es la pregunta de la otra alerta. Confundir las dos hace que un job que falla todas las
+noches parezca también un job que no se ejecuta, y que arreglar lo segundo apague la señal de lo
+primero.
+
+**El umbral es una serie, no un número.**
+`vetsoftware_scheduled_job_expected_interval_seconds` lo publica el propio backend derivándolo de su
+expresión cron —el **mayor** hueco entre las próximas ocurrencias, que es lo que importa en un cron
+de dos pasadas diarias asimétricas—. Así, cambiar la cadencia en `ScheduledJobCatalog` mueve la
+alerta con ella. Escribir el umbral en el fichero de reglas dejaría la alerta vigilando una hora que
+ya no existe, y eso no rompe nada visiblemente: solo ciega.
+
+**Qué mirar, en este orden** — (1) ¿el proceso está vivo? Si no, la causa es
+`VetSoftwareBackendTelemetryAbsent` o el heartbeat; (2) ¿arrancó el scheduler? Un `@Scheduled` que
+no se registró no deja más rastro que este; (3) el log del job filtrando por `job.name` —que **va
+dentro del cuerpo del mensaje**, no como etiqueta de Loki, ver el aviso de
+`VetSoftwareEntitlementResolutionEmpty`—; (4) `tasks_scheduled_execution_milliseconds_count` con ese
+`job_name`: si hay ejecuciones con desenlace de fallo, el problema es de la otra alerta y esta es
+consecuencia.
+
+**Ojo con los reinicios.** El heartbeat se inicializa al **arranque del proceso** —no a cero, que
+haría disparar las siete instancias en el primer scrape de cada despliegue— así que un despliegue
+reinicia el reloj de esta alerta. Es correcto: tras desplegar, el barrido vuelve a tener su ventana
+completa. Pero significa que **un contenedor que se reinicia continuamente puede tapar un barrido
+que nunca corre**. Si esta alerta va y viene, mirar primero la estabilidad del proceso.
+
+**En dev no suena, y es lo correcto.** EventBridge apaga el backend a las 20:00 y lo levanta por la
+mañana, así que un barrido de las 03:10 nunca corre allí y el heartbeat se reinicia cada día. La
+calibración de esta regla es la de **prod**, igual que la de las tres reglas HTTP.
+
+### VetSoftwareScheduledJobMultipleReplicas
+
+**Qué significa** — Más de un proceso está publicando el heartbeat del mismo barrido, y ese barrido
+**exige una sola réplica**.
+
+**Por qué importa ahora y no importaba antes.** Cinco de los ocho barridos de calendario recorren
+su tabla con un cursor y no arbitran nada entre réplicas. Mientras usaban `fixedDelay`, dos tareas
+se escalonaban por accidente y el solape era intermitente; con `cron` arrancan **a la vez**, así que
+el solape pasa de probable a seguro. Lo único que lo impide hoy es que el servicio corre con
+`desired_count = 1` — una propiedad del despliegue, no del código.
+
+**Qué se rompe si se ignora** — El barrido de facturación emite los cargos del cierre de mes **dos
+veces** (`subscription_charges` es la única tabla del bloque de dinero sin llave antiduplicados), y
+el de cobranza degrada dos veces al mismo moroso. El cliente lo descubre en su factura del mes
+siguiente, que es el peor momento posible para descubrirlo.
+
+**Las dos salidas, y solo hay dos** — Volver a una sola tarea, o implementar el candado distribuido
+antes del siguiente cierre de mes. No hay una tercera que consista en esperar a ver.
+
+**Los tres barridos DIAN no aparecen aquí** porque reclaman su lote en exclusiva con
+`DianJobLeasePort` (`SELECT … FOR UPDATE SKIP LOCKED` + `dian_leased_until`) y toleran N réplicas:
+cada una se lleva un subconjunto disjunto y todas avanzan. **Ese es el patrón a copiar** cuando se
+implemente el candado de los otros cuatro. El filtro que los excluye es la etiqueta
+`single_writer="true"`, que el backend publica desde `ScheduledJobCatalog.requiresSingleWriter()`.
+
+**Falso positivo conocido y acotado**: un despliegue solapa dos tareas durante varios minutos de
+forma legítima. Por eso el `for` de esta regla en cloud es de 15 minutos y no de 5 como en el plano
+local. Quince minutos de solape ya no son un despliegue, son un escalado.
 
 ## 5. Qué NO se vigila aquí, y por decisión
 
