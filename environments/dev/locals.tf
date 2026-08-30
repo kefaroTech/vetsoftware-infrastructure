@@ -140,6 +140,12 @@ locals {
     PASSWORD_RESET_URL            = var.password_reset_url
     CODE_RECOVERY_LOGIN_URL       = var.login_url
     EMPLOYEE_LOGIN_URL            = var.login_url
+    # Enlace del correo de la propuesta del asistente: el backend concatena
+    # <base> + "/?token=<43 caracteres>" y la landing publica lo recoge. Estaba
+    # declarada en el application.yml con default vacio y NO llegaba por entorno,
+    # asi que ResendProposalLinkEmailSender escribia un warning y retornaba sin
+    # enviar: el correo del prospecto anonimo no salia en ningun entorno.
+    AI_PROPOSAL_LINK_BASE_URL = var.ai_proposal_link_base_url
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

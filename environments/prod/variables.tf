@@ -432,6 +432,39 @@ variable "login_url" {
   }
 }
 
+# Landing publica a la que apunta el enlace del correo de la propuesta del
+# asistente. El prospecto es ANONIMO: no hay sesion, y lo unico que lo separa de
+# la propuesta de otro son los 43 caracteres del token. El backend construye el
+# enlace concatenando en ResendProposalLinkEmailSender.send:
+#
+#     baseUrl + (baseUrl termina en "/" ? "" : "/") + "?token=" + token
+#
+# o sea que la barra final la normaliza el propio backend y no puede salir
+# doble. Lo que si importa es que el valor sea el ORIGEN pelado, sin ruta: quien
+# recoge el token es la landing (ruta "/") a traves de useRecuperarPropuesta, que
+# lo lee de la cadena de consulta, hidrata la propuesta y sustituye la entrada
+# del historial para que el token desaparezca de la barra de direcciones. Sus dos
+# hermanas de arriba si llevan ruta -/verify-email, /restablecer-contrasena-
+# porque apuntan a pantallas concretas; esta no, y por eso tampoco lleva barra
+# final: las tres quedan sin barra al final.
+#
+# LLEVA DEFAULT A PROPOSITO. Con el valor vacio -que es como llega hoy desde el
+# application.yml del backend, con default ""- el remitente escribe un warning y
+# RETORNA SIN ENVIAR: el correo no sale, no hay excepcion, no hay metrica y no
+# hay alarma. Un default por entorno hace que el enlace funcione sin depender de
+# que alguien cree la variable de GitHub, y la validacion impide que un
+# TF_VAR_ai_proposal_link_base_url vacio vuelva a apagarlo en silencio.
+variable "ai_proposal_link_base_url" {
+  description = "Origen https de la landing publica que recibe el ?token= del correo de la propuesta, sin ruta ni barra final."
+  type        = string
+  default     = "https://app.vetsoftware.co"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.ai_proposal_link_base_url))
+    error_message = "Debe ser un origen https sin ruta ni barra final, por ejemplo https://app.vetsoftware.co."
+  }
+}
+
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
 # restablecimiento de contrasena, invitacion de empleado y confirmacion de cita. Hasta
 # ahora NO llegaban por entorno: viajaban como default commiteado en el application.yml

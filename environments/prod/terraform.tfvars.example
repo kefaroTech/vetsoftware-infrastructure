@@ -16,6 +16,11 @@ email_from                    = "VetSoftware <noreply@example.com>"
 registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
+# Origen de la landing que recibe el ?token= del correo de la propuesta. Tiene default
+# en variables.tf (https://app.vetsoftware.co, el dominio del front productivo segun
+# docs/CLOUDFLARE_PAGES.md); descomente solo si el dominio cambia. Sin ruta y sin barra
+# final: el backend concatena "/?token=<43 caracteres>".
+# ai_proposal_link_base_url = "https://app.vetsoftware.co"
 
 # Los cuatro UUID de plantilla de Resend del producto. Las plantillas se crean A MANO en
 # el panel de Resend: copie aqui el identificador de cada una, nunca deje el marcador.
