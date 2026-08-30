@@ -403,15 +403,33 @@ variable "email_terms_url" {
 }
 
 variable "registration_verification_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de verificacion de registro; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.registration_verification_url, "https://") && length(var.registration_verification_url) > 8 && !endswith(var.registration_verification_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/verify-email. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "password_reset_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de restablecimiento de contrasena; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.password_reset_url, "https://") && length(var.password_reset_url) > 8 && !endswith(var.password_reset_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/restablecer-contrasena. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "login_url" {
-  type = string
+  description = "Login de la aplicacion del tenant; viaja en el correo de recuperacion de codigo y en el de alta de empleado."
+  type        = string
+
+  validation {
+    condition     = startswith(var.login_url, "https://") && length(var.login_url) > 8 && !endswith(var.login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/login. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,

@@ -393,15 +393,33 @@ variable "email_terms_url" {
 }
 
 variable "registration_verification_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de verificacion de registro; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.registration_verification_url, "https://") && length(var.registration_verification_url) > 8 && !endswith(var.registration_verification_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/verify-email. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "password_reset_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de restablecimiento de contrasena; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.password_reset_url, "https://") && length(var.password_reset_url) > 8 && !endswith(var.password_reset_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/restablecer-contrasena. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "login_url" {
-  type = string
+  description = "Login de la aplicacion del tenant; viaja en el correo de recuperacion de codigo y en el de alta de empleado."
+  type        = string
+
+  validation {
+    condition     = startswith(var.login_url, "https://") && length(var.login_url) > 8 && !endswith(var.login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/login. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
@@ -456,16 +474,31 @@ variable "platform_approver_email" {
 variable "platform_access_review_base_url" {
   description = "URL base de la pantalla de revision de solicitudes en la consola de plataforma; recibe ?token=... para aprobar o rechazar."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_access_review_base_url, "https://") && length(var.platform_access_review_base_url) > 8 && !endswith(var.platform_access_review_base_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 variable "platform_invitation_base_url" {
   description = "URL base de la pantalla de aceptacion de invitacion en la consola de plataforma; recibe ?token=... para aceptar el alta."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_invitation_base_url, "https://") && length(var.platform_invitation_base_url) > 8 && !endswith(var.platform_invitation_base_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 variable "platform_access_login_url" {
   description = "URL de login de la consola de plataforma que viaja en el correo de bienvenida; unico canal por el que el superadministrador conoce su codigo de acceso."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_access_login_url, "https://") && length(var.platform_access_login_url) > 8 && !endswith(var.platform_access_login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del mismo flujo. Las plantillas se crean A
