@@ -110,3 +110,33 @@ telemetry_sidecar_enabled = false
 # Adaptive Traces en Grafana Cloud, que ve la traza completa. Medido: pico de
 # 0,225 spans/s al 25 %, ~0,9 spans/s al 100 %, contra un limite de ~1.250.
 tracing_sampling = 1.0
+
+# Bedrock: permiso de invocacion, presupuesto y alarma (fase 2.1).
+#
+# Los valores de abajo son los de por defecto y se repiten aqui solo para que se
+# vean; el entorno funciona sin declararlos.
+#
+# ATENCION, prerrequisito humano que NO esta en el codigo: conceder
+# bedrock:InvokeModel no basta. La cuenta tiene que haber habilitado el acceso al
+# modelo, y eso es un formulario en la consola de Bedrock que a 2026-08-29 NO
+# esta hecho en dev. Sin ese paso la invocacion falla con AccessDeniedException
+# aunque la politica sea perfecta, y el mensaje se parece lo bastante al de un
+# permiso ausente como para mandar a cualquiera a depurar la politica
+# equivocada. Se comprueba con `aws bedrock get-use-case-for-model-access`: si
+# devuelve ResourceNotFoundException, el formulario sigue sin rellenar. Los otros
+# tres comandos que uno probaria dan falsos positivos.
+bedrock_enabled              = true
+bedrock_inference_profile_id = "us.anthropic.claude-sonnet-5"
+bedrock_foundation_model_id  = "anthropic.claude-sonnet-5"
+
+# El tope diario que aplica la aplicacion antes de invocar. El presupuesto
+# mensual de Bedrock se deriva de este numero -x30, redondeado hacia arriba: USD
+# 10-, asi que subir el tope sube el presupuesto en el mismo commit y no hay
+# forma de moverlos por separado.
+bedrock_daily_spend_cap_usd = 0.33
+
+# Invocaciones en cinco minutos que hacen sonar la alarma. Es el respaldo de ese
+# tope, no su sustituto: 20 en cinco minutos son ~USD 0,60, casi el doble del
+# gasto diario autorizado entero, asi que si suena es que el tope de la
+# aplicacion dejo de cortar.
+bedrock_invocation_surge_threshold = 20

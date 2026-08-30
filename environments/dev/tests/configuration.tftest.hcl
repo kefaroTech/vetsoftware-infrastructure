@@ -947,3 +947,224 @@ run "el_sidecar_encendido_pone_la_cola_en_disco_sin_tocar_los_logs" {
     error_message = "dev debe emitir el 100 % de las trazas y delegar el muestreo en Adaptive Traces."
   }
 }
+
+# Bedrock, fase 2.1: el permiso, el presupuesto y la alarma.
+#
+# Lo que se afirma aqui no es "el recurso existe" -eso ya lo dice el plan- sino
+# las tres cosas de este cambio que se rompen con el apply en verde y el
+# despliegue en verde:
+#
+#  1. Los CUATRO ARN. El perfil de inferencia enruta a tres regiones y la
+#     politica necesita el modelo base de las tres. Concediendo solo el perfil,
+#     la primera invocacion que el enrutador mande a us-east-2 devuelve
+#     AccessDeniedException, de forma intermitente y sin nombrar lo que falta.
+#  2. El prefijo del perfil. El global.* se invoca igual y enruta a todas las
+#     regiones soportadas; la autorizacion que firma el prospecto declara una
+#     transferencia internacional que nombra tres. Seis caracteres separan
+#     cumplir de no cumplir.
+#  3. Que el tope de gasto y el presupuesto sigan siendo el mismo numero.
+run "bedrock_concede_los_cuatro_arn_y_ninguno_mas" {
+  command = plan
+
+  variables {
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint                 = "https://otlp.example.test/otlp"
+    cors_allowed_origins                  = ["https://dev.example.test"]
+    email_from                            = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url         = "https://dev.example.test/verify"
+    password_reset_url                    = "https://dev.example.test/reset"
+    login_url                             = "https://dev.example.test/login"
+    platform_approver_email               = "plataforma@example.test"
+    platform_access_review_base_url       = "https://dev-admin.example.test/aprobar-acceso"
+    platform_invitation_base_url          = "https://dev-admin.example.test/aceptar-invitacion"
+    platform_access_login_url             = "https://dev-admin.example.test/login"
+    platform_access_request_template_id   = "11111111-1111-4111-8111-111111111111"
+    platform_access_approved_template_id  = "22222222-2222-4222-8222-222222222222"
+    platform_access_rejected_template_id  = "33333333-3333-4333-8333-333333333333"
+    platform_access_welcome_template_id   = "44444444-4444-4444-8444-444444444444"
+    registration_verification_template_id = "55555555-5555-4555-8555-555555555555"
+    password_reset_template_id            = "66666666-6666-4666-8666-666666666666"
+    employee_invitation_template_id       = "77777777-7777-4777-8777-777777777777"
+    appointment_confirmation_template_id  = "88888888-8888-4888-8888-888888888888"
+    api_domain_name                       = "dev-api.example.test"
+    alarm_email                           = "finops@example.test"
+    slack_workspace_id                    = "T0123456789"
+    slack_channel_id                      = "C0123456789"
+  }
+
+  # Cuatro, ni tres ni cinco. El del perfil lleva account-id; los tres del
+  # modelo base no lo llevan -de ahi los dos puntos seguidos-, y confundir las
+  # dos formas es otro AccessDenied silencioso.
+  assert {
+    condition = (
+      length(output.bedrock.access.model_arns) == 4 &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-5") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5")
+    )
+    error_message = "La politica del rol de tarea tiene que conceder los cuatro ARN: el perfil de inferencia MAS el modelo base en cada una de las tres regiones a las que ese perfil enruta. Con menos, el fallo no es un apply rojo: es un AccessDeniedException intermitente en ejecucion."
+  }
+
+  # La lista de regiones alcanzables es la que la autorizacion del prospecto
+  # tiene que nombrar. Si esta asercion falla, hay un texto legal que revisar
+  # antes de aplicar.
+  assert {
+    condition     = join(",", output.bedrock.routing_regions) == "us-east-1,us-east-2,us-west-2"
+    error_message = "Cambiaron las regiones a las que el dato puede viajar. Esa lista esta declarada en la autorizacion de transferencia internacional que acepta el prospecto: no se amplia desde Terraform sin cambiar antes la politica de privacidad."
+  }
+
+  assert {
+    condition     = !output.bedrock.global_profile && startswith(output.bedrock.inference_profile, "us.")
+    error_message = "El perfil de inferencia debe ser el regional us.*. El global.* se invoca exactamente igual y enruta a todas las regiones soportadas, que es justo lo que la autorizacion del prospecto no cubre."
+  }
+
+  # El permiso llego al modulo, no solo al local del root: esto es el cable.
+  assert {
+    condition = (
+      output.bedrock.access.enabled &&
+      output.bedrock.access.statement_sid == "InvokeBedrockModels" &&
+      !output.bedrock.access.streaming_enabled
+    )
+    error_message = "El rol de tarea debe recibir el statement InvokeBedrockModels y sin streaming: el caso de uso devuelve la respuesta entera, asi que conceder el stream solo amplia la superficie."
+  }
+
+  # El presupuesto es el tope diario por 30, no un numero escrito aparte. Si
+  # alguien sube uno sin subir el otro, esta asercion es lo que lo para.
+  assert {
+    condition = (
+      output.bedrock.daily_spend_cap_usd == 0.33 &&
+      output.bedrock.cost_controls.budget_usd == 10 &&
+      output.bedrock.cost_controls.budget_usd == ceil(output.bedrock.daily_spend_cap_usd * 30)
+    )
+    error_message = "El tope de gasto diario -USD 0,33 en dev- y el presupuesto mensual -USD 10 en dev- son el mismo numero visto a dos escalas. Moverlos por separado deja el control que corta y el control que avisa hablando de sistemas distintos."
+  }
+
+  # Filtrado por servicio: sin filtro, un aviso de USD 10 no distingue Bedrock
+  # de RDS, y cuando salte ya no se sabra quien fue.
+  assert {
+    condition = (
+      output.bedrock.cost_controls.budget_name == "vetsoftware-dev-bedrock" &&
+      length(output.bedrock.cost_controls.budget_filters) == 1 &&
+      output.bedrock.cost_controls.budget_filters["Service"] == "Amazon Bedrock" &&
+      length(output.bedrock.cost_controls.budget_thresholds) == 3 &&
+      output.bedrock.cost_controls.budget_to_finops
+    )
+    error_message = "El presupuesto de Bedrock tiene que ir filtrado por servicio, con sus tres umbrales y hacia el topic finops, que es donde ya viven el informe diario y las anomalias de costo."
+  }
+
+  # La alarma es el respaldo del tope de la aplicacion, no su sustituto, y su
+  # umbral esta muy por encima de lo que ese tope permite: 20 invocaciones en
+  # cinco minutos son ~USD 0,60, casi el doble del gasto diario autorizado
+  # entero. Si suena, o el tope dejo de cortar, o esta invocando alguien que no
+  # es la aplicacion.
+  assert {
+    condition = (
+      output.bedrock.cost_controls.alarm_name == "vetsoftware-dev-bedrock-invocation-surge" &&
+      output.bedrock.cost_controls.alarm_threshold == 20 &&
+      output.bedrock.cost_controls.alarm_window_min == 5 &&
+      output.bedrock.cost_controls.alarm_to_critical
+    )
+    error_message = "La alarma de invocaciones debe existir, mirar ventanas de cinco minutos y notificar por el canal critico: el presupuesto avisa con hasta 24 horas de retraso y contra un abuso eso es un registro contable, no una defensa."
+  }
+
+  # En AWS/Bedrock la ausencia de datos significa que nadie invoco el modelo,
+  # que es el estado normal mientras la palanca de la aplicacion siga apagada.
+  assert {
+    condition     = output.bedrock.cost_controls.alarm_missing_data == "notBreaching"
+    error_message = "Sin invocaciones no hay metrica, y eso es el estado bueno: tratar la ausencia como incumplimiento haria sonar la alarma justo cuando nadie esta gastando."
+  }
+
+  # Deliberadamente fuera de la ventana de silencio nocturno. El entorno se
+  # apaga a las 20:00, pero el gasto de Bedrock no lo produce el entorno: lo
+  # produce quien manda peticiones, y eso sigue siendo posible con el backend
+  # apagado.
+  assert {
+    condition     = !output.bedrock.cost_controls.muted_by_maintenance_window
+    error_message = "La alarma de gasto de Bedrock no se silencia en la ventana de mantenimiento. Anadirla a esa lista por coherencia con las demas es la forma barata de no ver un pico de gasto a las 21:00."
+  }
+}
+
+# El interruptor de infraestructura: retirar el permiso.
+#
+# Es la palanca (c) del anexo. La (a) -la clave en base de datos que el
+# generador lee en CADA peticion- es de la aplicacion y no se puede afirmar
+# desde aqui. Lo que esta prueba fija es que apagar esta no se lleve por delante
+# los dos controles de gasto: el presupuesto sigue contando lo que ya se gasto
+# este mes, y la alarma sigue viendo a quien invoque con otras credenciales.
+run "el_interruptor_de_bedrock_retira_el_permiso_y_deja_armado_el_gasto" {
+  command = plan
+
+  variables {
+    bedrock_enabled = false
+
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint                 = "https://otlp.example.test/otlp"
+    cors_allowed_origins                  = ["https://dev.example.test"]
+    email_from                            = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url         = "https://dev.example.test/verify"
+    password_reset_url                    = "https://dev.example.test/reset"
+    login_url                             = "https://dev.example.test/login"
+    platform_approver_email               = "plataforma@example.test"
+    platform_access_review_base_url       = "https://dev-admin.example.test/aprobar-acceso"
+    platform_invitation_base_url          = "https://dev-admin.example.test/aceptar-invitacion"
+    platform_access_login_url             = "https://dev-admin.example.test/login"
+    platform_access_request_template_id   = "11111111-1111-4111-8111-111111111111"
+    platform_access_approved_template_id  = "22222222-2222-4222-8222-222222222222"
+    platform_access_rejected_template_id  = "33333333-3333-4333-8333-333333333333"
+    platform_access_welcome_template_id   = "44444444-4444-4444-8444-444444444444"
+    registration_verification_template_id = "55555555-5555-4555-8555-555555555555"
+    password_reset_template_id            = "66666666-6666-4666-8666-666666666666"
+    employee_invitation_template_id       = "77777777-7777-4777-8777-777777777777"
+    appointment_confirmation_template_id  = "88888888-8888-4888-8888-888888888888"
+    api_domain_name                       = "dev-api.example.test"
+    alarm_email                           = "finops@example.test"
+    slack_workspace_id                    = "T0123456789"
+    slack_channel_id                      = "C0123456789"
+  }
+
+  # Ni un ARN, y por tanto ningun statement. Una lista vacia y un statement con
+  # lista vacia no son lo mismo en IAM: el sid nulo es lo que afirma que el
+  # statement no llego a existir.
+  assert {
+    condition = (
+      length(output.bedrock.access.model_arns) == 0 &&
+      !output.bedrock.access.enabled &&
+      output.bedrock.access.statement_sid == null
+    )
+    error_message = "Con bedrock_enabled = false el rol de tarea no debe conservar ningun permiso de Bedrock, ni siquiera un statement con la lista vacia."
+  }
+
+  # Y los dos controles de gasto siguen en pie.
+  assert {
+    condition = (
+      output.bedrock.cost_controls.budget_name == "vetsoftware-dev-bedrock" &&
+      output.bedrock.cost_controls.alarm_name == "vetsoftware-dev-bedrock-invocation-surge"
+    )
+    error_message = "Retirar el permiso no puede desarmar de paso el presupuesto ni la alarma: el gasto del mes ya ocurrio y hay que seguir contandolo, y unas credenciales filtradas siguen pudiendo invocar aunque el rol de tarea ya no pueda."
+  }
+}

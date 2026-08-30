@@ -16,6 +16,16 @@ locals {
     (local.email_notifications_enabled || var.budget_sns_notifications_enabled)
   )
 
+  # El presupuesto de Bedrock tiene su propia condicion y NO reutiliza la de
+  # arriba, aunque el resto sea identico. Reutilizarla ata sus avisos a
+  # monthly_budget_usd: poner a cero el presupuesto global -que es la forma
+  # documentada de apagarlo- dejaria el presupuesto de Bedrock creado y mudo,
+  # que es peor que no tenerlo, porque en la consola se ve.
+  bedrock_budget_notifications_enabled = (
+    var.bedrock_budget_usd > 0 &&
+    (local.email_notifications_enabled || var.budget_sns_notifications_enabled)
+  )
+
   # Dos topicos, no uno. Un canal unico obliga a leer el aviso de presupuesto con
   # la misma urgencia que una base que se esta quedando sin disco, y en la
   # practica termina ignorandose entero. `alarm_actions` conserva el nombre
@@ -626,6 +636,95 @@ resource "aws_budgets_budget" "monthly" {
   }
 
   depends_on = [aws_sns_topic_policy.finops]
+}
+
+# Presupuesto propio de Bedrock, y no un umbral mas del global.
+#
+# aws_budgets_budget.monthly no lleva cost_filter: vigila la cuenta entera y no
+# puede distinguir USD 30 de Bedrock de USD 30 de RDS. Cuando salte, ya no se
+# sabra quien fue. El gasto de Bedrock no lo decide la infraestructura
+# declarada sino el trafico de un endpoint publico sin autenticar, asi que
+# necesita su propia linea contable.
+#
+# Los umbrales son bajos a proposito: sobre una cuenta cuya mayor linea
+# individual son USD 5,99 al mes -el Valkey de dev-, USD 10 ya es una anomalia.
+# El 50 % y el 80 % son previstos y el 100 % es real: el previsto avisa mientras
+# todavia se puede hacer algo.
+#
+# Va al topic finops, donde ya viven el informe diario y las anomalias de costo,
+# y no al de alarmas: esto es contabilidad, no una base quedandose sin disco.
+#
+# Gratis: AWS Budgets regala los dos primeros presupuestos por cuenta y este es
+# el segundo.
+resource "aws_budgets_budget" "bedrock" {
+  count = var.bedrock_budget_usd > 0 ? 1 : 0
+
+  name         = "${var.name}-bedrock"
+  budget_type  = "COST"
+  limit_amount = tostring(var.bedrock_budget_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  cost_filter {
+    name   = "Service"
+    values = ["Amazon Bedrock"]
+  }
+
+  dynamic "notification" {
+    for_each = local.bedrock_budget_notifications_enabled ? [50, 80, 100] : []
+
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value
+      threshold_type             = "PERCENTAGE"
+      notification_type          = notification.value == 100 ? "ACTUAL" : "FORECASTED"
+      subscriber_email_addresses = var.budget_sns_notifications_enabled ? [] : [var.alarm_email]
+      subscriber_sns_topic_arns = var.budget_sns_notifications_enabled ? [
+        aws_sns_topic.finops[0].arn,
+      ] : []
+    }
+  }
+
+  depends_on = [aws_sns_topic_policy.finops]
+}
+
+# Un presupuesto avisa, no corta, y ademas evalua con datos de facturacion que
+# llegan con hasta 24 horas de retraso. Contra un abuso que gasta cien dolares
+# en una hora, el presupuesto avisaria al dia siguiente.
+#
+# Esta alarma es lo unico de esta cuenta que ve el gasto de Bedrock en minutos.
+# No sustituye al tope de la aplicacion -ese es el unico control que actua ANTES
+# de gastar-: es su respaldo, y su umbral esta puesto muy por encima del ritmo
+# que ese tope permite. Dicho de otro modo: si esta alarma suena, el tope de la
+# aplicacion ha dejado de cortar, o esta invocando alguien que no es la
+# aplicacion.
+#
+# Sin dimension ModelId a proposito: agrega todo el Bedrock de la cuenta. Con un
+# solo caso de uso eso es exactamente lo que se quiere, y sobrevive a un cambio
+# de modelo sin que nadie se acuerde de mover la alarma.
+#
+# Sin ok_actions, como el resto del modulo. La higiene de alertas de este
+# entorno declara notify_on_recovery = false en el contrato de alertas, y pegar
+# un ok_actions aqui dejaria ese contrato mintiendo.
+#
+# treat_missing_data = "notBreaching" no es el atajo de siempre: en el namespace
+# AWS/Bedrock la ausencia de datos significa literalmente que nadie invoco el
+# modelo, que es el estado bueno y el normal mientras la palanca este apagada.
+resource "aws_cloudwatch_metric_alarm" "bedrock_invocation_surge" {
+  count = var.bedrock_budget_usd > 0 ? 1 : 0
+
+  alarm_name          = "${var.name}-bedrock-invocation-surge"
+  alarm_description   = "Invocaciones de Bedrock por encima del ritmo que permite el tope de gasto de la aplicacion: el endpoint es publico y quien decide cuanto se gasta es quien manda peticiones."
+  namespace           = "AWS/Bedrock"
+  metric_name         = "Invocations"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = var.bedrock_invocation_surge_threshold
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.critical_actions
+  tags                = var.tags
 }
 
 resource "aws_ce_anomaly_monitor" "services" {

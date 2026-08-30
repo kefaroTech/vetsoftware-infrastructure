@@ -157,3 +157,59 @@ output "telemetry_sidecar_alarm_names" {
     aws_cloudwatch_metric_alarm.telemetry_sidecar_errors[0].alarm_name,
   ] : []
 }
+
+# Contrato de los dos controles de costo de Bedrock. Se publica aparte del de
+# alertas porque responde a otra pregunta: no "que se vigila" sino "cuanto se
+# puede gastar antes de que alguien se entere, y por que via".
+#
+# La ultima linea es la que mas facil se degrada sin ruido: la ventana de
+# silencio nocturno enumera alarmas a mano, y a esta NO se le anade a proposito
+# -un pico de gasto a las 21:00, con el entorno apagado y sin nadie mirando, es
+# justo el que hay que oir-. Publicarlo lo convierte en algo que una prueba
+# afirma en vez de un comentario que alguien lee si se acuerda.
+output "bedrock_cost_controls" {
+  description = "Presupuesto filtrado por servicio y alarma de invocaciones de Bedrock; nulos cuando el presupuesto es cero."
+  value = {
+    budget_name = length(aws_budgets_budget.bedrock) > 0 ? aws_budgets_budget.bedrock[0].name : null
+    budget_usd  = var.bedrock_budget_usd
+    budget_filters = length(aws_budgets_budget.bedrock) > 0 ? {
+      for filtro in aws_budgets_budget.bedrock[0].cost_filter :
+      filtro.name => join(",", sort(tolist(filtro.values)))
+    } : {}
+    budget_thresholds = local.bedrock_budget_notifications_enabled ? [50, 80, 100] : []
+
+    # Se lee del recurso, no de la variable que lo configura. Una asercion
+    # contra var.budget_sns_notifications_enabled solo diria "pedimos que fuera
+    # a finops"; esto dice que los tres avisos LLEGAN al topic de finops, que es
+    # lo que se rompe cuando alguien toca el ternario de los suscriptores.
+    budget_to_finops = length(aws_budgets_budget.bedrock) > 0 ? (
+      length(aws_budgets_budget.bedrock[0].notification) > 0 &&
+      alltrue([
+        for aviso in aws_budgets_budget.bedrock[0].notification :
+        contains(tolist(aviso.subscriber_sns_topic_arns), local.finops_topic_arn)
+      ])
+    ) : false
+
+    alarm_name      = length(aws_cloudwatch_metric_alarm.bedrock_invocation_surge) > 0 ? aws_cloudwatch_metric_alarm.bedrock_invocation_surge[0].alarm_name : null
+    alarm_threshold = var.bedrock_invocation_surge_threshold
+
+    # Derivado del period del recurso y no escrito a mano: un 5 literal
+    # afirmandose contra otro 5 literal no comprueba nada, y lo que hay que
+    # detectar es que alguien pase la ventana a una hora y convierta la alarma
+    # en algo que llega tarde.
+    alarm_window_min = length(aws_cloudwatch_metric_alarm.bedrock_invocation_surge) > 0 ? (
+      aws_cloudwatch_metric_alarm.bedrock_invocation_surge[0].period / 60
+    ) : null
+
+    # Igual: se comprueba que la accion sea el topic critico, no que exista
+    # algun topic critico configurado en el entorno.
+    alarm_to_critical = length(aws_cloudwatch_metric_alarm.bedrock_invocation_surge) > 0 ? contains(
+      tolist(aws_cloudwatch_metric_alarm.bedrock_invocation_surge[0].alarm_actions), local.alarms_critical_topic_arn
+    ) : false
+    alarm_missing_data = length(aws_cloudwatch_metric_alarm.bedrock_invocation_surge) > 0 ? aws_cloudwatch_metric_alarm.bedrock_invocation_surge[0].treat_missing_data : null
+
+    muted_by_maintenance_window = length(aws_cloudwatch_metric_alarm.bedrock_invocation_surge) > 0 ? contains(
+      local.muted_alarm_names, aws_cloudwatch_metric_alarm.bedrock_invocation_surge[0].alarm_name
+    ) : false
+  }
+}

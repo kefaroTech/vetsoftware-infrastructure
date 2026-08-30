@@ -823,3 +823,51 @@ variable "maintenance_mute_windows" {
     error_message = "duration debe ir en formato ISO 8601 entre PT1M y P15D, por ejemplo PT12H10M o P2DT12H."
   }
 }
+
+# ─── Bedrock ────────────────────────────────────────────────────────────────
+#
+# Fase 2.1 del plan de la propuesta comercial generada por IA: el permiso, el
+# presupuesto y la alarma. Nada de esto invoca el modelo todavia, y el acceso al
+# modelo en la cuenta es un formulario manual que a 2026-08-29 NO esta hecho
+# (verificado: `aws bedrock get-use-case-for-model-access` sigue devolviendo
+# ResourceNotFoundException y las seis cuotas de Sonnet 5 estan a 0.0).
+
+variable "bedrock_enabled" {
+  description = "Concede al rol de tarea el permiso para invocar el modelo. En false no se genera el statement y el rol no puede invocar nada; el presupuesto y la alarma NO dependen de esta bandera y siguen armados."
+  type        = bool
+  default     = true
+}
+
+variable "bedrock_inference_profile_id" {
+  description = "Perfil de inferencia que se invoca. Verificado el 2026-08-29 en la cuenta de dev: SYSTEM_DEFINED, ACTIVE, y enruta a us-east-1, us-east-2 y us-west-2."
+  type        = string
+  default     = "us.anthropic.claude-sonnet-5"
+
+  validation {
+    condition     = startswith(var.bedrock_inference_profile_id, "us.")
+    error_message = "El perfil tiene que empezar por \"us.\". El perfil \"global.\" existe, se invoca exactamente igual -solo cambia el prefijo- y enruta a todas las regiones soportadas. El consentimiento del prospecto declara la transferencia internacional nombrando un conjunto concreto de regiones; cambiar seis caracteres aqui deja ese texto legal describiendo algo que ya no es cierto."
+  }
+}
+
+variable "bedrock_foundation_model_id" {
+  description = "Modelo base al que enruta el perfil. Va en el ARN de cada region de destino, y ese ARN no lleva account-id."
+  type        = string
+  default     = "anthropic.claude-sonnet-5"
+}
+
+variable "bedrock_daily_spend_cap_usd" {
+  description = "Tope de gasto diario en USD que la aplicacion aplica antes de invocar (plan §6.3). De aqui sale el presupuesto mensual de Bedrock multiplicando por 30, para que el control que corta y el que avisa no puedan hablar de sistemas distintos. Cero retira el presupuesto y la alarma."
+  type        = number
+  default     = 0.33
+
+  validation {
+    condition     = var.bedrock_daily_spend_cap_usd >= 0 && var.bedrock_daily_spend_cap_usd <= 5
+    error_message = "El tope diario de dev vive entre 0 y 5 USD. USD 0,33/dia son ~11 propuestas al dia; pasar de 5 sin revisar el plan es como se llega a los USD 345/mes que el tope existe para impedir."
+  }
+}
+
+variable "bedrock_invocation_surge_threshold" {
+  description = "Invocaciones de Bedrock en cinco minutos que hacen sonar la alarma. Respaldo del tope de la aplicacion, no sustituto: solo se cruza cuando ese tope ya no corta."
+  type        = number
+  default     = 20
+}

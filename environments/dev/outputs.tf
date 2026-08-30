@@ -160,3 +160,37 @@ output "telemetry" {
     alarm_names = module.monitoring.telemetry_sidecar_alarm_names
   }
 }
+
+# Contrato de Bedrock en dev.
+#
+# Se publica entero -y no solo un booleano- porque los tres modos de fallo de
+# este cambio son silenciosos y ninguno se ve en un apply verde:
+#
+#  1. Faltar una region en la lista de ARN. El despliegue queda verde y la
+#     primera invocacion que el enrutador mande a esa region devuelve
+#     AccessDeniedException. Intermitente, y el mensaje no nombra el recurso.
+#  2. Cambiar "us." por "global." en el perfil. Se invoca igual, funciona igual,
+#     y el dato pasa a poder salir a cualquier region soportada mientras el
+#     consentimiento del prospecto sigue nombrando tres.
+#  3. Mover el tope de gasto sin mover el presupuesto. El control que corta y el
+#     que avisa dejan de hablar del mismo sistema y nadie se entera hasta la
+#     factura.
+#
+# Los tres se afirman en tests/configuration.tftest.hcl contra este output.
+output "bedrock" {
+  description = "Permiso de invocacion, regiones alcanzables y controles de gasto de Bedrock en dev."
+  value = {
+    enabled             = var.bedrock_enabled
+    inference_profile   = var.bedrock_inference_profile_id
+    foundation_model    = var.bedrock_foundation_model_id
+    invoked_from        = var.aws_region
+    routing_regions     = local.bedrock_routing_regions
+    global_profile      = startswith(var.bedrock_inference_profile_id, "global.")
+    daily_spend_cap_usd = var.bedrock_daily_spend_cap_usd
+
+    # Tal y como el modulo los recibio, no como el root los penso.
+    access = module.backend.bedrock_access
+
+    cost_controls = module.monitoring.bedrock_cost_controls
+  }
+}

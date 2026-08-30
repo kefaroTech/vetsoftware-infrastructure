@@ -180,6 +180,34 @@ data "aws_iam_policy_document" "task" {
       resources = var.database_connect_resource_arns
     }
   }
+
+  # Invocar el modelo de Bedrock. Mismo patron que los dos statements de arriba:
+  # sin ARN no hay statement, asi que el entorno que no use Bedrock no gana el
+  # permiso aunque comparta modulo.
+  #
+  # La lista que llega NO es un ARN, son cuatro, y esa es la trampa cara de este
+  # permiso. Los modelos Anthropic recientes se invocan por un perfil de
+  # inferencia entre regiones, e IAM evalua dos cosas distintas: el ARN del
+  # perfil -que lleva account-id- y el ARN del modelo base EN CADA REGION a la
+  # que ese perfil pueda enrutar -que no lleva account-id-. Conceder solo el
+  # perfil da apply verde, despliegue verde y un AccessDeniedException
+  # intermitente que solo aparece cuando el enrutador manda la peticion a una
+  # region que falta en la politica.
+  #
+  # Ninguna accion de KMS nueva: Bedrock con la clave gestionada por AWS no
+  # exige nada del llamante, y el rol ya tiene la CMK del entorno mas arriba.
+  dynamic "statement" {
+    for_each = length(var.bedrock_model_arns) > 0 ? [1] : []
+
+    content {
+      sid = "InvokeBedrockModels"
+      actions = compact([
+        "bedrock:InvokeModel",
+        var.bedrock_streaming_enabled ? "bedrock:InvokeModelWithResponseStream" : "",
+      ])
+      resources = var.bedrock_model_arns
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {

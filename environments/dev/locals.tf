@@ -49,6 +49,66 @@ locals {
   otlp_metrics_endpoint = var.telemetry_sidecar_enabled ? "http://localhost:4318/v1/metrics" : "${local.grafana_otlp_base}/v1/metrics"
   otlp_logs_endpoint    = "${local.grafana_otlp_base}/v1/logs"
 
+  # Las regiones a las que el dato del prospecto puede viajar.
+  #
+  # No es una preferencia nuestra ni una lista de conveniencia: es lo que
+  # publica el propio perfil de inferencia. Verificado el 2026-08-29 con
+  # `aws bedrock get-inference-profile --inference-profile-identifier
+  # us.anthropic.claude-sonnet-5`, cuya descripcion dice literalmente "Routes
+  # requests to Anthropic Claude Sonnet 5 in us-east-1, us-east-2 and
+  # us-west-2" y cuyo array `models` devuelve los tres ARN correspondientes.
+  #
+  # Esta escrita, y no derivada de var.aws_region, porque tiene dos lectores
+  # distintos y ninguno de los dos puede adivinarla:
+  #
+  #  - IAM. El perfil enruta a tres regiones y la politica necesita el modelo
+  #    base de LAS TRES. Omitir una no da error de apply ni de despliegue: da un
+  #    AccessDeniedException intermitente que solo aparece cuando el enrutador
+  #    elige la region que falta.
+  #  - El texto legal. El dueno decidio que el dato puede salir de Colombia y
+  #    que el consentimiento del prospecto declara la transferencia
+  #    internacional de forma expresa. Lo que ese consentimiento tiene que
+  #    nombrar es exactamente esta lista: ampliarla -o pasar al perfil global.,
+  #    que enruta a todas las regiones soportadas- obliga a cambiar la politica
+  #    de privacidad antes, no despues.
+  bedrock_routing_regions = ["us-east-1", "us-east-2", "us-west-2"]
+
+  # Cuatro ARN, no uno, y los cuatro con forma distinta a proposito.
+  #
+  # El del perfil LLEVA account-id y va en la region desde la que se invoca. Los
+  # de los modelos base NO llevan account-id -de ahi los dos puntos seguidos- y
+  # va uno por region de destino.
+  #
+  # Se componen aqui en vez de escribirse a mano porque el account-id sale del
+  # data source de la cuenta: es lo unico que garantiza que prod, que es otra
+  # cuenta, no herede el ARN de dev por un copiar y pegar. Encender Bedrock en
+  # prod es poner bedrock_enabled = true en su root; no hay ningun numero que
+  # trasladar.
+  bedrock_model_arns = var.bedrock_enabled ? concat(
+    [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_inference_profile_id}",
+    ],
+    [
+      for region in local.bedrock_routing_regions :
+      "arn:aws:bedrock:${region}::foundation-model/${var.bedrock_foundation_model_id}"
+    ]
+  ) : []
+
+  # El presupuesto no se escribe: se deriva del tope diario.
+  #
+  # El plan lo pide por escrito -"los dos numeros salen del presupuesto dividido
+  # entre 30... si se sube uno hay que subir el otro en el mismo PR, o el
+  # control que corta y el que avisa dejan de hablar del mismo sistema"-, y una
+  # regla que depende de que alguien se acuerde ya se ha incumplido antes: la
+  # version anterior del plan topaba a 500 invocaciones diarias contra un
+  # presupuesto de USD 40, o sea 8,6 veces lo presupuestado.
+  #
+  # Derivarlo lo hace imposible por construccion: subir el tope sube el
+  # presupuesto en el mismo commit, y ceil() reproduce exactamente los dos
+  # numeros publicados (0,33 x 30 = 9,9 -> USD 10 en dev; 1,33 x 30 = 39,9 ->
+  # USD 40 en prod).
+  bedrock_budget_usd = var.bedrock_daily_spend_cap_usd > 0 ? ceil(var.bedrock_daily_spend_cap_usd * 30) : 0
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY = "framework"

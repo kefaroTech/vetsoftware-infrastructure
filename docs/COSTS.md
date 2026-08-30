@@ -144,6 +144,43 @@ Si en algún momento se prefiere no pagar los USD 0,28 hasta que el sidecar se
 pueda encender de verdad, basta con dejar `backend_memory = 2048` en las
 variables del entorno: el resto del cambio es inerte con el interruptor apagado.
 
+## Bedrock: lo que cuesta vigilarlo y lo que puede costar usarlo
+
+La infraestructura de la fase 2.1 -permiso IAM, presupuesto y alarma- anade
+**USD 0,10 al mes**: el presupuesto es gratis, porque AWS regala los dos primeros
+por cuenta y este es el segundo, y lo unico que se factura es la alarma de
+resolucion estandar.
+
+Lo que no es despreciable es el consumo, y por eso la vigilancia se monta antes
+que el codigo que invoca. A precio de gama Sonnet -USD 3 por millon de tokens de
+entrada y USD 15 de salida, **sin confirmar** para Sonnet 5- y con 5.000 tokens
+de entrada y 1.000 de salida por propuesta, cada propuesta cuesta **USD 0,030**:
+
+| Volumen mensual | Coste | Contexto |
+|---:|---:|---|
+| 100 | USD 3,00 | La mitad del Valkey |
+| 200 | USD 6,00 | Empata con el Valkey, la mayor linea individual de dev |
+| 1.000 | USD 30,00 | Se come casi entero el presupuesto de dev, que son USD 35 |
+| 3.600 en **una hora** | USD 108,00 | Un script a una peticion por segundo contra un endpoint publico sin autenticar |
+
+Esa ultima fila es el motivo de todo lo demas. El gasto no lo decide la
+infraestructura declarada: lo decide quien manda peticiones. De ahi que el
+control que de verdad corta viva en la aplicacion -un tope de **USD 0,33 al dia**
+en dev, aplicado antes de invocar- y que aqui solo haya dos respaldos:
+
+- **Presupuesto filtrado por servicio**, USD 10 al mes en dev, con avisos al
+  50 % y 80 % previstos y al 100 % real, hacia el topic `finops`. El limite se
+  **deriva** del tope diario multiplicandolo por 30, para que el control que
+  corta y el que avisa no puedan describir sistemas distintos.
+- **Alarma sobre `AWS/Bedrock`/`Invocations`**, 20 invocaciones en cinco
+  minutos. Existe porque un presupuesto avisa pero no corta, y ademas evalua con
+  datos de facturacion que llegan con hasta 24 horas de retraso: contra el
+  escenario de USD 108 en una hora, el presupuesto avisaria al dia siguiente.
+
+Esta alarma **no** entra en la ventana de silencio del apagado nocturno, a
+diferencia del resto: el gasto de Bedrock no lo produce el entorno, asi que sigue
+siendo posible a las 21:00 con el backend apagado.
+
 ## Protecciones incluidas
 
 - AWS Budget mensual configurable, con avisos al 80 % y 100 % cuando se define `alarm_email`.
