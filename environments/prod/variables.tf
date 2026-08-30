@@ -375,6 +375,33 @@ variable "email_from" {
   type = string
 }
 
+# Los tres enlaces del pie de TODOS los correos (HELP_URL / PRIVACY_URL /
+# TERMS_URL de las plantillas). Hasta ahora no llegaban por entorno: vivian como
+# default del application.yml apuntando a https://vetsoftware.co/..., de modo que
+# un correo disparado desde dev llevaba a quien estuviera probando al sitio de
+# PRODUCCION. Se declaran aqui para que cada entorno diga a donde manda.
+variable "email_help_url" {
+  description = "Enlace de ayuda del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/ayuda"
+}
+
+# En prod los tres conservan el destino que ya tenian como default del backend,
+# ahora explicito y sobreescribible. Cual sea el correcto -el sitio de marketing
+# vetsoftware.co o las paginas /legal/... del front productivo app.vetsoftware.co-
+# es una decision de producto que nadie ha tomado, y no la invento aqui.
+variable "email_privacy_url" {
+  description = "Enlace de la politica de privacidad del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/privacidad"
+}
+
+variable "email_terms_url" {
+  description = "Enlace de los terminos del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/terminos"
+}
+
 variable "registration_verification_url" {
   type = string
 }

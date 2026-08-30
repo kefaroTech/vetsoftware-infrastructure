@@ -364,6 +364,34 @@ variable "email_from" {
   type = string
 }
 
+# Los tres enlaces del pie de TODOS los correos (HELP_URL / PRIVACY_URL /
+# TERMS_URL de las plantillas). Hasta ahora no llegaban por entorno: vivian como
+# default del application.yml apuntando a https://vetsoftware.co/..., de modo que
+# un correo disparado desde dev llevaba a quien estuviera probando al sitio de
+# PRODUCCION. Se declaran aqui para que cada entorno diga a donde manda.
+variable "email_help_url" {
+  description = "Enlace de ayuda del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/ayuda"
+}
+
+# Privacidad y terminos SI tienen pagina propia en el front publico, y son las
+# rutas reales del router: /legal/privacidad y /legal/terminos. Ayuda no la tiene
+# -no existe ninguna ruta /ayuda en ninguno de los dos fronts-, asi que ese unico
+# enlace se queda apuntando al sitio de marketing a falta de un destino que
+# exista; inventarle una URL en dev solo produciria un 404.
+variable "email_privacy_url" {
+  description = "Enlace de la politica de privacidad del pie de los correos."
+  type        = string
+  default     = "https://dev-public.kefaro.tech/legal/privacidad"
+}
+
+variable "email_terms_url" {
+  description = "Enlace de los terminos del pie de los correos."
+  type        = string
+  default     = "https://dev-public.kefaro.tech/legal/terminos"
+}
+
 variable "registration_verification_url" {
   type = string
 }

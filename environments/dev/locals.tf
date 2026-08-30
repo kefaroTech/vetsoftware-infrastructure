@@ -130,10 +130,16 @@ locals {
     TRACING_SAMPLING                    = tostring(var.tracing_sampling)
     CORS_ALLOWED_ORIGINS                = join(",", var.cors_allowed_origins)
     EMAIL_FROM                          = var.email_from
-    REGISTRATION_VERIFICATION_URL       = var.registration_verification_url
-    PASSWORD_RESET_URL                  = var.password_reset_url
-    CODE_RECOVERY_LOGIN_URL             = var.login_url
-    EMPLOYEE_LOGIN_URL                  = var.login_url
+    # Enlaces del pie de todos los correos. Estaban solo como default del
+    # application.yml -https://vetsoftware.co/...-, asi que los correos de dev
+    # mandaban a quien probaba al sitio de PRODUCCION.
+    EMAIL_HELP_URL                = var.email_help_url
+    EMAIL_PRIVACY_URL             = var.email_privacy_url
+    EMAIL_TERMS_URL               = var.email_terms_url
+    REGISTRATION_VERIFICATION_URL = var.registration_verification_url
+    PASSWORD_RESET_URL            = var.password_reset_url
+    CODE_RECOVERY_LOGIN_URL       = var.login_url
+    EMPLOYEE_LOGIN_URL            = var.login_url
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

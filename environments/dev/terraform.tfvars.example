@@ -16,6 +16,11 @@ grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-3.grafana.net/otlp"
 # Fronts dev publicados en Cloudflare Pages sobre la zona kefaro.tech.
 cors_allowed_origins   = ["https://dev-public.kefaro.tech", "https://dev-admin.kefaro.tech"]
 email_from             = "VetSoftware Dev <noreply@kefaro.tech>"
+# Pie de los correos. Privacidad y terminos apuntan a las rutas reales del front
+# publico; ayuda no tiene pagina en ningun front todavia y se queda en marketing.
+# email_help_url    = "https://vetsoftware.co/ayuda"
+# email_privacy_url = "https://dev-public.kefaro.tech/legal/privacidad"
+# email_terms_url   = "https://dev-public.kefaro.tech/legal/terminos"
 registration_verification_url = "https://dev-public.kefaro.tech/verify-email"
 password_reset_url             = "https://dev-public.kefaro.tech/restablecer-contrasena"
 login_url                      = "https://dev-public.kefaro.tech/login"

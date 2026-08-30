@@ -10,6 +10,9 @@ grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
 
 cors_allowed_origins          = ["https://app.example.com"]
 email_from                    = "VetSoftware <noreply@example.com>"
+# email_help_url              = "https://vetsoftware.co/ayuda"
+# email_privacy_url           = "https://vetsoftware.co/privacidad"
+# email_terms_url             = "https://vetsoftware.co/terminos"
 registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
