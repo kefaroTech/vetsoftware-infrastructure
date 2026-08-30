@@ -94,20 +94,36 @@ locals {
     ]
   ) : []
 
-  # El presupuesto no se escribe: se deriva del tope diario.
+  # El presupuesto no se escribe: se deriva del tope diario, y el tope diario es
+  # ahora el que la aplicacion aplica de verdad.
   #
-  # El plan lo pide por escrito -"los dos numeros salen del presupuesto dividido
-  # entre 30... si se sube uno hay que subir el otro en el mismo PR, o el
-  # control que corta y el que avisa dejan de hablar del mismo sistema"-, y una
-  # regla que depende de que alguien se acuerde ya se ha incumplido antes: la
-  # version anterior del plan topaba a 500 invocaciones diarias contra un
-  # presupuesto de USD 40, o sea 8,6 veces lo presupuestado.
+  # QUE DECIA ESTE COMENTARIO Y POR QUE ERA FALSO. Afirmaba que derivarlo hacia
+  # la desalineacion "imposible por construccion". No lo era, y la frase es
+  # exactamente lo que hizo que nadie mirara: el numero de aqui alimentaba el
+  # presupuesto de AWS, pero AI_PROPOSAL_DAILY_SPEND_CAP_USD nunca se publicaba
+  # en el contenedor, asi que la aplicacion cortaba por su propio defecto
+  # -USD 1,00/dia en application-prod.yml, que es el perfil que corren dev Y
+  # prod- contra un presupuesto derivado de USD 0,33. El triple del aviso.
   #
-  # Derivarlo lo hace imposible por construccion: subir el tope sube el
-  # presupuesto en el mismo commit, y ceil() reproduce exactamente los dos
-  # numeros publicados (0,33 x 30 = 9,9 -> USD 10 en dev; 1,33 x 30 = 39,9 ->
-  # USD 40 en prod).
-  bedrock_budget_usd = var.bedrock_daily_spend_cap_usd > 0 ? ceil(var.bedrock_daily_spend_cap_usd * 30) : 0
+  # QUE LO SOSTIENE AHORA, con el mecanismo senalado con el dedo:
+  #   1. backend_environment publica AI_PROPOSAL_DAILY_SPEND_CAP_USD desde ESTA
+  #      misma variable: la aplicacion ya no puede cortar por otro numero.
+  #   2. outputs.tf expone el valor publicado y el contrato
+  #      "bedrock_concede_los_cuatro_arn_y_ninguno_mas" de
+  #      tests/configuration.tftest.hcl afirma que published_cap_env coincide con
+  #      daily_spend_cap_usd y que budget_usd == ceil(cap * 30). Separarlos ya no
+  #      lo descubre la factura: lo para el gate.
+  #   3. La variable prohibe el cero. No por simetria: el cero significa cosas
+  #      distintas en cada extremo -la guarda rechaza toda reserva, el cubo
+  #      global del filtro lo lee como ausencia de limite, y el presupuesto se
+  #      queda sin aviso-, asi que como interruptor es lo peor de los tres
+  #      mundos. El interruptor de verdad es bedrock_enabled.
+  #
+  # QUE SIGUE SIN CUBRIR, y hay que saberlo: nadie comprueba que el default de
+  # application-prod.yml siga siendo este mismo numero. En dev y prod da igual
+  # -la variable de entorno lo sobreescribe-, pero el arranque local y los tests
+  # del backend seguiran usando el suyo, y volverian a divergir en silencio.
+  bedrock_budget_usd = ceil(var.bedrock_daily_spend_cap_usd * 30)
 
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
@@ -146,6 +162,12 @@ locals {
     # asi que ResendProposalLinkEmailSender escribia un warning y retornaba sin
     # enviar: el correo del prospecto anonimo no salia en ningun entorno.
     AI_PROPOSAL_LINK_BASE_URL = var.ai_proposal_link_base_url
+    # EL MISMO numero del que sale bedrock_budget_usd, formateado a texto porque
+    # una variable de entorno no tiene tipo. La aplicacion lo lee en
+    # ValkeyDailySpendGuard y LoginRateLimitFilter deriva de el su cupo por IP;
+    # sin esta linea ambos usaban su defecto y el presupuesto de AWS vigilaba
+    # otra cifra distinta.
+    AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

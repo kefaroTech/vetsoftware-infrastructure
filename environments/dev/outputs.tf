@@ -188,6 +188,11 @@ output "bedrock" {
     global_profile      = startswith(var.bedrock_inference_profile_id, "global.")
     daily_spend_cap_usd = var.bedrock_daily_spend_cap_usd
 
+    # El mismo numero, pero tal y como sale hacia el contenedor. Esta aqui para
+    # que el contrato pueda comprobar que el tope que la aplicacion aplica y el
+    # que el presupuesto vigila son el mismo valor, y no dos que se parecen.
+    published_cap_env = local.backend_environment.AI_PROPOSAL_DAILY_SPEND_CAP_USD
+
     # Tal y como el modulo los recibio, no como el root los penso.
     access = module.backend.bedrock_access
 

@@ -53,6 +53,12 @@ locals {
     # asi que ResendProposalLinkEmailSender escribia un warning y retornaba sin
     # enviar: el correo del prospecto anonimo no salia en ningun entorno.
     AI_PROPOSAL_LINK_BASE_URL = var.ai_proposal_link_base_url
+    # El tope de gasto diario del asistente, publicado aunque prod todavia no
+    # instancie Bedrock: si no viaja, la aplicacion corta por el defecto de su
+    # application-prod.yml y nadie en la infraestructura sabe cual es. El dia que
+    # prod encienda Bedrock, su presupuesto tiene que derivarse de ESTA variable,
+    # como ya hace dev, o vuelve el mismo desajuste que este commit repara.
+    AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

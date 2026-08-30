@@ -950,13 +950,13 @@ variable "bedrock_foundation_model_id" {
 }
 
 variable "bedrock_daily_spend_cap_usd" {
-  description = "Tope de gasto diario en USD que la aplicacion aplica antes de invocar (plan §6.3). De aqui sale el presupuesto mensual de Bedrock multiplicando por 30, para que el control que corta y el que avisa no puedan hablar de sistemas distintos. Cero retira el presupuesto y la alarma."
+  description = "Tope de gasto diario en USD del asistente. Es UN solo numero con dos consumidores: se publica al contenedor como AI_PROPOSAL_DAILY_SPEND_CAP_USD -el corte que la aplicacion aplica antes de invocar- y multiplicado por 30 es el presupuesto mensual de Bedrock -el aviso-. Hasta hoy solo alimentaba el segundo. El cero esta prohibido porque no significa lo mismo en los tres sitios -bloquea toda reserva en la guarda, desarma el cubo global del filtro y deja el presupuesto sin aviso-; para apagar la funcionalidad esta bedrock_enabled."
   type        = number
-  default     = 0.33
+  default     = 1.00
 
   validation {
-    condition     = var.bedrock_daily_spend_cap_usd >= 0 && var.bedrock_daily_spend_cap_usd <= 5
-    error_message = "El tope diario de dev vive entre 0 y 5 USD. USD 0,33/dia son ~11 propuestas al dia; pasar de 5 sin revisar el plan es como se llega a los USD 345/mes que el tope existe para impedir."
+    condition     = var.bedrock_daily_spend_cap_usd > 0 && var.bedrock_daily_spend_cap_usd <= 5
+    error_message = "El tope diario de dev vive entre 0 (excluido) y 5 USD. El cero no es una forma limpia de apagar nada, y deja el sistema diciendo tres cosas distintas a la vez: ValkeyDailySpendGuard.reserve rechaza TODA reserva porque cualquier gasto supera cero; el cubo global de LoginRateLimitFilter se calculaba como financiadas*25 = 0 y consumirDiario lee el cero como AUSENCIA de limite (por eso ese calculo lleva hoy un Math.max); y el presupuesto de AWS se queda en cero, o sea sin aviso. Para retirar la funcionalidad, bedrock_enabled = false. Y pasar de 5 sin revisar el plan es como se llega a los USD 345/mes que el tope existe para impedir."
   }
 }
 

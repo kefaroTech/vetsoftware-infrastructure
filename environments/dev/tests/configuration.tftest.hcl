@@ -1045,11 +1045,19 @@ run "bedrock_concede_los_cuatro_arn_y_ninguno_mas" {
   # alguien sube uno sin subir el otro, esta asercion es lo que lo para.
   assert {
     condition = (
-      output.bedrock.daily_spend_cap_usd == 0.33 &&
-      output.bedrock.cost_controls.budget_usd == 10 &&
-      output.bedrock.cost_controls.budget_usd == ceil(output.bedrock.daily_spend_cap_usd * 30)
+      output.bedrock.daily_spend_cap_usd == 1.00 &&
+      output.bedrock.cost_controls.budget_usd == 30 &&
+      output.bedrock.cost_controls.budget_usd == ceil(output.bedrock.daily_spend_cap_usd * 30) &&
+
+      # La pata que faltaba, y sin la cual las dos lineas de arriba solo
+      # comprobaban que un numero es 30 veces otro numero: que el tope que se
+      # PUBLICA al contenedor es ese mismo. Mientras AI_PROPOSAL_DAILY_SPEND_CAP_USD
+      # no viajaba, la aplicacion cortaba por su propio defecto -USD 1,00/dia- y
+      # este contrato pasaba en verde vigilando un presupuesto de USD 10 que no
+      # correspondia a ningun corte real.
+      output.bedrock.published_cap_env == format("%.2f", output.bedrock.daily_spend_cap_usd)
     )
-    error_message = "El tope de gasto diario -USD 0,33 en dev- y el presupuesto mensual -USD 10 en dev- son el mismo numero visto a dos escalas. Moverlos por separado deja el control que corta y el control que avisa hablando de sistemas distintos."
+    error_message = "El tope de gasto diario, el presupuesto mensual y la variable de entorno que recibe el contenedor son el mismo numero visto a tres escalas. Moverlos por separado deja el control que corta y el control que avisa hablando de sistemas distintos, que es como se llego a un presupuesto de USD 10 vigilando un corte de USD 1,00 al dia."
   }
 
   # Filtrado por servicio: sin filtro, un aviso de USD 10 no distingue Bedrock

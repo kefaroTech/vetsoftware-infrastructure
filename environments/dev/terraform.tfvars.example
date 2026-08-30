@@ -138,11 +138,15 @@ bedrock_enabled              = true
 bedrock_inference_profile_id = "us.anthropic.claude-sonnet-5"
 bedrock_foundation_model_id  = "anthropic.claude-sonnet-5"
 
-# El tope diario que aplica la aplicacion antes de invocar. El presupuesto
-# mensual de Bedrock se deriva de este numero -x30, redondeado hacia arriba: USD
-# 10-, asi que subir el tope sube el presupuesto en el mismo commit y no hay
-# forma de moverlos por separado.
-bedrock_daily_spend_cap_usd = 0.33
+# El tope diario que aplica la aplicacion antes de invocar. Ahora es UN solo
+# numero con tres caras: viaja al contenedor como AI_PROPOSAL_DAILY_SPEND_CAP_USD
+# (el corte real), x30 redondeado hacia arriba es el presupuesto mensual de
+# Bedrock -USD 30- (el aviso), y el contrato de tests/ comprueba que las tres
+# coinciden. Antes solo alimentaba el presupuesto: la aplicacion cortaba por su
+# propio defecto de USD 1,00/dia contra un presupuesto derivado de USD 0,33.
+# El cero NO desactiva nada -la aplicacion lo lee como "sin limite"-: para apagar
+# la funcionalidad, bedrock_enabled = false.
+bedrock_daily_spend_cap_usd = 1.00
 
 # Invocaciones en cinco minutos que hacen sonar la alarma. Es el respaldo de ese
 # tope, no su sustituto: 20 en cinco minutos son ~USD 0,60, casi el doble del

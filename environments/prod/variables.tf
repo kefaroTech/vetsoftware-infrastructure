@@ -465,6 +465,25 @@ variable "ai_proposal_link_base_url" {
   }
 }
 
+# Tope de gasto diario del asistente, publicado como AI_PROPOSAL_DAILY_SPEND_CAP_USD.
+#
+# En este root NO hay presupuesto de Bedrock del que derivarlo -prod no instancia
+# el modulo, y eso es alcance del dueno, no una reparacion pendiente aqui-. Existe
+# igualmente por una razon concreta: sin ella la aplicacion corta por el defecto
+# escondido en su application-prod.yml y la infraestructura no sabe cual es ese
+# numero, que es exactamente el estado del que venimos. El dia que prod encienda
+# Bedrock, su presupuesto debe derivarse de ESTA variable como ya hace dev.
+variable "bedrock_daily_spend_cap_usd" {
+  description = "Tope de gasto diario en USD que la aplicacion aplica antes de invocar al modelo. Se publica al contenedor; cuando prod instancie Bedrock, el presupuesto mensual tiene que salir de aqui multiplicado por 30."
+  type        = number
+  default     = 1.00
+
+  validation {
+    condition     = var.bedrock_daily_spend_cap_usd > 0 && var.bedrock_daily_spend_cap_usd <= 5
+    error_message = "El tope diario vive entre 0 (excluido) y 5 USD. El cero no apaga la funcionalidad de forma limpia: ValkeyDailySpendGuard rechaza toda reserva, mientras que el cubo global de LoginRateLimitFilter leia el cero como ausencia de limite (de ahi su Math.max). Para retirar la funcionalidad hay que retirar el permiso, no poner el tope a cero."
+  }
+}
+
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
 # restablecimiento de contrasena, invitacion de empleado y confirmacion de cita. Hasta
 # ahora NO llegaban por entorno: viajaban como default commiteado en el application.yml

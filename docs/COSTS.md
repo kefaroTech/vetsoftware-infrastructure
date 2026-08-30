@@ -165,13 +165,20 @@ de entrada y 1.000 de salida por propuesta, cada propuesta cuesta **USD 0,030**:
 
 Esa ultima fila es el motivo de todo lo demas. El gasto no lo decide la
 infraestructura declarada: lo decide quien manda peticiones. De ahi que el
-control que de verdad corta viva en la aplicacion -un tope de **USD 0,33 al dia**
+control que de verdad corta viva en la aplicacion -un tope de **USD 1,00 al dia**
 en dev, aplicado antes de invocar- y que aqui solo haya dos respaldos:
 
-- **Presupuesto filtrado por servicio**, USD 10 al mes en dev, con avisos al
+- **Presupuesto filtrado por servicio**, USD 30 al mes en dev, con avisos al
   50 % y 80 % previstos y al 100 % real, hacia el topic `finops`. El limite se
   **deriva** del tope diario multiplicandolo por 30, para que el control que
   corta y el que avisa no puedan describir sistemas distintos.
+  <br>Paso de USD 10 a USD 30 el 2026-08-30, y no porque se gaste mas: el tope
+  que la aplicacion aplica de verdad siempre fue USD 1,00/dia -su defecto, en
+  `application-prod.yml`, que es el perfil que corren dev y prod-, mientras que
+  `AI_PROPOSAL_DAILY_SPEND_CAP_USD` no se publicaba en el contenedor y el
+  presupuesto se derivaba de un USD 0,33 que no cortaba nada. El aviso vigilaba
+  la tercera parte del corte. Ahora la variable viaja al contenedor y el contrato
+  de `environments/dev/tests/configuration.tftest.hcl` ata las tres cifras.
 - **Alarma sobre `AWS/Bedrock`/`Invocations`**, 20 invocaciones en cinco
   minutos. Existe porque un presupuesto avisa pero no corta, y ademas evalua con
   datos de facturacion que llegan con hasta 24 horas de retraso: contra el
