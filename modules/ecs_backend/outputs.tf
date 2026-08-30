@@ -125,3 +125,25 @@ output "telemetry_sidecar" {
     credentials_in_state = false
   }
 }
+
+# Lo que el rol de tarea puede invocar en Bedrock, tal y como llego al modulo.
+#
+# Se publica porque el statement no es afirmable de otra forma: en las pruebas
+# del root el data source aws_iam_policy_document esta simulado y su json sale
+# vacio, asi que una asercion sobre la politica no probaria nada. Esto es el
+# cable, no la intencion: si alguien declara los ARN en el root y se olvida de
+# pasarlos al modulo, aqui se ve y la prueba falla.
+output "bedrock_access" {
+  description = "Permiso de Bedrock concedido al rol de tarea: si esta concedido, sobre que ARN y si incluye streaming."
+  value = {
+    enabled           = length(var.bedrock_model_arns) > 0
+    model_arns        = var.bedrock_model_arns
+    streaming_enabled = var.bedrock_streaming_enabled
+
+    # Nombre del statement que aparece -o no- en la politica inline
+    # application-runtime. Nulo cuando no hay permiso: es la diferencia entre
+    # "el permiso esta retirado" y "el permiso esta ahi con lista vacia", que en
+    # IAM no es lo mismo.
+    statement_sid = length(var.bedrock_model_arns) > 0 ? "InvokeBedrockModels" : null
+  }
+}

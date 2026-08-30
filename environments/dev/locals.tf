@@ -49,6 +49,82 @@ locals {
   otlp_metrics_endpoint = var.telemetry_sidecar_enabled ? "http://localhost:4318/v1/metrics" : "${local.grafana_otlp_base}/v1/metrics"
   otlp_logs_endpoint    = "${local.grafana_otlp_base}/v1/logs"
 
+  # Las regiones a las que el dato del prospecto puede viajar.
+  #
+  # No es una preferencia nuestra ni una lista de conveniencia: es lo que
+  # publica el propio perfil de inferencia. Verificado el 2026-08-29 con
+  # `aws bedrock get-inference-profile --inference-profile-identifier
+  # us.anthropic.claude-sonnet-5`, cuya descripcion dice literalmente "Routes
+  # requests to Anthropic Claude Sonnet 5 in us-east-1, us-east-2 and
+  # us-west-2" y cuyo array `models` devuelve los tres ARN correspondientes.
+  #
+  # Esta escrita, y no derivada de var.aws_region, porque tiene dos lectores
+  # distintos y ninguno de los dos puede adivinarla:
+  #
+  #  - IAM. El perfil enruta a tres regiones y la politica necesita el modelo
+  #    base de LAS TRES. Omitir una no da error de apply ni de despliegue: da un
+  #    AccessDeniedException intermitente que solo aparece cuando el enrutador
+  #    elige la region que falta.
+  #  - El texto legal. El dueno decidio que el dato puede salir de Colombia y
+  #    que el consentimiento del prospecto declara la transferencia
+  #    internacional de forma expresa. Lo que ese consentimiento tiene que
+  #    nombrar es exactamente esta lista: ampliarla -o pasar al perfil global.,
+  #    que enruta a todas las regiones soportadas- obliga a cambiar la politica
+  #    de privacidad antes, no despues.
+  bedrock_routing_regions = ["us-east-1", "us-east-2", "us-west-2"]
+
+  # Cuatro ARN, no uno, y los cuatro con forma distinta a proposito.
+  #
+  # El del perfil LLEVA account-id y va en la region desde la que se invoca. Los
+  # de los modelos base NO llevan account-id -de ahi los dos puntos seguidos- y
+  # va uno por region de destino.
+  #
+  # Se componen aqui en vez de escribirse a mano porque el account-id sale del
+  # data source de la cuenta: es lo unico que garantiza que prod, que es otra
+  # cuenta, no herede el ARN de dev por un copiar y pegar. Encender Bedrock en
+  # prod es poner bedrock_enabled = true en su root; no hay ningun numero que
+  # trasladar.
+  bedrock_model_arns = var.bedrock_enabled ? concat(
+    [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_inference_profile_id}",
+    ],
+    [
+      for region in local.bedrock_routing_regions :
+      "arn:aws:bedrock:${region}::foundation-model/${var.bedrock_foundation_model_id}"
+    ]
+  ) : []
+
+  # El presupuesto no se escribe: se deriva del tope diario, y el tope diario es
+  # ahora el que la aplicacion aplica de verdad.
+  #
+  # QUE DECIA ESTE COMENTARIO Y POR QUE ERA FALSO. Afirmaba que derivarlo hacia
+  # la desalineacion "imposible por construccion". No lo era, y la frase es
+  # exactamente lo que hizo que nadie mirara: el numero de aqui alimentaba el
+  # presupuesto de AWS, pero AI_PROPOSAL_DAILY_SPEND_CAP_USD nunca se publicaba
+  # en el contenedor, asi que la aplicacion cortaba por su propio defecto
+  # -USD 1,00/dia en application-prod.yml, que es el perfil que corren dev Y
+  # prod- contra un presupuesto derivado de USD 0,33. El triple del aviso.
+  #
+  # QUE LO SOSTIENE AHORA, con el mecanismo senalado con el dedo:
+  #   1. backend_environment publica AI_PROPOSAL_DAILY_SPEND_CAP_USD desde ESTA
+  #      misma variable: la aplicacion ya no puede cortar por otro numero.
+  #   2. outputs.tf expone el valor publicado y el contrato
+  #      "bedrock_concede_los_cuatro_arn_y_ninguno_mas" de
+  #      tests/configuration.tftest.hcl afirma que published_cap_env coincide con
+  #      daily_spend_cap_usd y que budget_usd == ceil(cap * 30). Separarlos ya no
+  #      lo descubre la factura: lo para el gate.
+  #   3. La variable prohibe el cero. No por simetria: el cero significa cosas
+  #      distintas en cada extremo -la guarda rechaza toda reserva, el cubo
+  #      global del filtro lo lee como ausencia de limite, y el presupuesto se
+  #      queda sin aviso-, asi que como interruptor es lo peor de los tres
+  #      mundos. El interruptor de verdad es bedrock_enabled.
+  #
+  # QUE SIGUE SIN CUBRIR, y hay que saberlo: nadie comprueba que el default de
+  # application-prod.yml siga siendo este mismo numero. En dev y prod da igual
+  # -la variable de entorno lo sobreescribe-, pero el arranque local y los tests
+  # del backend seguiran usando el suyo, y volverian a divergir en silencio.
+  bedrock_budget_usd = ceil(var.bedrock_daily_spend_cap_usd * 30)
+
   backend_environment = merge({
     SPRING_PROFILES_ACTIVE          = "prod"
     SERVER_FORWARD_HEADERS_STRATEGY = "framework"
@@ -70,10 +146,28 @@ locals {
     TRACING_SAMPLING                    = tostring(var.tracing_sampling)
     CORS_ALLOWED_ORIGINS                = join(",", var.cors_allowed_origins)
     EMAIL_FROM                          = var.email_from
-    REGISTRATION_VERIFICATION_URL       = var.registration_verification_url
-    PASSWORD_RESET_URL                  = var.password_reset_url
-    CODE_RECOVERY_LOGIN_URL             = var.login_url
-    EMPLOYEE_LOGIN_URL                  = var.login_url
+    # Enlaces del pie de todos los correos. Estaban solo como default del
+    # application.yml -https://vetsoftware.co/...-, asi que los correos de dev
+    # mandaban a quien probaba al sitio de PRODUCCION.
+    EMAIL_HELP_URL                = var.email_help_url
+    EMAIL_PRIVACY_URL             = var.email_privacy_url
+    EMAIL_TERMS_URL               = var.email_terms_url
+    REGISTRATION_VERIFICATION_URL = var.registration_verification_url
+    PASSWORD_RESET_URL            = var.password_reset_url
+    CODE_RECOVERY_LOGIN_URL       = var.login_url
+    EMPLOYEE_LOGIN_URL            = var.login_url
+    # Enlace del correo de la propuesta del asistente: el backend concatena
+    # <base> + "/?token=<43 caracteres>" y la landing publica lo recoge. Estaba
+    # declarada en el application.yml con default vacio y NO llegaba por entorno,
+    # asi que ResendProposalLinkEmailSender escribia un warning y retornaba sin
+    # enviar: el correo del prospecto anonimo no salia en ningun entorno.
+    AI_PROPOSAL_LINK_BASE_URL = var.ai_proposal_link_base_url
+    # EL MISMO numero del que sale bedrock_budget_usd, formateado a texto porque
+    # una variable de entorno no tiene tipo. La aplicacion lo lee en
+    # ValkeyDailySpendGuard y LoginRateLimitFilter deriva de el su cupo por IP;
+    # sin esta linea ambos usaban su defecto y el presupuesto de AWS vigilaba
+    # otra cifra distinta.
+    AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

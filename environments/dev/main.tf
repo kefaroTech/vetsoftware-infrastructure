@@ -329,6 +329,17 @@ module "backend" {
   telemetry_credentials_secret_arn = module.secrets.grafana_secret_arn
   telemetry_environment_name       = var.environment
 
+  # Invocacion del modelo en Bedrock. Solo el permiso: ninguna variable de
+  # entorno nueva entra aqui todavia, y eso es deliberado. El backend aun no
+  # lee ninguna, y anadirlas ahora obligaria a una revision nueva de la
+  # definicion de tarea y a un despliegue del servicio -de 2 a 4 minutos sin
+  # backend en dev, que solo tiene una tarea- a cambio de nada. Las cinco
+  # variables de configuracion entran con el codigo que las lee.
+  #
+  # Streaming apagado: el caso de uso devuelve la respuesta entera al cliente.
+  bedrock_model_arns        = local.bedrock_model_arns
+  bedrock_streaming_enabled = false
+
   tags = local.common_tags
 }
 
@@ -412,6 +423,16 @@ module "monitoring" {
   # la misma ventana. Se pasan por nombre y no por referencia al recurso para que
   # el modulo de monitoreo no tenga que conocer al de envio de logs.
   additional_muted_alarm_names = var.log_shipping_enabled ? module.log_shipping[0].alarm_names : []
+
+  # Los dos controles de costo de Bedrock, y ninguno de los dos depende de
+  # bedrock_enabled: retirar el permiso en una emergencia no puede desarmar de
+  # paso el presupuesto que lleva la cuenta del gasto que ya ocurrio ni la
+  # alarma que veria a quien siguiera invocando con otras credenciales.
+  #
+  # El presupuesto sale del tope diario de la aplicacion (locals.tf), no de un
+  # numero escrito aqui.
+  bedrock_budget_usd                 = local.bedrock_budget_usd
+  bedrock_invocation_surge_threshold = var.bedrock_invocation_surge_threshold
 
   alloy_instance_ids = []
   tags               = local.common_tags

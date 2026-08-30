@@ -375,16 +375,113 @@ variable "email_from" {
   type = string
 }
 
+# Los tres enlaces del pie de TODOS los correos (HELP_URL / PRIVACY_URL /
+# TERMS_URL de las plantillas). Hasta ahora no llegaban por entorno: vivian como
+# default del application.yml apuntando a https://vetsoftware.co/..., de modo que
+# un correo disparado desde dev llevaba a quien estuviera probando al sitio de
+# PRODUCCION. Se declaran aqui para que cada entorno diga a donde manda.
+variable "email_help_url" {
+  description = "Enlace de ayuda del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/ayuda"
+}
+
+# En prod los tres conservan el destino que ya tenian como default del backend,
+# ahora explicito y sobreescribible. Cual sea el correcto -el sitio de marketing
+# vetsoftware.co o las paginas /legal/... del front productivo app.vetsoftware.co-
+# es una decision de producto que nadie ha tomado, y no la invento aqui.
+variable "email_privacy_url" {
+  description = "Enlace de la politica de privacidad del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/privacidad"
+}
+
+variable "email_terms_url" {
+  description = "Enlace de los terminos del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/terminos"
+}
+
 variable "registration_verification_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de verificacion de registro; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.registration_verification_url, "https://") && length(var.registration_verification_url) > 8 && !endswith(var.registration_verification_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/verify-email. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "password_reset_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de restablecimiento de contrasena; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.password_reset_url, "https://") && length(var.password_reset_url) > 8 && !endswith(var.password_reset_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/restablecer-contrasena. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "login_url" {
-  type = string
+  description = "Login de la aplicacion del tenant; viaja en el correo de recuperacion de codigo y en el de alta de empleado."
+  type        = string
+
+  validation {
+    condition     = startswith(var.login_url, "https://") && length(var.login_url) > 8 && !endswith(var.login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://app.vetsoftware.co/login. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
+}
+
+# Landing publica a la que apunta el enlace del correo de la propuesta del
+# asistente. El prospecto es ANONIMO: no hay sesion, y lo unico que lo separa de
+# la propuesta de otro son los 43 caracteres del token. El backend construye el
+# enlace concatenando en ResendProposalLinkEmailSender.send:
+#
+#     baseUrl + (baseUrl termina en "/" ? "" : "/") + "?token=" + token
+#
+# o sea que la barra final la normaliza el propio backend y no puede salir
+# doble. Lo que si importa es que el valor sea el ORIGEN pelado, sin ruta: quien
+# recoge el token es la landing (ruta "/") a traves de useRecuperarPropuesta, que
+# lo lee de la cadena de consulta, hidrata la propuesta y sustituye la entrada
+# del historial para que el token desaparezca de la barra de direcciones. Sus dos
+# hermanas de arriba si llevan ruta -/verify-email, /restablecer-contrasena-
+# porque apuntan a pantallas concretas; esta no, y por eso tampoco lleva barra
+# final: las tres quedan sin barra al final.
+#
+# LLEVA DEFAULT A PROPOSITO. Con el valor vacio -que es como llega hoy desde el
+# application.yml del backend, con default ""- el remitente escribe un warning y
+# RETORNA SIN ENVIAR: el correo no sale, no hay excepcion, no hay metrica y no
+# hay alarma. Un default por entorno hace que el enlace funcione sin depender de
+# que alguien cree la variable de GitHub, y la validacion impide que un
+# TF_VAR_ai_proposal_link_base_url vacio vuelva a apagarlo en silencio.
+variable "ai_proposal_link_base_url" {
+  description = "Origen https de la landing publica que recibe el ?token= del correo de la propuesta, sin ruta ni barra final."
+  type        = string
+  default     = "https://app.vetsoftware.co"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.ai_proposal_link_base_url))
+    error_message = "Debe ser un origen https sin ruta ni barra final, por ejemplo https://app.vetsoftware.co."
+  }
+}
+
+# Tope de gasto diario del asistente, publicado como AI_PROPOSAL_DAILY_SPEND_CAP_USD.
+#
+# En este root NO hay presupuesto de Bedrock del que derivarlo -prod no instancia
+# el modulo, y eso es alcance del dueno, no una reparacion pendiente aqui-. Existe
+# igualmente por una razon concreta: sin ella la aplicacion corta por el defecto
+# escondido en su application-prod.yml y la infraestructura no sabe cual es ese
+# numero, que es exactamente el estado del que venimos. El dia que prod encienda
+# Bedrock, su presupuesto debe derivarse de ESTA variable como ya hace dev.
+variable "bedrock_daily_spend_cap_usd" {
+  description = "Tope de gasto diario en USD que la aplicacion aplica antes de invocar al modelo. Se publica al contenedor; cuando prod instancie Bedrock, el presupuesto mensual tiene que salir de aqui multiplicado por 30."
+  type        = number
+  default     = 1.00
+
+  validation {
+    condition     = var.bedrock_daily_spend_cap_usd > 0 && var.bedrock_daily_spend_cap_usd <= 5
+    error_message = "El tope diario vive entre 0 (excluido) y 5 USD. El cero no apaga la funcionalidad de forma limpia: ValkeyDailySpendGuard rechaza toda reserva, mientras que el cubo global de LoginRateLimitFilter leia el cero como ausencia de limite (de ahi su Math.max). Para retirar la funcionalidad hay que retirar el permiso, no poner el tope a cero."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,

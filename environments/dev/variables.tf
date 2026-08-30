@@ -364,16 +364,95 @@ variable "email_from" {
   type = string
 }
 
+# Los tres enlaces del pie de TODOS los correos (HELP_URL / PRIVACY_URL /
+# TERMS_URL de las plantillas). Hasta ahora no llegaban por entorno: vivian como
+# default del application.yml apuntando a https://vetsoftware.co/..., de modo que
+# un correo disparado desde dev llevaba a quien estuviera probando al sitio de
+# PRODUCCION. Se declaran aqui para que cada entorno diga a donde manda.
+variable "email_help_url" {
+  description = "Enlace de ayuda del pie de los correos."
+  type        = string
+  default     = "https://vetsoftware.co/ayuda"
+}
+
+# Privacidad y terminos SI tienen pagina propia en el front publico, y son las
+# rutas reales del router: /legal/privacidad y /legal/terminos. Ayuda no la tiene
+# -no existe ninguna ruta /ayuda en ninguno de los dos fronts-, asi que ese unico
+# enlace se queda apuntando al sitio de marketing a falta de un destino que
+# exista; inventarle una URL en dev solo produciria un 404.
+variable "email_privacy_url" {
+  description = "Enlace de la politica de privacidad del pie de los correos."
+  type        = string
+  default     = "https://dev-public.kefaro.tech/legal/privacidad"
+}
+
+variable "email_terms_url" {
+  description = "Enlace de los terminos del pie de los correos."
+  type        = string
+  default     = "https://dev-public.kefaro.tech/legal/terminos"
+}
+
 variable "registration_verification_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de verificacion de registro; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.registration_verification_url, "https://") && length(var.registration_verification_url) > 8 && !endswith(var.registration_verification_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/verify-email. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "password_reset_url" {
-  type = string
+  description = "Pagina del front publico a la que apunta el enlace de restablecimiento de contrasena; recibe ?token=..."
+  type        = string
+
+  validation {
+    condition     = startswith(var.password_reset_url, "https://") && length(var.password_reset_url) > 8 && !endswith(var.password_reset_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/restablecer-contrasena. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
 }
 
 variable "login_url" {
-  type = string
+  description = "Login de la aplicacion del tenant; viaja en el correo de recuperacion de codigo y en el de alta de empleado."
+  type        = string
+
+  validation {
+    condition     = startswith(var.login_url, "https://") && length(var.login_url) > 8 && !endswith(var.login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final, por ejemplo https://dev-public.kefaro.tech/login. Ojo al caso que motiva esta validacion: una variable de GitHub que no existe NO llega como ausente sino como cadena vacia, y una cadena vacia era hasta hoy un valor aceptado que dejaba el correo saliendo con un enlace a ninguna parte."
+  }
+}
+
+# Landing publica a la que apunta el enlace del correo de la propuesta del
+# asistente. El prospecto es ANONIMO: no hay sesion, y lo unico que lo separa de
+# la propuesta de otro son los 43 caracteres del token. El backend construye el
+# enlace concatenando en ResendProposalLinkEmailSender.send:
+#
+#     baseUrl + (baseUrl termina en "/" ? "" : "/") + "?token=" + token
+#
+# o sea que la barra final la normaliza el propio backend y no puede salir
+# doble. Lo que si importa es que el valor sea el ORIGEN pelado, sin ruta: quien
+# recoge el token es la landing (ruta "/") a traves de useRecuperarPropuesta, que
+# lo lee de la cadena de consulta, hidrata la propuesta y sustituye la entrada
+# del historial para que el token desaparezca de la barra de direcciones. Sus dos
+# hermanas de arriba si llevan ruta -/verify-email, /restablecer-contrasena-
+# porque apuntan a pantallas concretas; esta no, y por eso tampoco lleva barra
+# final: las tres quedan sin barra al final.
+#
+# LLEVA DEFAULT A PROPOSITO. Con el valor vacio -que es como llega hoy desde el
+# application.yml del backend, con default ""- el remitente escribe un warning y
+# RETORNA SIN ENVIAR: el correo no sale, no hay excepcion, no hay metrica y no
+# hay alarma. Un default por entorno hace que el enlace funcione sin depender de
+# que alguien cree la variable de GitHub, y la validacion impide que un
+# TF_VAR_ai_proposal_link_base_url vacio vuelva a apagarlo en silencio.
+variable "ai_proposal_link_base_url" {
+  description = "Origen https de la landing publica que recibe el ?token= del correo de la propuesta, sin ruta ni barra final."
+  type        = string
+  default     = "https://dev-public.kefaro.tech"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.ai_proposal_link_base_url))
+    error_message = "Debe ser un origen https sin ruta ni barra final, por ejemplo https://dev-public.kefaro.tech."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del producto: verificacion de registro,
@@ -428,16 +507,31 @@ variable "platform_approver_email" {
 variable "platform_access_review_base_url" {
   description = "URL base de la pantalla de revision de solicitudes en la consola de plataforma; recibe ?token=... para aprobar o rechazar."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_access_review_base_url, "https://") && length(var.platform_access_review_base_url) > 8 && !endswith(var.platform_access_review_base_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 variable "platform_invitation_base_url" {
   description = "URL base de la pantalla de aceptacion de invitacion en la consola de plataforma; recibe ?token=... para aceptar el alta."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_invitation_base_url, "https://") && length(var.platform_invitation_base_url) > 8 && !endswith(var.platform_invitation_base_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 variable "platform_access_login_url" {
   description = "URL de login de la consola de plataforma que viaja en el correo de bienvenida; unico canal por el que el superadministrador conoce su codigo de acceso."
   type        = string
+
+  validation {
+    condition     = startswith(var.platform_access_login_url, "https://") && length(var.platform_access_login_url) > 8 && !endswith(var.platform_access_login_url, "/")
+    error_message = "Tiene que ser una URL https sin barra final. Esta variable no figura en la lista de Assert-RequiredEnvironmentVariable de .github/scripts/terraform-cycle.ps1, asi que si su variable de GitHub desaparece llega como cadena vacia y el plan la aceptaba sin decir nada."
+  }
 }
 
 # Los cuatro UUID de plantilla de Resend del mismo flujo. Las plantillas se crean A
@@ -822,4 +916,52 @@ variable "maintenance_mute_windows" {
     ])
     error_message = "duration debe ir en formato ISO 8601 entre PT1M y P15D, por ejemplo PT12H10M o P2DT12H."
   }
+}
+
+# ─── Bedrock ────────────────────────────────────────────────────────────────
+#
+# Fase 2.1 del plan de la propuesta comercial generada por IA: el permiso, el
+# presupuesto y la alarma. Nada de esto invoca el modelo todavia, y el acceso al
+# modelo en la cuenta es un formulario manual que a 2026-08-29 NO esta hecho
+# (verificado: `aws bedrock get-use-case-for-model-access` sigue devolviendo
+# ResourceNotFoundException y las seis cuotas de Sonnet 5 estan a 0.0).
+
+variable "bedrock_enabled" {
+  description = "Concede al rol de tarea el permiso para invocar el modelo. En false no se genera el statement y el rol no puede invocar nada; el presupuesto y la alarma NO dependen de esta bandera y siguen armados."
+  type        = bool
+  default     = true
+}
+
+variable "bedrock_inference_profile_id" {
+  description = "Perfil de inferencia que se invoca. Verificado el 2026-08-29 en la cuenta de dev: SYSTEM_DEFINED, ACTIVE, y enruta a us-east-1, us-east-2 y us-west-2."
+  type        = string
+  default     = "us.anthropic.claude-sonnet-5"
+
+  validation {
+    condition     = startswith(var.bedrock_inference_profile_id, "us.")
+    error_message = "El perfil tiene que empezar por \"us.\". El perfil \"global.\" existe, se invoca exactamente igual -solo cambia el prefijo- y enruta a todas las regiones soportadas. El consentimiento del prospecto declara la transferencia internacional nombrando un conjunto concreto de regiones; cambiar seis caracteres aqui deja ese texto legal describiendo algo que ya no es cierto."
+  }
+}
+
+variable "bedrock_foundation_model_id" {
+  description = "Modelo base al que enruta el perfil. Va en el ARN de cada region de destino, y ese ARN no lleva account-id."
+  type        = string
+  default     = "anthropic.claude-sonnet-5"
+}
+
+variable "bedrock_daily_spend_cap_usd" {
+  description = "Tope de gasto diario en USD del asistente. Es UN solo numero con dos consumidores: se publica al contenedor como AI_PROPOSAL_DAILY_SPEND_CAP_USD -el corte que la aplicacion aplica antes de invocar- y multiplicado por 30 es el presupuesto mensual de Bedrock -el aviso-. Hasta hoy solo alimentaba el segundo. El cero esta prohibido porque no significa lo mismo en los tres sitios -bloquea toda reserva en la guarda, desarma el cubo global del filtro y deja el presupuesto sin aviso-; para apagar la funcionalidad esta bedrock_enabled."
+  type        = number
+  default     = 1.00
+
+  validation {
+    condition     = var.bedrock_daily_spend_cap_usd > 0 && var.bedrock_daily_spend_cap_usd <= 5
+    error_message = "El tope diario de dev vive entre 0 (excluido) y 5 USD. El cero no es una forma limpia de apagar nada, y deja el sistema diciendo tres cosas distintas a la vez: ValkeyDailySpendGuard.reserve rechaza TODA reserva porque cualquier gasto supera cero; el cubo global de LoginRateLimitFilter se calculaba como financiadas*25 = 0 y consumirDiario lee el cero como AUSENCIA de limite (por eso ese calculo lleva hoy un Math.max); y el presupuesto de AWS se queda en cero, o sea sin aviso. Para retirar la funcionalidad, bedrock_enabled = false. Y pasar de 5 sin revisar el plan es como se llega a los USD 345/mes que el tope existe para impedir."
+  }
+}
+
+variable "bedrock_invocation_surge_threshold" {
+  description = "Invocaciones de Bedrock en cinco minutos que hacen sonar la alarma. Respaldo del tope de la aplicacion, no sustituto: solo se cruza cuando ese tope ya no corta."
+  type        = number
+  default     = 20
 }

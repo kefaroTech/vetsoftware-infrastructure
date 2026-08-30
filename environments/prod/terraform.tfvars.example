@@ -10,9 +10,20 @@ grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
 
 cors_allowed_origins          = ["https://app.example.com"]
 email_from                    = "VetSoftware <noreply@example.com>"
+# Pie de los correos y tope diario del asistente. Los tres enlaces conservan el
+# destino que traia el backend por defecto; el tope se publica al contenedor.
+# email_help_url              = "https://vetsoftware.co/ayuda"
+# email_privacy_url           = "https://vetsoftware.co/privacidad"
+# email_terms_url             = "https://vetsoftware.co/terminos"
+# bedrock_daily_spend_cap_usd = 1.00
 registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"
+# Origen de la landing que recibe el ?token= del correo de la propuesta. Tiene default
+# en variables.tf (https://app.vetsoftware.co, el dominio del front productivo segun
+# docs/CLOUDFLARE_PAGES.md); descomente solo si el dominio cambia. Sin ruta y sin barra
+# final: el backend concatena "/?token=<43 caracteres>".
+# ai_proposal_link_base_url = "https://app.vetsoftware.co"
 
 # Los cuatro UUID de plantilla de Resend del producto. Las plantillas se crean A MANO en
 # el panel de Resend: copie aqui el identificador de cada una, nunca deje el marcador.

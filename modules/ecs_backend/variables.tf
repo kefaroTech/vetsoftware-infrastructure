@@ -343,3 +343,22 @@ variable "telemetry_environment_name" {
   type        = string
   default     = ""
 }
+
+# Bedrock. La lista vacia es el estado normal y es lo que separa a los dos
+# entornos: el modulo es identico, y el que no reciba ARN no gana el permiso.
+#
+# Los ARN NO se escriben aqui. Los compone el root porque el del perfil de
+# inferencia lleva dentro el account-id -y dev y prod son cuentas distintas- y
+# el de cada modelo base lleva la region de destino. Cablearlos en el modulo es
+# la forma exacta de que prod acabe apuntando al perfil de dev.
+variable "bedrock_model_arns" {
+  description = "ARN de perfiles de inferencia y modelos base que el rol de tarea puede invocar. Vacio no genera ningun statement y el rol no gana ningun permiso de Bedrock."
+  type        = list(string)
+  default     = []
+}
+
+variable "bedrock_streaming_enabled" {
+  description = "Anade bedrock:InvokeModelWithResponseStream al rol de tarea. El caso de uso actual devuelve la respuesta entera, asi que concederla hoy solo amplia la superficie."
+  type        = bool
+  default     = false
+}

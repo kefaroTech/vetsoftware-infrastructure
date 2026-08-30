@@ -37,10 +37,28 @@ locals {
     TRACING_SAMPLING                    = tostring(var.tracing_sampling)
     CORS_ALLOWED_ORIGINS                = join(",", var.cors_allowed_origins)
     EMAIL_FROM                          = var.email_from
-    REGISTRATION_VERIFICATION_URL       = var.registration_verification_url
-    PASSWORD_RESET_URL                  = var.password_reset_url
-    CODE_RECOVERY_LOGIN_URL             = var.login_url
-    EMPLOYEE_LOGIN_URL                  = var.login_url
+    # Enlaces del pie de todos los correos. Estaban solo como default del
+    # application.yml -https://vetsoftware.co/...-, asi que los correos de dev
+    # mandaban a quien probaba al sitio de PRODUCCION.
+    EMAIL_HELP_URL                = var.email_help_url
+    EMAIL_PRIVACY_URL             = var.email_privacy_url
+    EMAIL_TERMS_URL               = var.email_terms_url
+    REGISTRATION_VERIFICATION_URL = var.registration_verification_url
+    PASSWORD_RESET_URL            = var.password_reset_url
+    CODE_RECOVERY_LOGIN_URL       = var.login_url
+    EMPLOYEE_LOGIN_URL            = var.login_url
+    # Enlace del correo de la propuesta del asistente: el backend concatena
+    # <base> + "/?token=<43 caracteres>" y la landing publica lo recoge. Estaba
+    # declarada en el application.yml con default vacio y NO llegaba por entorno,
+    # asi que ResendProposalLinkEmailSender escribia un warning y retornaba sin
+    # enviar: el correo del prospecto anonimo no salia en ningun entorno.
+    AI_PROPOSAL_LINK_BASE_URL = var.ai_proposal_link_base_url
+    # El tope de gasto diario del asistente, publicado aunque prod todavia no
+    # instancie Bedrock: si no viaja, la aplicacion corta por el defecto de su
+    # application-prod.yml y nadie en la infraestructura sabe cual es. El dia que
+    # prod encienda Bedrock, su presupuesto tiene que derivarse de ESTA variable,
+    # como ya hace dev, o vuelve el mismo desajuste que este commit repara.
+    AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

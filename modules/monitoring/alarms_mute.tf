@@ -20,6 +20,15 @@
 # `arn:aws:automate:...:ec2:recover`. Silenciar una alarma que dispara una
 # remediacion automatica no calla un mensaje, cancela la remediacion. Es la misma
 # distincion que separa un canal que lee una persona de un sistema que actua.
+#
+# Y tampoco `bedrock_invocation_surge`, por un motivo distinto. Las demas alarmas
+# de esta lista miden el entorno, y el entorno se apaga a las 20:00: su ruido
+# nocturno es esperado. El gasto de Bedrock no lo produce el entorno sino quien
+# manda peticiones a un endpoint publico, y sigue siendo posible con el backend
+# apagado -bastan unas credenciales filtradas-. Un pico de gasto a las 21:00, sin
+# nadie mirando, es exactamente el que hay que oir. Anadirla aqui "por
+# coherencia" es la forma barata de dejar de verlo; el contrato
+# `bedrock_cost_controls.muted_by_maintenance_window` lo afirma en las pruebas.
 
 locals {
   # Nombres, no ARNs: la API de mute rules referencia alarmas por nombre. Todos

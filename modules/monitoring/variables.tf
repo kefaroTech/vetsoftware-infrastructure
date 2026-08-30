@@ -595,3 +595,25 @@ variable "additional_muted_alarm_names" {
   type        = list(string)
   default     = []
 }
+
+variable "bedrock_budget_usd" {
+  description = "Presupuesto mensual exclusivo de Amazon Bedrock, filtrado por servicio. Cero no declara ni el presupuesto ni la alarma de invocaciones."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.bedrock_budget_usd >= 0
+    error_message = "El presupuesto de Bedrock no puede ser negativo."
+  }
+}
+
+variable "bedrock_invocation_surge_threshold" {
+  description = "Invocaciones de Bedrock en cinco minutos por encima de las cuales suena la alarma. Es el respaldo del tope de gasto de la aplicacion: solo se cruza cuando ese tope ha dejado de cortar."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.bedrock_invocation_surge_threshold > 0
+    error_message = "El umbral de invocaciones debe ser mayor que cero: un umbral de cero convierte cualquier uso legitimo en una alarma."
+  }
+}
