@@ -232,10 +232,12 @@ propósito: el antirrebote real ya lo da la doble ventana, y esta alerta es `cri
 - **TEL-37 — los logs de dev no llevan `service_version`.** «¿Empezó con el último despliegue?»
   no se responde filtrando en Loki: hay que triangular por hora contra las métricas, que sí lo
   llevan.
-- **TEL-04 — el filtro de cardinalidad descarta métricas sin dejar rastro.**
-  `BusinessMetricCardinalityFilter.java:97-100` tira el meter completo, sin contador ni log,
-  cuando aparece un valor fuera de la allowlist. Si el denominador de un SLI de negocio cae de
-  golpe sin causa aparente, sospecha de esto antes que de una caída de tráfico.
+- **TEL-04 — el filtro de cardinalidad tira el medidor completo cuando aparece un valor fuera de
+  la allowlist.** Si el denominador de un SLI de negocio cae de golpe sin causa aparente, sospecha
+  de esto antes que de una caída de tráfico. **Ya no es invisible**: desde `origin/develop` deja
+  contador (`vetsoftware_observability_metrics_denied_total`) y un `ERROR` que nombra la etiqueta y
+  el valor. Detalle completo, con la trampa del tope de log, en el defecto TEL-04 de
+  `VetSoftwareSloSeriesAbsent`.
 
 ---
 
@@ -330,8 +332,9 @@ ruta de warning añade `group_wait: 5m`: unos ~20 minutos hasta Slack, con recor
   FastBurn **no** silencia el SlowBurn de otro SLO. Lo que sí ocurre es la **agrupación**: todas
   las instancias de este `alertname` se compactan en una notificación.
 - **TEL-28** — sin exemplars, del p99 alto no se salta a una traza de ejemplo.
-- **TEL-04** — un valor nuevo fuera de la allowlist hace desaparecer el meter sin contador, lo
-  que se ve como una caída de denominador y no como un error.
+- **TEL-04** — un valor nuevo fuera de la allowlist hace desaparecer el medidor entero, lo que se
+  ve como una caída de denominador y no como un error. Se confirma en un vistazo con
+  `vetsoftware_observability_metrics_denied_total`, que hoy sí existe.
 
 ---
 
@@ -418,7 +421,9 @@ este umbral. Si alguien quiere actuar de madrugada, la señal que lo justifica e
   tienen prueba»). Una regresión en esta expresión pasaría el gate sin ruido. Y las pruebas que sí
   existen validan la **edición local** (nombres `_seconds_`): no cubren estos gemelos cloud.
 - **TEL-05** — la misma trampa de `result="rejected"` en DIAN.
-- **TEL-04** — descartes del filtro de cardinalidad sin contador.
+- **TEL-04** — descartes del filtro de cardinalidad; hoy los cuenta
+  `vetsoftware_observability_metrics_denied_total`, pero **ninguna regla lo vigila**, así que hay
+  que mirarlo a mano.
 
 ---
 
@@ -705,7 +710,10 @@ pérdida de medición. Una hora la distingue de un hueco real. Es `warning`, con
    correcto es: primero se añade el borde en `management.metrics.distribution.slo` del backend,
    después se toca la regla.
 4. **La métrica se está descartando por el filtro de cardinalidad** (TEL-04): un valor nuevo fuera
-   de la allowlist tira el meter completo, sin contador y sin log.
+   de la allowlist tira el meter **completo** —no recorta la etiqueta, deniega el medidor entero—.
+   **Sí deja rastro, y hay que ir a buscarlo**: el contador
+   `vetsoftware_observability_metrics_denied_total{metric="<nombre>"}` y un `ERROR` del propio
+   filtro que nombra la etiqueta y el valor culpables. Ver el defecto TEL-04 más abajo.
 5. **El backend lleva más de 24 h sin arrancar.**
 
 **Qué hacer**
@@ -752,10 +760,38 @@ pérdida de medición. Una hora la distingue de un hueco real. Es `warning`, con
   como hueco aceptado. En prod lo cubre parcialmente el heartbeat (`vetsoftware-heartbeat-prod.yml`,
   que vigila `target_info` y `jvm_threads_live`); **en dev no lo cubre nada**, y no debe cubrirlo:
   dev se apaga a diario a propósito.
-- **TEL-04 — el filtro de cardinalidad descarta sin dejar rastro.**
-  `BusinessMetricCardinalityFilter.java:97-100` tira el meter completo sin contador, sin log y sin
-  test de paridad con los enums de origen. Es la única causa de esta alerta que **no** deja ninguna
-  huella en ningún sitio: si los pasos 2–5 dicen que hay tráfico y la métrica no aparece, es esto.
+- **TEL-04 — el filtro de cardinalidad descarta el medidor entero, pero YA NO lo hace en
+  silencio.** Sigue siendo la causa a mirar cuando los pasos 2–5 dicen que hay tráfico y la métrica
+  no aparece; lo que ha cambiado es que ahora **hay dos sitios donde comprobarlo**, y el consejo
+  anterior —«no deja ninguna huella en ningún sitio»— haría abandonar la búsqueda justo cuando hay
+  algo que encontrar. Verificado contra `origin/develop` el 2026-08-31, o sea en lo desplegado y no
+  en una rama:
+
+  1. **Un contador.** `vetsoftware.observability.metrics.denied` → en Prometheus
+     `vetsoftware_observability_metrics_denied_total`, con una etiqueta `metric` por cada nombre de
+     `BusinessMetricNames` (leídos por reflexión) más un cubo `other`. **Cualquier valor mayor que
+     cero es un panel ciego.** Y no hay problema de «quién vigila al vigilante»: el filtro solo mira
+     nombres que empiezan por `vetsoftware.business.`, y este contador no empieza por ahí, así que
+     no puede denegarse a sí mismo.
+  2. **Un `ERROR` en el log**, en dos variantes que ya distinguen el diagnóstico: *clave* no
+     declarada (dice que si es un identificador la corrección es **dejar de emitirlo**, nunca
+     añadirlo a la lista) y *valor* no declarado (dice qué valor y qué etiqueta añadir a
+     `ALLOWED_VALUES`). Las dos imprimen el medidor completo.
+
+  **La trampa que queda, y es la que hay que conocer**: el log está **acotado a los primeros 100
+  identificadores distintos**; al llegar a ese tope escribe una única línea anunciando la supresión
+  y deja de registrar. **El contador sigue contándolos todos.** O sea: contador a cero y log vacío
+  significan «no está pasando»; contador subiendo y log vacío significan «pasa, y ya se pasó del
+  tope» — no «no hay rastro».
+
+  **Y hay test de paridad**, también en `origin/develop`: `BusinessMetricEnumAllowlistParityTest`,
+  28 casos `@EnumSource` que recorren los enums de origen —incluido `ai.outcome`— y exigen que el
+  filtro los acepte. Borrar una entrada de la lista blanca rompe el build. Lo que **no** cubre es
+  cualquier etiqueta que no venga de un enum, que sigue sin red.
+
+  (La referencia anterior a `BusinessMetricCardinalityFilter.java:97-100` estaba obsoleta: esas
+  líneas son hoy entradas de la lista blanca. La decisión de denegar vive en `accept()`, líneas
+  220-234 de `origin/develop`.)
 - **Discrepancia observada y no resuelta (2026-08-19).** `POST /auth/login/employee` y
   `POST /auth/login/system` **sí** tienen serie en las últimas 24 h, y aun así
   `auth-login/availability` no produce `sli_total_events:rate1d` y la alerta dispara para él. Las
@@ -2236,7 +2272,7 @@ Fuera de esas dos franjas, considéralo un incidente real.
 
 - **Ángulo muerto: el fallo total de Valkey no dispara esta alerta.** Si Valkey no responde en el arranque, la aplicación muere antes de emitir una sola métrica de Lettuce; con `noDataState: OK` la regla se queda en Normal. El caso `WRONGPASS` de §4 de `docs/ALERTAS_OPERATIVAS.md` es exactamente ese: «el backend arranca y muere». Lo detectan `cache-auth-failures` y `ecs-task-failed` en CloudWatch, no esta regla. **Verde aquí no significa Valkey sano.**
 - **Cardinalidad sin cota en `lettuce_*`.** Confirmado contra el stack: las series llevan `db_operation`, `db_system`, `error`, `net_sock_peer_addr`, `net_sock_peer_port`, `net_transport` más el recurso. Ninguna está acotada por el `MeterFilter` del backend, que solo cubre el prefijo `vetsoftware.business.` — es el punto (d) del hallazgo **TEL-18** y la misma familia que **TEL-04**. `error` toma el nombre de clase de cualquier excepción y `db_operation` el de cualquier comando Redis: una tormenta de errores heterogéneos multiplica series justo en el peor momento. Hoy son 6 valores de `db_operation` y 1 de `error`; en un incidente no hay techo declarado. Acotar `error` a un enum en un `MeterFilter` que cubra también `lettuce` es el arreglo.
-- Relacionado, **TEL-04**: cuando el filtro de cardinalidad deniega un meter lo tira entero sin contador, sin log y sin test de paridad. Si algún día se extiende el filtro a `lettuce`, un valor nuevo desaparecería del panel sin que nadie se entere. El arreglo del filtro (contador `vetsoftware.observability.metrics.denied`) es previo a extenderlo.
+- Relacionado, **TEL-04**: cuando el filtro de cardinalidad deniega un medidor lo tira entero. **El prerrequisito que aquí se pedía ya está hecho** — verificado contra `origin/develop` el 2026-08-31: el filtro publica el contador `vetsoftware.observability.metrics.denied` y escribe un `ERROR` con la etiqueta y el valor culpables, así que un valor nuevo **ya no desaparecería del panel sin que nadie se entere**. Extender el filtro a `lettuce` ha dejado de estar bloqueado por eso. Lo que **sigue faltando** es lo específico de aquí: `BusinessMetricEnumAllowlistParityTest` protege etiquetas **respaldadas por un enum**, y `error` no lo es —toma el nombre de clase de cualquier excepción—, así que acotarla exige primero convertirla en vocabulario cerrado. Ese sigue siendo el orden correcto: enum primero, filtro después.
 
 ---
 
@@ -3208,13 +3244,25 @@ en ningún stack. Son ~10–15 series por instancia de coste puro.
 - **La alerta te dice que creciste, no quién creció.** Es agregada por diseño (una serie de uso por
   instancia), así que los pasos 3–5 son manuales. No hay panel ni regla que atribuya el
   crecimiento a una familia de métricas.
-- **El filtro de cardinalidad descarta métricas sin dejar rastro (TEL-04).**
-  `BusinessMetricCardinalityFilter.java:97-100` aplica `DENY` al meter completo **sin contador, sin
-  log y sin test de paridad con los enums de origen**. `MicrometerBusinessMetrics` deriva valores
-  dinámicamente (`lower(status)`, `lower(movementType)`): un valor nuevo en `AppointmentStatus` o
-  `StockMovementType` cae fuera de la allowlist y sus incrementos **desaparecen**. En un incidente
-  no podrás distinguir «el filtro se la comió» de «no se está emitiendo». Toda ruta de descarte
-  debería incrementar una métrica propia y tener alerta.
+- **El filtro de cardinalidad aplica `DENY` al medidor completo (TEL-04), y la mitad de este
+  defecto ya está arreglada.** `MicrometerBusinessMetrics` deriva valores dinámicamente
+  (`lower(status)`, `lower(movementType)`): un valor nuevo en `AppointmentStatus` o
+  `StockMovementType` cae fuera de la allowlist y sus incrementos **desaparecen** de la serie.
+
+  **Lo que ya NO es cierto** —verificado contra `origin/develop` el 2026-08-31, o sea en lo
+  desplegado—: el descarte **sí** incrementa una métrica propia
+  (`vetsoftware_observability_metrics_denied_total`, una etiqueta `metric` por nombre de negocio
+  más un cubo `other`), **sí** escribe un `ERROR` que nombra etiqueta y valor, y **sí** hay test de
+  paridad con los enums de origen (`BusinessMetricEnumAllowlistParityTest`, 28 casos
+  `@EnumSource`, que cubre `AppointmentStatus` y `StockMovementType` entre otros y rompe el build
+  si se borra una entrada). Así que en un incidente **sí** se puede distinguir «el filtro se la
+  comió» de «no se está emitiendo»: se mira el contador.
+
+  **Lo que sigue pendiente, y es la otra mitad**: *«toda ruta de descarte debería incrementar una
+  métrica propia **y tener alerta**»* — la métrica llegó, **la alerta no**. Comprobado: ninguna
+  regla de `observability/` referencia ese contador, así que sube en silencio y solo lo ve quien
+  vaya a mirarlo. Sumado al tope de 100 identificadores distintos del log, un descarte que empiece
+  hoy puede pasar semanas sin que nadie se entere aunque el rastro exista.
 - **Depende de un tenant que no controlamos.** Si el datasource `grafanacloud-usage` falla, la
   regla entra en `execErrState: Error` y la alerta que protege a todas las demás se queda ciega —
   con la agravante de que su fallo llega como alerta de error de datasource, con otro nombre.
