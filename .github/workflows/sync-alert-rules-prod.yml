@@ -89,6 +89,7 @@ jobs:
         observability/grafana-managed/vetsoftware-slo-alerts-managed.yml
         observability/grafana-managed/vetsoftware-platform-alerts-managed.yml
         observability/grafana-managed/vetsoftware-cloud-additions-managed.yml
+        observability/grafana-managed/vetsoftware-aiproposal-alerts-managed.yml
         observability/grafana-managed/vetsoftware-heartbeat-prod-managed.yml
 
     steps:
