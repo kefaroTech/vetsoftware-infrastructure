@@ -465,6 +465,50 @@ variable "ai_proposal_link_base_url" {
   }
 }
 
+# Identificador con el que la aplicacion invoca al modelo, publicado como
+# AI_PROPOSAL_MODEL_ID. Mismo criterio que el tope de gasto de aqui abajo, y por
+# la misma razon: prod NO instancia el modulo de Bedrock -alcance del dueno, no
+# una reparacion pendiente aqui- y aun asi el contenedor tiene que recibir un
+# identificador coherente, porque si no lo recibe cae en un defecto que este
+# repositorio no controla y que ya ha estado mal: a 2026-08-30 en HEAD del
+# backend era el MODELO BASE PELADO -sin prefijo, o sea sin enrutado regional-,
+# y solo un cambio suyo todavia sin integrar lo alinea con el perfil.
+#
+# En prod eso hoy no invoca nada: sin el modulo no hay statement InvokeBedrockModels
+# en el rol de tarea, asi que una invocacion moriria en AccessDeniedException y la
+# feature serviria por el camino determinista. Publicarlo igualmente evita que el
+# dia que prod encienda Bedrock haya que acordarse de esta linea, que es
+# exactamente la forma en que dev llego a conceder un perfil que nadie invocaba.
+#
+# La validacion del prefijo es la misma que la de dev y no es cosmetica: el
+# consentimiento del prospecto declara la transferencia internacional nombrando un
+# conjunto concreto de regiones, y el perfil global.* -que se invoca igual, solo
+# cambian seis caracteres- enruta a todas las soportadas.
+variable "bedrock_inference_profile_id" {
+  description = "Perfil de inferencia con el que la aplicacion invoca al modelo, publicado al contenedor como AI_PROPOSAL_MODEL_ID, y unico sitio donde prod elige el modelo. Prod no instancia el modulo de Bedrock, asi que aqui NO compone ningun ARN: su unico consumidor es la variable de entorno. Cambiar de familia de modelo es cambiar este valor."
+  type        = string
+  default     = "us.anthropic.claude-sonnet-5"
+
+  # (1) La garantia regional, identica a la de dev. No nombra ninguna familia
+  # -solo la geografia-, asi que vale igual para Anthropic, DeepSeek, Amazon
+  # Nova o Meta: los perfiles regionales us.* existen para todos.
+  validation {
+    condition     = startswith(var.bedrock_inference_profile_id, "us.")
+    error_message = "El perfil tiene que empezar por \"us.\". El perfil \"global.\" existe, se invoca exactamente igual -solo cambia el prefijo- y enruta a todas las regiones soportadas. El consentimiento del prospecto declara la transferencia internacional nombrando un conjunto concreto de regiones; cambiar seis caracteres aqui deja ese texto legal describiendo algo que ya no es cierto. Esto vale para CUALQUIER familia de modelos: cambiar de proveedor no autoriza a cambiar de geografia."
+  }
+
+  # (2) La forma "us.<proveedor>.<modelo>". En prod no hay ningun ARN que
+  # dependa de partir esta cadena, asi que aqui la validacion no protege una
+  # derivacion: protege que el dia que prod encienda Bedrock -y empiece a
+  # componer los ARN como dev- no se descubra que el valor que lleva meses
+  # publicandose al contenedor no tenia la forma que esa composicion necesita.
+  # Los dos roots eligen el modelo con la misma regla o no eligen lo mismo.
+  validation {
+    condition     = can(regex("^us\\.[a-z0-9-]+\\.[a-z0-9.:-]+$", var.bedrock_inference_profile_id))
+    error_message = "El identificador tiene que tener la forma \"us.<proveedor>.<modelo>\", que es como AWS nombra los perfiles de inferencia entre regiones -us.anthropic.claude-sonnet-5, us.deepseek.r1-v1:0, us.amazon.nova-pro-v1:0-. Es la misma regla que dev, donde de esos tres segmentos se parten el modelo base y el proveedor que componen la politica de IAM."
+  }
+}
+
 # Tope de gasto diario del asistente, publicado como AI_PROPOSAL_DAILY_SPEND_CAP_USD.
 #
 # En este root NO hay presupuesto de Bedrock del que derivarlo -prod no instancia

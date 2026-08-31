@@ -932,21 +932,48 @@ variable "bedrock_enabled" {
   default     = true
 }
 
+# ESTE ES EL UNICO SITIO DONDE SE ELIGE EL MODELO.
+#
+# Cambiar de familia -de Sonnet a un modelo de DeepSeek, por ejemplo- es cambiar
+# este default y nada mas. Hasta 2026-08-30 no era asi: habia una segunda
+# variable, bedrock_foundation_model_id, con el modelo base escrito aparte
+# -"anthropic.claude-sonnet-5"-, y era ella la que entraba en tres de los cuatro
+# ARN de la politica. Cambiar de familia eran dos ediciones, y separarlas no da
+# error de apply: da una politica que concede el perfil de una familia y los
+# modelos base de otra, o sea AccessDeniedException en la primera invocacion
+# real con un mensaje que no menciona el desajuste. Hoy el modelo base se parte
+# de esta cadena en locals.tf y no hay dos sitios que puedan divergir.
+#
+# El proveedor tambien sale de aqui: es el segundo segmento. No se escribe en
+# ninguna otra parte del repositorio.
 variable "bedrock_inference_profile_id" {
-  description = "Perfil de inferencia que se invoca. Verificado el 2026-08-29 en la cuenta de dev: SYSTEM_DEFINED, ACTIVE, y enruta a us-east-1, us-east-2 y us-west-2."
+  description = "Perfil de inferencia que se invoca, y UNICO sitio donde se elige el modelo: de esta cadena se parten tambien el modelo base -sin el prefijo de geografia- y el proveedor -segundo segmento-, que juntos componen los cuatro ARN de la politica del rol de tarea. Ademas se publica al contenedor como AI_PROPOSAL_MODEL_ID, que es lo que la aplicacion pasa al SDK. Verificado el 2026-08-29 en la cuenta de dev para el valor por defecto: SYSTEM_DEFINED, ACTIVE, y enruta a us-east-1, us-east-2 y us-west-2. Cambiar de modelo obliga a repetir esa verificacion de regiones a mano: la lista de local.bedrock_routing_regions no se deriva de aqui."
   type        = string
   default     = "us.anthropic.claude-sonnet-5"
 
+  # (1) LA GARANTIA REGIONAL. Es la validacion que ya existia y no cambia una
+  # coma: no habla de Anthropic ni de ninguna familia, solo del prefijo de
+  # geografia, asi que ya servia -y sigue sirviendo- para cualquier proveedor.
+  # Los perfiles regionales us.* existen igual para Amazon Nova, Meta Llama,
+  # Mistral o DeepSeek. Lo que se protege es la geografia, no el nombre de quien
+  # entrena el modelo.
   validation {
     condition     = startswith(var.bedrock_inference_profile_id, "us.")
-    error_message = "El perfil tiene que empezar por \"us.\". El perfil \"global.\" existe, se invoca exactamente igual -solo cambia el prefijo- y enruta a todas las regiones soportadas. El consentimiento del prospecto declara la transferencia internacional nombrando un conjunto concreto de regiones; cambiar seis caracteres aqui deja ese texto legal describiendo algo que ya no es cierto."
+    error_message = "El perfil tiene que empezar por \"us.\". El perfil \"global.\" existe, se invoca exactamente igual -solo cambia el prefijo- y enruta a todas las regiones soportadas. El consentimiento del prospecto declara la transferencia internacional nombrando un conjunto concreto de regiones; cambiar seis caracteres aqui deja ese texto legal describiendo algo que ya no es cierto. Esto vale para CUALQUIER familia de modelos: cambiar de proveedor no autoriza a cambiar de geografia."
   }
-}
 
-variable "bedrock_foundation_model_id" {
-  description = "Modelo base al que enruta el perfil. Va en el ARN de cada region de destino, y ese ARN no lleva account-id."
-  type        = string
-  default     = "anthropic.claude-sonnet-5"
+  # (2) LA FORMA, que es nueva y existe porque ahora hay derivacion.
+  #
+  # Sin esta validacion, "us.loquesea" pasaria la (1) y produciria un ARN
+  # foundation-model/loquesea perfectamente sintactico y perfectamente inutil:
+  # apply verde, despliegue verde, AccessDeniedException en la primera
+  # invocacion. Exige los tres segmentos -geografia, proveedor, modelo- que son
+  # los que hacen que partir el identificador tenga sentido, y no nombra ninguna
+  # familia: cualquier "us.<proveedor>.<modelo>" entra.
+  validation {
+    condition     = can(regex("^us\\.[a-z0-9-]+\\.[a-z0-9.:-]+$", var.bedrock_inference_profile_id))
+    error_message = "El identificador tiene que tener la forma \"us.<proveedor>.<modelo>\", que es como AWS nombra los perfiles de inferencia entre regiones -us.anthropic.claude-sonnet-5, us.deepseek.r1-v1:0, us.amazon.nova-pro-v1:0-. De ahi se parten el modelo base y el proveedor que componen tres de los cuatro ARN de la politica: sin los tres segmentos, la politica sale bien formada y no concede nada invocable."
+  }
 }
 
 variable "bedrock_daily_spend_cap_usd" {

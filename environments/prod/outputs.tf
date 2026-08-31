@@ -101,3 +101,23 @@ output "traceability" {
 output "cmk_authorized_services" {
   value = module.kms.authorized_services
 }
+
+# Lo que prod publica al contenedor sobre el asistente comercial.
+#
+# Aqui NO hay permiso ni ARN que afirmar: prod no instancia el modulo de Bedrock,
+# y eso es alcance del dueno. Lo que si se puede afirmar -y hasta hoy no lo
+# afirmaba nadie, porque este root no tenia ni una sola asercion sobre estas dos
+# claves- es que salen hacia la aplicacion y que salen con el valor correcto.
+#
+# Las dos han fallado ya por la misma via: una propiedad que el backend declara
+# con un defecto propio y que la infraestructura no publica. El tope de gasto
+# hacia que la aplicacion cortara por un numero que nadie en la infraestructura
+# conocia; el identificador de modelo hacia que se invocara el modelo base pelado
+# en vez del perfil de inferencia que el consentimiento del prospecto describe.
+output "ai_proposal_runtime" {
+  description = "Configuracion del asistente comercial publicada al contenedor de produccion: identificador con el que se invoca al modelo y tope de gasto diario, tal y como salen hacia la aplicacion."
+  value = {
+    model_id            = local.backend_environment.AI_PROPOSAL_MODEL_ID
+    daily_spend_cap_env = local.backend_environment.AI_PROPOSAL_DAILY_SPEND_CAP_USD
+  }
+}

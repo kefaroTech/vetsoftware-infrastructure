@@ -180,9 +180,16 @@ output "telemetry" {
 output "bedrock" {
   description = "Permiso de invocacion, regiones alcanzables y controles de gasto de Bedrock en dev."
   value = {
-    enabled             = var.bedrock_enabled
-    inference_profile   = var.bedrock_inference_profile_id
-    foundation_model    = var.bedrock_foundation_model_id
+    enabled           = var.bedrock_enabled
+    inference_profile = var.bedrock_inference_profile_id
+
+    # Derivados del identificador de arriba, no escritos. Se publican para que el
+    # contrato pueda afirmar que el modelo base concedido en los tres ARN de
+    # region es el del perfil que se invoca, y de la misma familia, SIN escribir
+    # el nombre de esa familia en ninguna asercion.
+    foundation_model = local.bedrock_foundation_model_id
+    model_provider   = local.bedrock_model_provider
+
     invoked_from        = var.aws_region
     routing_regions     = local.bedrock_routing_regions
     global_profile      = startswith(var.bedrock_inference_profile_id, "global.")
@@ -192,6 +199,12 @@ output "bedrock" {
     # que el contrato pueda comprobar que el tope que la aplicacion aplica y el
     # que el presupuesto vigila son el mismo valor, y no dos que se parecen.
     published_cap_env = local.backend_environment.AI_PROPOSAL_DAILY_SPEND_CAP_USD
+
+    # El identificador con el que la aplicacion invoca, tal y como sale hacia el
+    # contenedor. Es la pieza que permite afirmar que lo que se INVOCA y lo que
+    # se PERMITE son la misma cosa: sin esto, el contrato solo podia comprobar
+    # que un ARN esta bien formado, no que alguien lo use.
+    published_model_env = local.backend_environment.AI_PROPOSAL_MODEL_ID
 
     # Tal y como el modulo los recibio, no como el root los penso.
     access = module.backend.bedrock_access

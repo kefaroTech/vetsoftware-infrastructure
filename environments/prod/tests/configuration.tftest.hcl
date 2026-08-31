@@ -133,6 +133,39 @@ run "production_configuration_plans" {
     error_message = "El presupuesto debe poder deshabilitarse para pruebas."
   }
 
+  # El asistente comercial en prod: dos variables de entorno y ninguna asercion
+  # hasta hoy.
+  #
+  # Prod no instancia el modulo de Bedrock -alcance del dueno-, asi que no hay
+  # permiso que comprobar. Lo que si hay es configuracion que viaja al
+  # contenedor, y las dos claves han fallado ya por el mismo patron: una
+  # propiedad que el backend declara con defecto propio y que la infraestructura
+  # no publica. Si alguien borra una de estas dos lineas de locals.tf, la
+  # aplicacion vuelve a su defecto en silencio y no hay apply rojo que lo diga.
+  # Escrita sin nombrar ninguna familia, y a proposito. La version anterior
+  # fijaba "us.anthropic.claude-sonnet-5" como literal: comprobaba lo correcto
+  # hoy y obligaba a reescribir la asercion el dia que se cambiara de modelo, que
+  # es la forma mas fiable de que un control acabe ajustandose al valor nuevo sin
+  # que nadie compruebe si el valor nuevo es coherente.
+  #
+  # Lo que se afirma ahora es el cable -que lo publicado es lo configurado- y la
+  # forma -perfil regional de tres segmentos, no modelo base pelado-. Las dos
+  # sobreviven a un cambio de familia; ninguna sobrevive a que alguien borre la
+  # linea de locals.tf.
+  assert {
+    condition = (
+      output.ai_proposal_runtime.model_id == var.bedrock_inference_profile_id &&
+      startswith(output.ai_proposal_runtime.model_id, "us.") &&
+      can(regex("^us\\.[a-z0-9-]+\\.[a-z0-9.:-]+$", output.ai_proposal_runtime.model_id))
+    )
+    error_message = "AI_PROPOSAL_MODEL_ID debe publicar el PERFIL DE INFERENCIA regional us.<proveedor>.<modelo> configurado, no el modelo base ni otro valor. Sin esta variable la aplicacion cae en el defecto de su application.yml, que esta infraestructura no controla y que en HEAD del backend era el modelo base pelado: una invocacion sin enrutado entre las tres regiones que declara el consentimiento del prospecto."
+  }
+
+  assert {
+    condition     = output.ai_proposal_runtime.daily_spend_cap_env == "1.00"
+    error_message = "AI_PROPOSAL_DAILY_SPEND_CAP_USD tiene que salir hacia el contenedor con dos decimales y desde bedrock_daily_spend_cap_usd. Si no viaja, la aplicacion corta por el defecto escondido en su application-prod.yml y la infraestructura no sabe cual es ese numero."
+  }
+
   assert {
     condition = (
       output.database_hardening.backup_retention_period >= 7 &&

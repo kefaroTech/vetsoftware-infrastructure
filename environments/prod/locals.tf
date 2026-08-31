@@ -59,6 +59,22 @@ locals {
     # prod encienda Bedrock, su presupuesto tiene que derivarse de ESTA variable,
     # como ya hace dev, o vuelve el mismo desajuste que este commit repara.
     AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
+    # El identificador con el que la aplicacion invoca, por el mismo motivo que la
+    # linea de arriba: si no viaja, el contenedor cae en el defecto del
+    # application.yml del backend, que es un valor que este repositorio no
+    # controla y que ya ha estado mal. A 2026-08-30, en HEAD del backend ese
+    # defecto era el MODELO BASE PELADO -anthropic.claude-sonnet-5, sin prefijo,
+    # o sea sin enrutado regional-; en su arbol de trabajo hay un cambio sin
+    # integrar que lo alinea con el perfil. Publicarlo aqui hace que dar igual
+    # cual de los dos gane. En prod eso hoy no llega a invocar nada, porque sin
+    # el modulo de Bedrock el rol de tarea no tiene el statement
+    # InvokeBedrockModels; pero dejar publicado el identificador equivocado es
+    # plantar aqui el mismo defecto que dev acaba de cerrar, esperando a que
+    # alguien encienda el modulo.
+    #
+    # No compone ningun ARN en este root: prod no instancia el modulo y no hay
+    # permiso que alinear. Su unico consumidor es esta variable de entorno.
+    AI_PROPOSAL_MODEL_ID = var.bedrock_inference_profile_id
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por
