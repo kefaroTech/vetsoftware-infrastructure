@@ -1,6 +1,6 @@
 # Alertamiento operativo — alertas de Grafana Cloud
 
-Runbook de las **27 alertas Grafana-managed** definidas en `observability/grafana-managed/`.
+Runbook de las **35 alertas Grafana-managed** (38 reglas: `VetSoftwareScheduledJobFailing` tiene tres variantes por familia de cadencia y `VetSoftwareEmailSendFailing` dos por severidad) definidas en `observability/grafana-managed/`.
 Cada regla enlaza aquí desde su anotación `runbook`, y el ancla es el nombre de la regla en
 minúsculas: la sección `### VetSoftwareSloFastBurn` responde a `#vetsoftwareslofastburn`.
 **Si renombras una regla, renombra su encabezado o rompes el enlace.**

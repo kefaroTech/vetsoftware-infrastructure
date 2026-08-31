@@ -38,7 +38,7 @@
 #   distintos son DOS notificaciones a los ~30 s y un recordatorio de cada una cada 4 h —
 #   no es una tormenta, es la señal correcta sobre dos incidentes reales. Si se decide
 #   convivir con ellos un tiempo, la herramienta es un SILENCIO CON VENCIMIENTO
-#   (runbook, «Acciones comunes» §6), nunca estirar repeat_interval: eso degradaría el
+#   (Alerting → Silences), nunca estirar repeat_interval: eso degradaría el
 #   canal para todos los criticals futuros por culpa de dos conocidos.
 #
 # warning — 5m / 30m / 24h:
