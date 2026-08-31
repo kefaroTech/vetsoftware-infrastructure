@@ -1,6 +1,6 @@
 # Alerting Grafana-managed
 
-**Aquí vive TODO el alerting del proyecto**: las 35 alertas (38 reglas) y su configuración de entrega.
+**Aquí vive TODO el alerting del proyecto**: las 36 alertas (39 reglas) y su configuración de entrega.
 En `../mimir-rules/` solo quedan recording rules.
 
 | Fichero | Qué es | Ambientes |
@@ -11,7 +11,7 @@ En `../mimir-rules/` solo quedan recording rules.
 | `vetsoftware-platform-alerts-managed.yml` | 16 de plataforma (HTTP, JVM y CPU, base de datos y pool HikariCP, tokens, entitlements, barridos programados) | dev y prod |
 | `vetsoftware-cloud-additions-managed.yml` | 8: jobs (1 warning + 2 critical, una crítica por familia de cadencia), correo (warning + critical), abuso de login, Valkey ×2 | dev y prod |
 | `vetsoftware-aiproposal-alerts-managed.yml` | 6 del asistente comercial de propuestas (4 critical + 2 warning), una por valor de `ai_outcome` | dev y prod |
-| `vetsoftware-cost-guard.yml` | 1: `VetSoftwareIngestionNearLimit` | dev y prod |
+| `vetsoftware-cost-guard.yml` | 2 guardas del plano de observabilidad: `VetSoftwareIngestionNearLimit` (techo de series) y `VetSoftwareBusinessMetricDenied` (el filtro dejó una métrica ciega) | dev y prod |
 | `vetsoftware-heartbeat-prod-managed.yml` | 1: ausencia de ingesta | **solo prod** |
 
 ## Por qué TODO está aquí y no en el ruler
@@ -128,7 +128,7 @@ no es el crecimiento vegetativo:
 
 **Qué pasa si se llega al 100 %:** Grafana Cloud rechaza la ingesta. No se degrada, no avisa
 en la aplicación: simplemente deja de aceptar métricas. Se pierde telemetría en silencio y con
-ella la capacidad de ver cualquier otro incidente — incluidas las 33 alertas, que
+ella la capacidad de ver cualquier otro incidente — incluidas las 36 alertas, que
 dejarían de tener datos que evaluar. De ahí que sea la alerta que protege a todas las demás.
 
 Otro límite del mismo bloque, que conviene tener presente aunque no tenga alerta:

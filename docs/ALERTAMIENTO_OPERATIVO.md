@@ -1,6 +1,6 @@
 # Alertamiento operativo — alertas de Grafana Cloud
 
-Runbook de las **35 alertas Grafana-managed** (38 reglas: `VetSoftwareScheduledJobFailing` tiene tres variantes por familia de cadencia y `VetSoftwareEmailSendFailing` dos por severidad) definidas en `observability/grafana-managed/`.
+Runbook de las **36 alertas Grafana-managed** (39 reglas: `VetSoftwareScheduledJobFailing` tiene tres variantes por familia de cadencia y `VetSoftwareEmailSendFailing` dos por severidad) definidas en `observability/grafana-managed/`.
 Cada regla enlaza aquí desde su anotación `runbook`, y el ancla es el nombre de la regla en
 minúsculas: la sección `### VetSoftwareSloFastBurn` responde a `#vetsoftwareslofastburn`.
 **Si renombras una regla, renombra su encabezado o rompes el enlace.**
@@ -3272,6 +3272,111 @@ en ningún stack. Son ~10–15 series por instancia de coste puro.
   sin ruido. Una alerta sin prueba es una recomendación.
 
 ---
+
+### VetSoftwareBusinessMetricDenied
+
+**Qué significa** — El filtro de cardinalidad **denegó el medidor completo** de la métrica de
+negocio que nombra la etiqueta `metric`. Esa serie **no se está publicando**, y el hueco que deja
+en el panel es **indistinguible de la ausencia de actividad**: parece que no pasa nada, cuando lo
+que pasa es que ya no se mide.
+
+**Por qué merece alerta propia.** El contador existe en `develop` desde hace tiempo y hasta este
+PR **no lo miraba ninguna regla**: subía en silencio. Es el mismo defecto que motivó las seis
+alertas del asistente comercial —algo que ocurre y nadie se entera— aplicado al propio plano de
+observabilidad. Con un agravante concreto: **las seis alertas del asistente cuelgan todas del
+mismo contador de propuestas**; si ese medidor cayera por la lista blanca, las seis enmudecerían a
+la vez y ninguna podría avisarlo. Esta es la única que puede.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, metric) (increase(vetsoftware_observability_metrics_denied_total{job="mainvet/vetsoftware"}[6h])) > 0`
+con `for: 10m`, severidad **warning**.
+
+**Por qué `increase()` aquí y no en las seis del asistente.** No es un cambio de criterio, es una
+diferencia del backend, comprobada antes de escribir la regla: el contador de propuestas se
+registra **perezosamente** (una serie que nace valiendo 1 y se queda plana da `increase()` = 0),
+mientras que **este se registra de forma ansiosa y en cero al arrancar** —
+`BusinessMetricCardinalityFilter` implementa `MeterFilter` **y** `MeterBinder`, y
+`BusinessMetricsConfiguration` lo declara como `@Bean` con el tipo concreto precisamente para que
+Spring vea su cara de binder; su `bindTo` publica un `FunctionCounter` por cada nombre de
+`BusinessMetricNames` más el cubo `other`—. Con la serie viva desde el primer scrape, la ventana
+mide de verdad. **Ventaja que las otras seis no tienen: esta alerta sí se resuelve sola** cuando
+los descartes paran, unas 6 h después.
+
+**Por qué la ventana es 6 h y el umbral `> 0`.** La ventana: el contador sube al ritmo del evento
+de negocio que lo provoca, y dev recibe ~11 peticiones de usuario **al día**; una ventana de 15
+minutos puede caer entera entre dos eventos y no ver nada, que es el mismo defecto aritmético que
+dejó mudas en dev a las tres reglas HTTP. El umbral: **la lista blanca es código estático**, así
+que si un valor no está en ella **todas** las emisiones con ese valor se deniegan, siempre, hasta
+que alguien despliegue un cambio. **No existe el descarte transitorio**, y por eso un solo evento
+ya prueba una serie ciega de forma permanente. Subir el umbral a 2 o a 5 solo retrasaría el aviso
+sin filtrar ningún ruido, porque no hay ruido que filtrar.
+
+**Por qué warning.** Lo que se pierde es la capacidad de **saber** si el producto funciona, no el
+producto: nadie deja de vender, de agendar ni de facturar por esto. Y hay precedente en el mismo
+fichero, que es lo que impide que sea una preferencia personal: `VetSoftwareIngestionNearLimit`
+—la alerta que protege a todas las demás, cuyo desenlace es perder la telemetría **entera**— es
+también `warning`. Marcar esta como critical diría que una métrica de negocio ciega es más urgente
+que quedarse sin ingesta, y eso no se sostiene.
+
+**Cuándo sí escalar**, que depende de **qué** métrica cayó y por eso el mensaje la nombra: si la
+métrica denegada alimenta un SLI de la cadena SLO, el burn rate correspondiente se queda sin
+denominador y **`VetSoftwareSloSeriesAbsent` disparará detrás** — ahí ya no es una métrica ciega,
+es un objetivo de servicio sin medir. Si la métrica es del bloque de dinero (facturación,
+suscripciones), escalar aunque no haya SLI: son las que se auditan.
+
+**Primero mirar** — El `ERROR` que escribe el propio filtro, que **ya trae el arreglo decidido**.
+Hay dos variantes y llevan a acciones **opuestas**:
+
+1. **Clave no declarada** — «Etiqueta no declarada en la lista blanca de cardinalidad». Si esa
+   clave es un **identificador** (una empresa, un usuario, un documento), la corrección es **dejar
+   de emitirla como etiqueta de métrica**. ⛔ **Nunca añadirla a la lista blanca**: es como se
+   revienta el presupuesto de series, y con 500 clínicas multiplica por 500. El identificador
+   pertenece a un atributo de span o a un campo de log, donde la cardinalidad no cuesta.
+2. **Valor no declarado** — «Valor no declarado en la lista blanca de cardinalidad». Aquí sí: el
+   arreglo es **añadir el valor a `ALLOWED_VALUES`** en `BusinessMetricCardinalityFilter`. El
+   mensaje dice qué valor y de qué etiqueta.
+
+**La trampa del log, que hay que conocer antes de concluir nada.** El registro está acotado a los
+**primeros 100 identificadores distintos**; al llegar al tope escribe una única línea anunciando la
+supresión y calla, **mientras el contador sigue contándolos todos**. Por tanto: contador a cero y
+log vacío significan «no está pasando»; **contador subiendo y log vacío significan «pasa y ya
+rebasó el tope», no «no hay rastro»**. En ese caso el nombre de la métrica sale de la etiqueta
+`metric` de esta alerta, y el valor culpable hay que buscarlo comparando la lista blanca con los
+valores del enum de origen.
+
+**Qué hacer** — Corregir según la bifurcación de arriba y desplegar. No hay mitigación desde
+Grafana: mientras el binario no cambie, la serie sigue sin publicarse.
+
+**Cuándo no es un incidente** — Nunca es «normal», pero sí puede ser **conocido y aceptado** justo
+después de desplegar un vocabulario nuevo a medias. En ese caso, silencio **con vencimiento**, no
+convivencia indefinida.
+
+**Defectos conocidos de la señal** —
+
+- **Es una alerta de SEGUNDA LÍNEA, y conviene no leerla como la única defensa.** El caso más
+  probable —un valor nuevo de un enum sin su entrada en la lista blanca— **ya lo rompe el test de
+  paridad antes de desplegar**: `BusinessMetricEnumAllowlistParityTest`, 28 casos `@EnumSource`,
+  recorre los enums de origen (incluido `ai.outcome`) y falla el build si falta una entrada. Lo
+  que esta regla vigila de verdad es lo que **no** viene de un enum: etiquetas derivadas
+  dinámicamente, valores construidos en tiempo de ejecución y claves nuevas que nadie declaró. Es
+  la red por debajo del test, no en lugar del test.
+- **No dice QUÉ valor ni QUÉ etiqueta**, solo qué métrica. Esa mitad vive en el log, con el tope
+  de 100 identificadores descrito arriba. Meter el valor en la métrica sería justamente crear la
+  cardinalidad sin acotar que el filtro existe para impedir.
+- **El cubo `other`.** Un descarte de una métrica cuyo nombre no esté en `BusinessMetricNames` se
+  cuenta en `metric="other"`. Si la alerta llega con ese valor, el nombre de la métrica solo está
+  en el log.
+- **No cubre `email.*` ni `lettuce.*`.** El filtro solo mira el prefijo `vetsoftware.business.`
+  (`accept()` devuelve `NEUTRAL` para todo lo demás), así que esas familias no pueden producir
+  descartes — ni esta alerta las protege. Es el punto abierto de TEL-18, descrito en
+  `VetSoftwareValkeyCommandsFailing`.
+- **El contador no puede denegarse a sí mismo**, y eso está resuelto a propósito en el backend:
+  `vetsoftware.observability.metrics.denied` vive **fuera** del prefijo `vetsoftware.business.`,
+  que es lo único que el filtro mira. Si algún día se moviera dentro del prefijo, su etiqueta
+  `metric` no está en la lista blanca y el arreglo se comería a sí mismo: el único rastro del
+  descarte sería descartado.
+- **No tiene prueba (TEL-30)**, como el resto de reglas Grafana-managed: su formato es el de
+  provisioning de Grafana y `promtool` no puede validarlo.
 
 ### VetSoftwareBackendTelemetryAbsent
 

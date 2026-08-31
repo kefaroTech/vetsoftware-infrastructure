@@ -1,4 +1,19 @@
-# Alerta Grafana-managed: guarda de ingesta.
+# Alertas Grafana-managed: las DOS guardas del plano de observabilidad.
+#
+# Este fichero se llamó por su primera regla y el nombre se ha quedado corto: hoy tiene dos, y
+# las dos protegen la misma cosa —la capacidad de VER lo que pasa— desde los dos extremos del
+# mismo presupuesto de series:
+#
+#   · VetSoftwareIngestionNearLimit  — nos acercamos al techo de series del plan.
+#   · VetSoftwareBusinessMetricDenied — el filtro que existe para NO llegar a ese techo se ha
+#     comido una métrica de negocio, y su panel quedó ciego.
+#
+# Son las dos caras de un mismo compromiso: el filtro de cardinalidad es lo que mantiene baja la
+# cifra que vigila la primera, y esta segunda avisa cuando ese filtro cobra su precio. Por eso
+# viven juntas, comparten `domain: observability` y las mira la misma persona. Se evaluó sacar la
+# segunda a un fichero propio y se descartó: obligaría a tocar `PROVISIONING_FILES` en los dos
+# workflows para separar dos reglas que siempre se leen juntas. El nombre del fichero NO se
+# renombra por la misma razón — es la clave por la que lo listan ambos workflows.
 #
 # NO va por mimirtool y NO puede ir. Ver el README de este directorio: las métricas de uso
 # del stack (`grafanacloud_instance_*`) viven en el datasource `grafanacloud-usage`, que es
@@ -75,3 +90,135 @@ groups:
             `vetsoftware.business.` — las familias `email.*` y `lettuce.*` quedan fuera de
             esa allowlist.
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareingestionnearlimit"
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────
+  # El filtro de cardinalidad descartó una métrica de negocio: hay un panel ciego.
+  #
+  # POR QUÉ EXISTE. `BusinessMetricCardinalityFilter` deniega el MEDIDOR ENTERO cuando aparece
+  # una clave o un valor fuera de su lista blanca. No recorta la etiqueta: la serie deja de
+  # publicarse, y el hueco que queda en el panel es INDISTINGUIBLE de la ausencia de actividad.
+  # El contador existe en `develop` desde hace tiempo y hasta ahora NO lo miraba ninguna regla:
+  # subía en silencio. Es exactamente el defecto que este PR vino a corregir —algo que pasa y
+  # nadie se entera—, aplicado al propio plano de observabilidad.
+  #
+  # Y tiene un agravante que justifica meterla aquí y no «más adelante»: las seis alertas del
+  # asistente comercial cuelgan TODAS del mismo contador de propuestas. Si ese medidor cayera
+  # por la lista blanca, las seis se quedarían mudas a la vez y ninguna de ellas podría
+  # avisarlo. Esta es la única que puede.
+  #
+  # ── AQUÍ SÍ SE USA `increase()`, Y ES LO CORRECTO ─────────────────────────────────────────
+  #
+  # Es la decisión opuesta a la de las seis reglas del asistente, y la diferencia NO es de
+  # criterio sino del backend, comprobada antes de escribir la regla:
+  #
+  #   · El contador de propuestas se registra PEREZOSAMENTE, en el primer incremento. Una serie
+  #     que nace valiendo 1 y se queda plana da `increase()` = 0 → allí hay que usar el contador
+  #     crudo como estado.
+  #   · ESTE se registra de forma ANSIOSA Y EN CERO al arrancar. `BusinessMetricCardinalityFilter`
+  #     implementa `MeterFilter` **y** `MeterBinder`, y `BusinessMetricsConfiguration` lo declara
+  #     como @Bean con el tipo concreto justamente para que Spring vea su cara de binder; su
+  #     `bindTo` publica un `FunctionCounter` por cada nombre de `BusinessMetricNames` (leídos por
+  #     reflexión) más el cubo `other`. O sea ~35 series a cero desde el primer scrape.
+  #
+  # Con la serie viva desde el arranque, `increase()` mide de verdad, y aporta algo que el
+  # contador crudo no puede: ESTA ALERTA SÍ SE RESUELVE SOLA cuando los descartes paran. Las
+  # seis del asistente no.
+  #
+  # ── LA VENTANA ES [6h], Y EL UMBRAL > 0. LOS DOS CON SU NÚMERO ────────────────────────────
+  #
+  # VENTANA. El descarte se incrementa al ritmo del evento de negocio que lo provoca, y dev
+  # recibe ~11 peticiones de usuario AL DÍA (medido, ver la cabecera de las reglas HTTP). Una
+  # ventana de 15 m puede caer ENTERA entre dos eventos y no ver nada: sería el mismo defecto
+  # aritmético que dejó mudas en dev a las tres reglas HTTP. 6 h cubre una mañana o una tarde
+  # de trabajo completas. Y no más: 6 h es también lo que tarda la alerta en apagarse sola tras
+  # el despliegue que lo arregla, o sea dentro del mismo día laborable.
+  #
+  # UMBRAL > 0, y aquí NO vale el argumento de «fallo total» que justifica el 1 en las otras
+  # cinco. El argumento es otro y es más fuerte: LA LISTA BLANCA ES CÓDIGO ESTÁTICO. Si un valor
+  # no está en ella, TODAS las emisiones con ese valor se deniegan, siempre, hasta que alguien
+  # despliegue un cambio. NO EXISTE EL DESCARTE TRANSITORIO. Por eso un solo evento ya prueba
+  # una serie ciega de forma permanente, y subir el umbral a 2 o a 5 solo retrasaría el aviso
+  # sin filtrar ningún ruido — porque no hay ruido que filtrar.
+  #
+  # ── POR QUÉ warning Y NO critical ─────────────────────────────────────────────────────────
+  #
+  # Lo que se pierde es la CAPACIDAD DE SABER si el producto funciona, no el producto: nadie
+  # deja de vender, de agendar ni de facturar por esto. Y hay precedente en este mismo fichero,
+  # que es lo que hace que no sea una preferencia: `VetSoftwareIngestionNearLimit` —la alerta que
+  # protege a TODAS las demás, y cuyo desenlace es perder la telemetría entera— es `warning`.
+  # Marcar esta como critical diría que una métrica de negocio ciega es más urgente que quedarse
+  # sin ingesta, y eso es incoherente.
+  #
+  # Cuándo SÍ escalar está escrito en el runbook y depende de QUÉ métrica cayó, que es
+  # precisamente lo que la etiqueta `metric` pone en el mensaje.
+  #
+  # ── AGRUPACIÓN ────────────────────────────────────────────────────────────────────────────
+  #
+  # `by (deployment_environment_name, metric)`: la cardinalidad está acotada por construcción a
+  # 34 nombres declarados en `BusinessMetricNames` más `other` = 35, y solo generan instancia
+  # las que estén por encima de cero, que normalmente son CERO. A cambio, el mensaje dice QUÉ
+  # métrica se está perdiendo, que es la mitad del diagnóstico. La policy agrupa por `alertname`,
+  # así que varias métricas afectadas llegan en un solo mensaje.
+  #
+  # El `sum` además protege de una duplicación real documentada en `BusinessMetricsConfiguration`:
+  # el binder no se aplica a los registros compuestos, así que cada registro real publica su
+  # propio contador sobre los mismos acumuladores. Con `sum` eso da igual.
+  - orgId: 1
+    name: vetsoftware-observability-guard
+    folder: VetSoftware
+    interval: 5m
+    rules:
+      - uid: vetsw-business-metric-denied
+        title: VetSoftwareBusinessMetricDenied
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, metric) (
+                  increase(vetsoftware_observability_metrics_denied_total{job="mainvet/vetsoftware"}[6h])
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+        # Sin serie no hay descartes que contar. Y dev se apaga a las 20:00, así que el NoData
+        # nocturno está garantizado: como estado de alerta sería ruido diario asegurado.
+        noDataState: OK
+        execErrState: Error
+        # Antirrebote. El hecho es permanente (lista blanca estática), así que 10 m no se pierden
+        # nada; solo evitan notificar por un pico de evaluación.
+        for: 10m
+        labels:
+          severity: warning
+          domain: observability
+          service: vetsoftware
+        annotations:
+          summary: "La métrica de negocio {{ $labels.metric }} se está descartando y su panel queda ciego: el ERROR del filtro dice si sobra una etiqueta o falta un valor en la lista blanca"
+          description: >-
+            `BusinessMetricCardinalityFilter` denegó el medidor completo de
+            {{ $labels.metric }} en el entorno indicado por `deployment_environment_name`: esa
+            serie NO se está publicando y el hueco que deja en el panel es indistinguible de la
+            ausencia de actividad. La lista blanca es código estático, así que el descarte no es
+            transitorio: se repetirá en cada emisión hasta que se despliegue un cambio. El
+            `ERROR` que escribe el propio filtro ya bifurca el arreglo en dos, y son opuestos:
+            si la CLAVE no está declarada y resulta ser un identificador, la corrección es DEJAR
+            DE EMITIRLA como etiqueta —nunca añadirla a la lista blanca, que es como se revienta
+            el presupuesto de series—; si lo que falta es un VALOR de un vocabulario cerrado, se
+            añade a ALLOWED_VALUES. Ojo con el log: solo registra los primeros 100
+            identificadores distintos, así que contador subiendo con log vacío significa que ya
+            se pasó del tope, no que no haya rastro.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebusinessmetricdenied"
