@@ -71,7 +71,49 @@ locals {
   #    nombrar es exactamente esta lista: ampliarla -o pasar al perfil global.,
   #    que enruta a todas las regiones soportadas- obliga a cambiar la politica
   #    de privacidad antes, no despues.
+  #
+  # OJO AL CAMBIAR DE MODELO. Esta lista NO se deriva del identificador y no hay
+  # nada en este repositorio que pueda derivarla: el conjunto de regiones lo
+  # publica cada perfil por separado y no es el mismo para todas las familias.
+  # Cambiar el modelo es cambiar un valor -ver bedrock_inference_profile_id- MAS
+  # volver a ejecutar `aws bedrock get-inference-profile
+  # --inference-profile-identifier <perfil nuevo>` y contrastar su array
+  # `models` con estas tres regiones. Si el perfil nuevo enruta a un conjunto
+  # distinto, hay dos consecuencias y las dos son caras: la politica concede
+  # modelos base de regiones que no son -AccessDenied intermitente en las que
+  # falten- y el consentimiento del prospecto nombra regiones que ya no
+  # describen el sistema. El gate no puede verlo: no llama a la API de AWS.
   bedrock_routing_regions = ["us-east-1", "us-east-2", "us-west-2"]
+
+  # El modelo base y el proveedor NO se escriben: se parten del identificador del
+  # perfil, que ya los lleva dentro.
+  #
+  # POR QUE. Un perfil de inferencia entre regiones se nombra
+  # "<geografia>.<proveedor>.<modelo>", y el modelo base al que enruta es
+  # literalmente ese mismo identificador sin el prefijo de geografia:
+  # "us.anthropic.claude-sonnet-5" enruta a "anthropic.claude-sonnet-5", igual
+  # que "us.deepseek.r1-v1:0" enruta a "deepseek.r1-v1:0". Mientras el modelo
+  # base fue una VARIABLE aparte, cambiar de familia eran dos ediciones que
+  # podian separarse -y separarlas no da error de apply: da un perfil de una
+  # familia con los modelos base de otra, o sea AccessDeniedException en la
+  # primera invocacion real, con un mensaje que no nombra el desajuste-.
+  # Derivandolo, cambiar de Sonnet a un modelo de DeepSeek es cambiar UN valor y
+  # la politica de IAM lo sigue sola.
+  #
+  # QUE ASUME, y hay que decirlo porque es una convencion de AWS y no una ley:
+  # que el perfil regional se llama igual que su modelo base con el prefijo
+  # delante. Es cierto para todos los perfiles us.* publicados hasta hoy, y la
+  # forma de comprobarlo para uno nuevo es el mismo `get-inference-profile` que
+  # ya hay que ejecutar para las regiones. Si algun dia AWS rompiera esa
+  # convencion, lo que hay que cambiar es esta linea, no la politica.
+  bedrock_foundation_model_id = trimprefix(var.bedrock_inference_profile_id, "us.")
+
+  # El proveedor, para el contrato. No compone ningun ARN: existe para que
+  # tests/configuration.tftest.hcl pueda afirmar que el perfil y el modelo base
+  # concedido son de la MISMA familia sin escribir en ninguna parte cual es esa
+  # familia. La validacion de forma de bedrock_inference_profile_id garantiza que
+  # este indice existe.
+  bedrock_model_provider = split(".", var.bedrock_inference_profile_id)[1]
 
   # Cuatro ARN, no uno, y los cuatro con forma distinta a proposito.
   #
@@ -84,13 +126,17 @@ locals {
   # cuenta, no herede el ARN de dev por un copiar y pegar. Encender Bedrock en
   # prod es poner bedrock_enabled = true en su root; no hay ningun numero que
   # trasladar.
+  #
+  # Y desde hoy tampoco hay ningun NOMBRE DE MODELO que trasladar: los cuatro
+  # cuelgan de var.bedrock_inference_profile_id. Ninguna cadena de esta politica
+  # nombra a Anthropic.
   bedrock_model_arns = var.bedrock_enabled ? concat(
     [
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_inference_profile_id}",
     ],
     [
       for region in local.bedrock_routing_regions :
-      "arn:aws:bedrock:${region}::foundation-model/${var.bedrock_foundation_model_id}"
+      "arn:aws:bedrock:${region}::foundation-model/${local.bedrock_foundation_model_id}"
     ]
   ) : []
 
@@ -168,6 +214,58 @@ locals {
     # sin esta linea ambos usaban su defecto y el presupuesto de AWS vigilaba
     # otra cifra distinta.
     AI_PROPOSAL_DAILY_SPEND_CAP_USD = format("%.2f", var.bedrock_daily_spend_cap_usd)
+    # EL identificador con el que se invoca, y la linea que cierra la
+    # incoherencia mas cara de esta feature.
+    #
+    # QUE PASABA. bedrock_inference_profile_id solo entraba en los ARN de IAM
+    # (local.bedrock_model_arns). Al contenedor NO viajaba nada, asi que
+    # GenerateProposalService y RefineProposalService leian
+    # vetsoftware.ai.proposal.model-id por su defecto del application.yml del
+    # backend: "anthropic.claude-sonnet-5", el MODELO BASE PELADO. Y como la
+    # politica concede tambien los tres ARN de modelo base -que hacen falta para
+    # que el perfil enrute-, IAM no habria parado esa invocacion: habria salido
+    # por la ruta equivocada sin un solo error.
+    #
+    # POR QUE IMPORTA Y NO ES ESTETICA. Invocando el modelo base directamente no
+    # hay perfil de inferencia, luego no hay enrutado entre us-east-1, us-east-2
+    # y us-west-2: hay una llamada a la region desde la que se invoca. El
+    # conjunto de regiones que el consentimiento del prospecto declara deja de
+    # describir el sistema, y la validacion del prefijo "us." de
+    # variables.tf:935 pasa a vigilar una cadena que no llegaba a ninguna parte.
+    # Hoy no hay exposicion solo porque ModelAccessNotEnabledInvoker no invoca;
+    # el dia que entre el invocador real, la primera generacion ya sale mal.
+    #
+    # QUE LO SOSTIENE, con el mecanismo y no con la intencion:
+    #   1. El valor se DERIVA de var.bedrock_inference_profile_id, la misma que
+    #      compone el ARN del perfil. No hay un segundo sitio donde escribirlo,
+    #      asi que no hay dos cadenas que puedan separarse.
+    #   2. Esa variable lleva la validacion del prefijo "us.", que ahora si
+    #      gobierna lo que se invoca de verdad y no solo un ARN.
+    #   3. outputs.tf publica el valor tal y como sale hacia el contenedor
+    #      (published_model_env) y el contrato
+    #      "bedrock_concede_los_cuatro_arn_y_ninguno_mas" afirma tres cosas:
+    #      que coincide con el perfil, que NO es el modelo base, y que existe un
+    #      ARN concedido de inference-profile que termina exactamente en el.
+    #      Borrar esta linea deja de ser invisible: pone el gate en rojo.
+    #
+    # QUE SIGUE SIN CUBRIR, y hay que decirlo con la fecha delante porque el otro
+    # repositorio se movio mientras esto se escribia. A 2026-08-30, en HEAD del
+    # backend el defecto seguia siendo el modelo base pelado
+    # -application.yml:366-, y en su arbol de trabajo ya esta alineado con el
+    # perfil -application.yml:411 y los @Value de GenerateProposalService,
+    # RefineProposalService y BedrockInvokerConfig-. Publicar esta variable no
+    # depende de cual de los dos estados acabe integrandose: la sobreescribe en
+    # los dos. Lo que no cubre nadie desde aqui es el arranque local y los tests
+    # del backend, que usan el defecto que ese repositorio tenga ese dia.
+    #
+    # Y LO QUE NO VIAJA, que importa mas al cambiar de familia: las tarifas. El
+    # backend calcula el gasto con usd-per-million-*-tokens y priced-model-id
+    # -application.yml:381-397-, cuyos defectos son los de Sonnet, y la
+    # infraestructura NO los publica por decision escrita alli mismo. Cambiar
+    # aqui el modelo a otra familia deja a la aplicacion cobrando contra el tope
+    # con las tarifas de la anterior; ModelPricing lo avisa con un WARN en el
+    # arranque -no revienta a proposito- y nada en este gate lo ve.
+    AI_PROPOSAL_MODEL_ID = var.bedrock_inference_profile_id
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

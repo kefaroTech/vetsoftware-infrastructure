@@ -1007,28 +1007,110 @@ run "bedrock_concede_los_cuatro_arn_y_ninguno_mas" {
   # Cuatro, ni tres ni cinco. El del perfil lleva account-id; los tres del
   # modelo base no lo llevan -de ahi los dos puntos seguidos-, y confundir las
   # dos formas es otro AccessDenied silencioso.
+  #
+  # ESTA ASERCION ESCRIBIA "anthropic.claude-sonnet-5" CUATRO VECES. Comprobaba
+  # el invariante correcto -que la politica concede el perfil mas el modelo base
+  # de cada region de destino- de la unica forma que garantiza tener que
+  # reescribirla el dia que se cambie de modelo. Y una asercion que hay que
+  # reescribir para que vuelva a pasar deja de ser un control: se ajusta al
+  # valor nuevo sin que nadie compruebe si el valor nuevo es coherente.
+  #
+  # Ahora la forma se afirma contra los propios valores publicados: uno por cada
+  # region de routing, mas el del perfil, y ni uno mas. El conteo va contra
+  # length(routing_regions) y no contra un 4 escrito, porque el numero de ARN es
+  # una consecuencia del numero de regiones, no un dato independiente.
   assert {
     condition = (
-      length(output.bedrock.access.model_arns) == 4 &&
-      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5") &&
-      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5") &&
-      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-5") &&
-      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5")
+      length(output.bedrock.access.model_arns) == 1 + length(output.bedrock.routing_regions) &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:${output.bedrock.invoked_from}:123456789012:inference-profile/${output.bedrock.inference_profile}") &&
+      alltrue([
+        for region in output.bedrock.routing_regions :
+        contains(output.bedrock.access.model_arns, "arn:aws:bedrock:${region}::foundation-model/${output.bedrock.foundation_model}")
+      ])
     )
     error_message = "La politica del rol de tarea tiene que conceder los cuatro ARN: el perfil de inferencia MAS el modelo base en cada una de las tres regiones a las que ese perfil enruta. Con menos, el fallo no es un apply rojo: es un AccessDeniedException intermitente en ejecucion."
+  }
+
+  # El cable que hace que cambiar de modelo sea cambiar UN valor.
+  #
+  # El modelo base y el proveedor ya no se escriben en ninguna parte: se parten
+  # del identificador del perfil. Esta asercion afirma esa derivacion y por eso
+  # es lo que impide que vuelva a existir un segundo sitio donde escribir el
+  # nombre del modelo. Si alguien reintroduce una variable propia para el modelo
+  # base -que es exactamente como estaba hasta 2026-08-30- y le pone un valor de
+  # otra familia, el perfil y los tres ARN de region dejan de hablar del mismo
+  # modelo y esto se pone rojo antes del apply, no en la primera invocacion.
+  #
+  # Ninguna de las tres condiciones nombra a Anthropic: valen igual para
+  # us.deepseek.r1-v1:0 o us.amazon.nova-pro-v1:0, y el run
+  # "bedrock_sigue_al_modelo_configurado_sea_de_la_familia_que_sea" de mas abajo
+  # lo ejecuta de verdad con otra familia para que no sea una promesa.
+  assert {
+    condition = (
+      output.bedrock.foundation_model == trimprefix(output.bedrock.inference_profile, "us.") &&
+      output.bedrock.inference_profile == "us.${output.bedrock.foundation_model}" &&
+      startswith(output.bedrock.foundation_model, "${output.bedrock.model_provider}.")
+    )
+    error_message = "El modelo base concedido en los ARN de region tiene que ser el del perfil que se invoca, sin el prefijo de geografia, y del mismo proveedor. Si se separan, la politica concede el perfil de una familia y los modelos base de otra: apply verde, despliegue verde, y AccessDeniedException en la primera invocacion real con un mensaje que no nombra el desajuste."
   }
 
   # La lista de regiones alcanzables es la que la autorizacion del prospecto
   # tiene que nombrar. Si esta asercion falla, hay un texto legal que revisar
   # antes de aplicar.
+  #
+  # Aqui SI hay tres nombres escritos, y es deliberado: esta lista no se deriva
+  # de nada -la publica cada perfil por separado y el gate no puede consultarla,
+  # no llama a la API de AWS-, asi que el literal es el unico registro de lo que
+  # el consentimiento del prospecto declara hoy. Cambiar de modelo no lo cambia
+  # solo; cambiarlo obliga a mirar el texto legal, que es justo lo que se quiere.
   assert {
     condition     = join(",", output.bedrock.routing_regions) == "us-east-1,us-east-2,us-west-2"
     error_message = "Cambiaron las regiones a las que el dato puede viajar. Esa lista esta declarada en la autorizacion de transferencia internacional que acepta el prospecto: no se amplia desde Terraform sin cambiar antes la politica de privacidad."
   }
 
+  # Y que la geografia del perfil y la de las regiones de destino son la misma.
+  # Es mecanico y family-agnostic: un perfil us.* que enrutara a eu-west-1
+  # sacaria el dato de la geografia que el consentimiento nombra, y el literal de
+  # arriba no lo detectaria si alguien cambiara las dos cosas a la vez.
+  assert {
+    condition = alltrue([
+      for region in output.bedrock.routing_regions : startswith(region, "us-")
+    ])
+    error_message = "El perfil es us.* pero alguna region de destino no esta en esa geografia. El prefijo del perfil y las regiones a las que enruta tienen que describir el mismo territorio, que es el que declara la autorizacion de transferencia internacional del prospecto."
+  }
+
   assert {
     condition     = !output.bedrock.global_profile && startswith(output.bedrock.inference_profile, "us.")
     error_message = "El perfil de inferencia debe ser el regional us.*. El global.* se invoca exactamente igual y enruta a todas las regiones soportadas, que es justo lo que la autorizacion del prospecto no cubre."
+  }
+
+  # La pata que faltaba, y sin la cual las dos aserciones de arriba comprobaban
+  # el prefijo de una cadena que no salia del state.
+  #
+  # bedrock_inference_profile_id solo entraba en los ARN de IAM. Lo unico que
+  # nombraba un modelo hacia el contenedor era AI_PROPOSAL_MODEL_ID, que NO se
+  # publicaba, asi que la aplicacion caia en su defecto -el modelo base pelado- y
+  # la politica, que concede los tres ARN de modelo base porque el enrutado los
+  # exige, habria dejado pasar esa invocacion sin un error. Exito por la ruta
+  # equivocada: sin perfil, sin enrutado a las tres regiones, y con un texto de
+  # consentimiento describiendo algo que ya no ocurre.
+  assert {
+    condition = (
+      output.bedrock.published_model_env == output.bedrock.inference_profile &&
+      startswith(output.bedrock.published_model_env, "us.") &&
+      output.bedrock.published_model_env != output.bedrock.foundation_model
+    )
+    error_message = "AI_PROPOSAL_MODEL_ID tiene que llevar al contenedor el PERFIL DE INFERENCIA, no el modelo base. Si publica el modelo base, la invocacion sale igual -la politica concede esos ARN porque el enrutado los necesita-, pero sin enrutado entre us-east-1, us-east-2 y us-west-2 y sin nada que lo delate: el prefijo us. que exige la validacion queda vigilando una cadena que nadie usa."
+  }
+
+  # Y que el permiso alcanza exactamente lo que se invoca. Un perfil de
+  # inferencia y un modelo base no tienen el mismo ARN -el del perfil lleva
+  # account-id-, asi que "hay cuatro ARN" y "el que se invoca esta entre ellos"
+  # son dos afirmaciones distintas. Esta es la segunda.
+  assert {
+    condition = contains(output.bedrock.access.model_arns,
+    "arn:aws:bedrock:${output.bedrock.invoked_from}:123456789012:inference-profile/${output.bedrock.published_model_env}")
+    error_message = "El ARN de perfil concedido al rol de tarea tiene que terminar en el MISMO identificador que se publica como AI_PROPOSAL_MODEL_ID, y en la region desde la que se invoca. Si se mueve uno sin el otro, el apply sale verde y la primera invocacion real devuelve AccessDeniedException."
   }
 
   # El permiso llego al modulo, no solo al local del root: esto es el cable.
@@ -1174,5 +1256,119 @@ run "el_interruptor_de_bedrock_retira_el_permiso_y_deja_armado_el_gasto" {
       output.bedrock.cost_controls.alarm_name == "vetsoftware-dev-bedrock-invocation-surge"
     )
     error_message = "Retirar el permiso no puede desarmar de paso el presupuesto ni la alarma: el gasto del mes ya ocurrio y hay que seguir contandolo, y unas credenciales filtradas siguen pudiendo invocar aunque el rol de tarea ya no pueda."
+  }
+}
+
+# La prueba de que cambiar de modelo es cambiar UN valor.
+#
+# El resto del contrato de Bedrock esta escrito sin nombrar ninguna familia, y
+# eso es necesario pero no suficiente: un contrato family-agnostic que solo se
+# ejecuta con Sonnet demuestra que Sonnet funciona, no que otra familia
+# funcionaria. Este run planifica el MISMO root con un modelo de otro proveedor
+# -DeepSeek, que ademas trae dos particularidades utiles: nombre de proveedor
+# distinto y dos puntos en el identificador de version- y comprueba que los
+# cuatro ARN de la politica lo siguen solos.
+#
+# QUE PASA SI ALGUIEN DESHACE LA DERIVACION. Volver a escribir el modelo base en
+# una variable propia -que es como estuvo hasta 2026-08-30- deja este run con el
+# perfil de DeepSeek y los tres ARN de region apuntando a Anthropic. Las dos
+# ultimas aserciones se ponen rojas: la que exige que el modelo base salga del
+# perfil, y la que prohibe que quede ningun rastro del proveedor viejo en la
+# politica. Es el gate el que lo para, y lo para en el plan.
+#
+# QUE NO PRUEBA, y conviene no confundirlo: que DeepSeek este habilitado en la
+# cuenta, ni que su perfil us.* enrute exactamente a estas tres regiones. Eso no
+# lo sabe Terraform -hay que preguntarselo a `aws bedrock get-inference-profile`
+# antes de cambiar el default- y por eso este run no toca bedrock_routing_regions.
+run "bedrock_sigue_al_modelo_configurado_sea_de_la_familia_que_sea" {
+  command = plan
+
+  variables {
+    bedrock_inference_profile_id = "us.deepseek.r1-v1:0"
+
+    backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    jwt_secret                 = "test-only-jwt-secret-with-sufficient-length"
+    resend_api_key             = "test-only-resend-key"
+    recaptcha_secret           = "test-only-recaptcha-key"
+    dian_enc_key               = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    otlp_username              = "test-only-user"
+    otlp_api_key               = "test-only-api-key"
+    otel_exporter_otlp_headers = "Authorization=Basic dGVzdDp0ZXN0"
+
+    cloudflare_tunnel_token = "test-only-cloudflare-tunnel-token-with-sufficient-length"
+    grafana_logs_access_key = "1706326:glc_test-only-logs-write-token"
+
+    grafana_otlp_endpoint                 = "https://otlp.example.test/otlp"
+    cors_allowed_origins                  = ["https://dev.example.test"]
+    email_from                            = "VetSoftware Dev <noreply@example.test>"
+    registration_verification_url         = "https://dev.example.test/verify"
+    password_reset_url                    = "https://dev.example.test/reset"
+    login_url                             = "https://dev.example.test/login"
+    platform_approver_email               = "plataforma@example.test"
+    platform_access_review_base_url       = "https://dev-admin.example.test/aprobar-acceso"
+    platform_invitation_base_url          = "https://dev-admin.example.test/aceptar-invitacion"
+    platform_access_login_url             = "https://dev-admin.example.test/login"
+    platform_access_request_template_id   = "11111111-1111-4111-8111-111111111111"
+    platform_access_approved_template_id  = "22222222-2222-4222-8222-222222222222"
+    platform_access_rejected_template_id  = "33333333-3333-4333-8333-333333333333"
+    platform_access_welcome_template_id   = "44444444-4444-4444-8444-444444444444"
+    registration_verification_template_id = "55555555-5555-4555-8555-555555555555"
+    password_reset_template_id            = "66666666-6666-4666-8666-666666666666"
+    employee_invitation_template_id       = "77777777-7777-4777-8777-777777777777"
+    appointment_confirmation_template_id  = "88888888-8888-4888-8888-888888888888"
+    api_domain_name                       = "dev-api.example.test"
+    alarm_email                           = "finops@example.test"
+    slack_workspace_id                    = "T0123456789"
+    slack_channel_id                      = "C0123456789"
+  }
+
+  # Lo que se invoca. La variable de entorno que recibe el contenedor tiene que
+  # ser el perfil nuevo, no un valor arrastrado del anterior.
+  assert {
+    condition = (
+      output.bedrock.published_model_env == "us.deepseek.r1-v1:0" &&
+      output.bedrock.inference_profile == "us.deepseek.r1-v1:0"
+    )
+    error_message = "Cambiar bedrock_inference_profile_id tiene que cambiar AI_PROPOSAL_MODEL_ID. Si no, el contenedor sigue invocando el modelo anterior mientras la politica ya concede el nuevo."
+  }
+
+  # Lo que se permite. Los cuatro ARN, con el modelo base partido del perfil y
+  # el proveedor nuevo, sin haber tocado nada mas que un valor.
+  assert {
+    condition = (
+      length(output.bedrock.access.model_arns) == 4 &&
+      output.bedrock.foundation_model == "deepseek.r1-v1:0" &&
+      output.bedrock.model_provider == "deepseek" &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.deepseek.r1-v1:0") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-1::foundation-model/deepseek.r1-v1:0") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-east-2::foundation-model/deepseek.r1-v1:0") &&
+      contains(output.bedrock.access.model_arns, "arn:aws:bedrock:us-west-2::foundation-model/deepseek.r1-v1:0")
+    )
+    error_message = "La politica del rol de tarea tiene que seguir al identificador configurado sea de la familia que sea. Si esta asercion falla, cambiar de modelo dejo de ser cambiar un valor y volvio a ser editar la politica: alguien reintrodujo el modelo base como dato escrito aparte."
+  }
+
+  # Y que no queda ni un rastro del proveedor anterior. Es la unica asercion de
+  # todo el contrato que nombra a Anthropic, y lo hace para PROHIBIRLO: un ARN
+  # residual de la familia vieja es permiso concedido de mas, y el permiso de mas
+  # no se manifiesta como error -no rompe nada, solo autoriza algo que ya nadie
+  # deberia poder invocar-.
+  assert {
+    condition = alltrue([
+      for arn in output.bedrock.access.model_arns : !strcontains(arn, "anthropic")
+    ])
+    error_message = "Con otro modelo configurado, la politica sigue concediendo ARN de la familia anterior. Un permiso que sobra no da ningun error: deja el rol de tarea autorizado a invocar un modelo que ya no es el del sistema, y eso es superficie concedida sin que nadie la pidiera."
+  }
+
+  # El resto del bloque de Bedrock no depende del modelo: los controles de gasto
+  # filtran por servicio -"Amazon Bedrock"- y la alarma agrega sin dimension
+  # ModelId. Cambiar de familia no los toca, y esta asercion es lo que lo fija.
+  assert {
+    condition = (
+      output.bedrock.cost_controls.budget_usd == 30 &&
+      output.bedrock.cost_controls.budget_name == "vetsoftware-dev-bedrock" &&
+      output.bedrock.cost_controls.alarm_name == "vetsoftware-dev-bedrock-invocation-surge"
+    )
+    error_message = "Cambiar de modelo no puede mover los controles de gasto: el presupuesto filtra por el servicio Amazon Bedrock y la alarma agrega todas las invocaciones de la cuenta sin dimension ModelId. Si esto cambia, alguien ato un control de costo a una familia concreta."
   }
 }

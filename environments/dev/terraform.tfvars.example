@@ -134,9 +134,22 @@ tracing_sampling = 1.0
 # equivocada. Se comprueba con `aws bedrock get-use-case-for-model-access`: si
 # devuelve ResourceNotFoundException, el formulario sigue sin rellenar. Los otros
 # tres comandos que uno probaria dan falsos positivos.
+# CAMBIAR DE MODELO ES CAMBIAR LA LINEA DE ABAJO Y NADA MAS. El modelo base
+# -"anthropic.claude-sonnet-5"- ya no se declara: se parte de este identificador
+# quitandole el prefijo de geografia, y el proveedor sale de su segundo segmento.
+# Aqui habia una segunda variable, bedrock_foundation_model_id, y tenerla
+# significaba que cambiar de familia eran dos ediciones que podian separarse: un
+# perfil de una familia con los modelos base de otra da apply verde y
+# AccessDeniedException en la primera invocacion.
+#
+# LO QUE SIGUE SIENDO MANUAL AL CAMBIARLO, y no lo ve ningun gate: las regiones a
+# las que enruta el perfil nuevo -`aws bedrock get-inference-profile
+# --inference-profile-identifier <perfil>`, comparar su array `models` con
+# local.bedrock_routing_regions de locals.tf, y con el texto de consentimiento
+# del prospecto- y las tarifas del backend, que no se publican desde aqui a
+# proposito y siguen siendo las de Sonnet.
 bedrock_enabled              = true
 bedrock_inference_profile_id = "us.anthropic.claude-sonnet-5"
-bedrock_foundation_model_id  = "anthropic.claude-sonnet-5"
 
 # El tope diario que aplica la aplicacion antes de invocar. Ahora es UN solo
 # numero con tres caras: viaja al contenedor como AI_PROPOSAL_DAILY_SPEND_CAP_USD

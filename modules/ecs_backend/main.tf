@@ -186,13 +186,18 @@ data "aws_iam_policy_document" "task" {
   # permiso aunque comparta modulo.
   #
   # La lista que llega NO es un ARN, son cuatro, y esa es la trampa cara de este
-  # permiso. Los modelos Anthropic recientes se invocan por un perfil de
-  # inferencia entre regiones, e IAM evalua dos cosas distintas: el ARN del
-  # perfil -que lleva account-id- y el ARN del modelo base EN CADA REGION a la
-  # que ese perfil pueda enrutar -que no lleva account-id-. Conceder solo el
-  # perfil da apply verde, despliegue verde y un AccessDeniedException
-  # intermitente que solo aparece cuando el enrutador manda la peticion a una
-  # region que falta en la politica.
+  # permiso. Los modelos recientes -de cualquier proveedor: Anthropic, DeepSeek,
+  # Amazon Nova, Meta- se invocan por un perfil de inferencia entre regiones, e
+  # IAM evalua dos cosas distintas: el ARN del perfil -que lleva account-id- y el
+  # ARN del modelo base EN CADA REGION a la que ese perfil pueda enrutar -que no
+  # lleva account-id-. Conceder solo el perfil da apply verde, despliegue verde y
+  # un AccessDeniedException intermitente que solo aparece cuando el enrutador
+  # manda la peticion a una region que falta en la politica.
+  #
+  # Este modulo no sabe -ni tiene por que- de que familia es el modelo: recibe
+  # ARN ya compuestos. Quien los compone es el root, a partir de un unico
+  # identificador de perfil, para que cambiar de familia no obligue a tocar esta
+  # politica.
   #
   # Ninguna accion de KMS nueva: Bedrock con la clave gestionada por AWS no
   # exige nada del llamante, y el rol ya tiene la CMK del entorno mas arriba.

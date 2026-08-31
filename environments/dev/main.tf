@@ -329,14 +329,31 @@ module "backend" {
   telemetry_credentials_secret_arn = module.secrets.grafana_secret_arn
   telemetry_environment_name       = var.environment
 
-  # Invocacion del modelo en Bedrock. Solo el permiso: ninguna variable de
-  # entorno nueva entra aqui todavia, y eso es deliberado. El backend aun no
-  # lee ninguna, y anadirlas ahora obligaria a una revision nueva de la
-  # definicion de tarea y a un despliegue del servicio -de 2 a 4 minutos sin
-  # backend en dev, que solo tiene una tarea- a cambio de nada. Las cinco
-  # variables de configuracion entran con el codigo que las lee.
+  # Invocacion del modelo en Bedrock: el permiso, aqui; el identificador con el
+  # que se invoca, en locals.tf (AI_PROPOSAL_MODEL_ID).
   #
-  # Streaming apagado: el caso de uso devuelve la respuesta entera al cliente.
+  # ESTE COMENTARIO DECIA OTRA COSA, y merece la pena dejar escrito por que
+  # cambio. Decia que ninguna variable de entorno entraba todavia, que era
+  # deliberado porque "el backend aun no lee ninguna", y que anadirlas costaria
+  # una revision nueva de la definicion de tarea "a cambio de nada". Las dos
+  # premisas eran falsas: el backend SI leia una -vetsoftware.ai.proposal.model-id,
+  # con default propio- y por eso el precio de no publicarla no era cero, era que
+  # la aplicacion invocaba el modelo base pelado mientras la politica de aqui
+  # concedia un perfil de inferencia que nadie usaba. El coste que el comentario
+  # evitaba -2 a 4 minutos de despliegue en un dev de una sola tarea- se paga
+  # ahora, y es el correcto: se paga antes de que el invocador real exista, no
+  # despues de la primera propuesta generada por la ruta equivocada.
+  #
+  # Los ARN no se derivan del identificador publicado, se componen del mismo
+  # var.bedrock_inference_profile_id, asi que este bloque no cambia. Lo que ata
+  # las dos cosas es el contrato de tests/configuration.tftest.hcl, que exige que
+  # exista un ARN de inference-profile terminado exactamente en la cadena que
+  # recibe el contenedor.
+  #
+  # Streaming apagado, y ahora se puede afirmar por que: ModelInvoker.invoke
+  # devuelve un ModelInvocation con el rawJson entero -no hay costura de stream
+  # en el puerto-, asi que bedrock:InvokeModelWithResponseStream solo ampliaria
+  # la superficie del rol sin que nada pudiera usarlo.
   bedrock_model_arns        = local.bedrock_model_arns
   bedrock_streaming_enabled = false
 
