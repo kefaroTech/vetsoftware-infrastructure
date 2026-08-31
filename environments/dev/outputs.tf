@@ -206,6 +206,12 @@ output "bedrock" {
     # que un ARN esta bien formado, no que alguien lo use.
     published_model_env = local.backend_environment.AI_PROPOSAL_MODEL_ID
 
+    # Y si la aplicacion va a invocar de verdad, tal y como sale hacia el
+    # contenedor. Sin esto el contrato podia afirmar que el permiso y el modelo
+    # cuadran mientras el asistente respondia por el camino determinista y no
+    # llamaba a nadie: un gate verde sobre un sistema apagado.
+    published_enabled_env = local.backend_environment.AI_PROPOSAL_BEDROCK_ENABLED
+
     # Tal y como el modulo los recibio, no como el root los penso.
     access = module.backend.bedrock_access
 

@@ -161,6 +161,17 @@ run "production_configuration_plans" {
     error_message = "AI_PROPOSAL_MODEL_ID debe publicar el PERFIL DE INFERENCIA regional us.<proveedor>.<modelo> configurado, no el modelo base ni otro valor. Sin esta variable la aplicacion cae en el defecto de su application.yml, que esta infraestructura no controla y que en HEAD del backend era el modelo base pelado: una invocacion sin enrutado entre las tres regiones que declara el consentimiento del prospecto."
   }
 
+  # Prod NO invoca, y eso tiene que estar afirmado y no solo ser cierto por
+  # ausencia. Sin el modulo de Bedrock el rol de tarea no tiene el statement
+  # InvokeBedrockModels, asi que una aplicacion encendida aqui no fallaria en el
+  # apply: fallaria con AccessDeniedException en la primera propuesta de un
+  # prospecto, contra un endpoint publico y anonimo. El dia que prod encienda
+  # Bedrock, esta asercion es lo que obliga a mirar esta linea.
+  assert {
+    condition     = output.ai_proposal_runtime.bedrock_enabled_env == "false"
+    error_message = "Prod no instancia el modulo de Bedrock, asi que su rol de tarea no puede invocar: AI_PROPOSAL_BEDROCK_ENABLED tiene que salir en false. Encenderlo sin el modulo no rompe el apply, rompe la primera propuesta real."
+  }
+
   assert {
     condition     = output.ai_proposal_runtime.daily_spend_cap_env == "1.00"
     error_message = "AI_PROPOSAL_DAILY_SPEND_CAP_USD tiene que salir hacia el contenedor con dos decimales y desde bedrock_daily_spend_cap_usd. Si no viaja, la aplicacion corta por el defecto escondido en su application-prod.yml y la infraestructura no sabe cual es ese numero."

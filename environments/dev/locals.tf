@@ -52,11 +52,17 @@ locals {
   # Las regiones a las que el dato del prospecto puede viajar.
   #
   # No es una preferencia nuestra ni una lista de conveniencia: es lo que
-  # publica el propio perfil de inferencia. Verificado el 2026-08-29 con
-  # `aws bedrock get-inference-profile --inference-profile-identifier
-  # us.anthropic.claude-sonnet-5`, cuya descripcion dice literalmente "Routes
-  # requests to Anthropic Claude Sonnet 5 in us-east-1, us-east-2 and
-  # us-west-2" y cuyo array `models` devuelve los tres ARN correspondientes.
+  # publica el propio perfil de inferencia. Se verifico el 2026-08-29 con
+  # `aws bedrock get-inference-profile` para el perfil de Sonnet 5, que
+  # enrutaba a estas tres.
+  #
+  # AL PASAR A HAIKU 4.5 (2026-08-31) LA LISTA NO CAMBIA, y eso hay que decirlo
+  # con la fuente delante porque la variable avisa de que esto no se deriva: la
+  # ficha del modelo en la documentacion de AWS publica, para el perfil Geo US
+  # `us.anthropic.claude-haiku-4-5-20251001-v1:0`, las mismas tres regiones de
+  # destino desde us-east-1. NO se reejecuto el CLI contra la cuenta: si alguien
+  # lo hace y difiere, manda la cuenta y esta lista se mueve ANTES de aplicar,
+  # junto con el texto de consentimiento del prospecto.
   #
   # Esta escrita, y no derivada de var.aws_region, porque tiene dos lectores
   # distintos y ninguno de los dos puede adivinarla:
@@ -266,6 +272,29 @@ locals {
     # con las tarifas de la anterior; ModelPricing lo avisa con un WARN en el
     # arranque -no revienta a proposito- y nada en este gate lo ve.
     AI_PROPOSAL_MODEL_ID = var.bedrock_inference_profile_id
+    # EL INTERRUPTOR DE LA INVOCACION REAL, derivado de la MISMA bandera que
+    # concede el permiso IAM y no de una variable propia.
+    #
+    # QUE PASABA HASTA HOY. Esta linea no existia, asi que el contenedor no
+    # recibia nada y el backend caia al defecto `false` de su application.yml:
+    # BedrockInvokerConfig no construia ni el cliente de AWS ni el invocador, y
+    # quien respondia al puerto era ModelAccessNotEnabledInvoker -camino
+    # determinista, HTTP 200, sin leer el texto libre-. Es decir: el permiso
+    # estaba concedido, el modelo publicado, el presupuesto armado y la alarma
+    # en pie, y Bedrock no se invocaba. Todo el andamiaje apuntando a nada.
+    #
+    # POR QUE DERIVADA. Una variable propia permitiria el par que no tiene
+    # sentido -aplicacion encendida sin permiso-, y ese par no rompe el apply ni
+    # el despliegue: rompe la primera propuesta de un prospecto real con un
+    # AccessDeniedException. Derivandola, los dos estados posibles son los dos
+    # coherentes y el tercero no se puede escribir.
+    #
+    # tostring() porque una variable de entorno no tiene tipo, y la constante
+    # BedrockInvokerConfig.ACTIVO compara la CADENA contra "true" -no la evalua
+    # como booleano, a proposito, para que un valor raro no reviente el arranque
+    # en las dos condiciones a la vez-. tostring(true) da "true" en minusculas,
+    # que es lo que ese equalsIgnoreCase espera.
+    AI_PROPOSAL_BEDROCK_ENABLED = tostring(var.bedrock_enabled)
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por

@@ -927,7 +927,7 @@ variable "maintenance_mute_windows" {
 # ResourceNotFoundException y las seis cuotas de Sonnet 5 estan a 0.0).
 
 variable "bedrock_enabled" {
-  description = "Concede al rol de tarea el permiso para invocar el modelo. En false no se genera el statement y el rol no puede invocar nada; el presupuesto y la alarma NO dependen de esta bandera y siguen armados."
+  description = "Enciende la invocacion real del modelo, y tiene DOS consumidores que no se pueden separar: concede al rol de tarea el statement InvokeBedrockModels, y se publica al contenedor como AI_PROPOSAL_BEDROCK_ENABLED, que es lo que hace que BedrockInvokerConfig construya el invocador real en vez de ModelAccessNotEnabledInvoker. Los dos cuelgan de esta bandera a proposito: escribirlos por separado permitiria el unico par sin sentido -aplicacion invocando sin permiso-, que no falla en el apply ni en el despliegue sino en la primera propuesta de un prospecto, con un AccessDeniedException en un endpoint publico y anonimo. En false no hay statement, el rol no puede invocar nada y la aplicacion responde por el camino determinista; el presupuesto y la alarma NO dependen de esta bandera y siguen armados."
   type        = bool
   default     = true
 }
@@ -949,7 +949,7 @@ variable "bedrock_enabled" {
 variable "bedrock_inference_profile_id" {
   description = "Perfil de inferencia que se invoca, y UNICO sitio donde se elige el modelo: de esta cadena se parten tambien el modelo base -sin el prefijo de geografia- y el proveedor -segundo segmento-, que juntos componen los cuatro ARN de la politica del rol de tarea. Ademas se publica al contenedor como AI_PROPOSAL_MODEL_ID, que es lo que la aplicacion pasa al SDK. Verificado el 2026-08-29 en la cuenta de dev para el valor por defecto: SYSTEM_DEFINED, ACTIVE, y enruta a us-east-1, us-east-2 y us-west-2. Cambiar de modelo obliga a repetir esa verificacion de regiones a mano: la lista de local.bedrock_routing_regions no se deriva de aqui."
   type        = string
-  default     = "us.anthropic.claude-sonnet-5"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   # (1) LA GARANTIA REGIONAL. Es la validacion que ya existia y no cambia una
   # coma: no habla de Anthropic ni de ninguna familia, solo del prefijo de

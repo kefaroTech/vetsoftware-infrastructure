@@ -20,7 +20,7 @@ email_from                    = "VetSoftware <noreply@example.com>"
 # AI_PROPOSAL_MODEL_ID. Prod no instancia el modulo de Bedrock, asi que aqui no
 # compone ninguna politica: solo la variable de entorno. Cambiar de familia es
 # cambiar esta linea, con la misma regla que dev -perfil regional us.*-.
-# bedrock_inference_profile_id = "us.anthropic.claude-sonnet-5"
+# bedrock_inference_profile_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 registration_verification_url = "https://app.example.com/verificar"
 password_reset_url             = "https://app.example.com/restablecer"
 login_url                      = "https://app.example.com/login"

@@ -149,7 +149,7 @@ tracing_sampling = 1.0
 # del prospecto- y las tarifas del backend, que no se publican desde aqui a
 # proposito y siguen siendo las de Sonnet.
 bedrock_enabled              = true
-bedrock_inference_profile_id = "us.anthropic.claude-sonnet-5"
+bedrock_inference_profile_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # El tope diario que aplica la aplicacion antes de invocar. Ahora es UN solo
 # numero con tres caras: viaja al contenedor como AI_PROPOSAL_DAILY_SPEND_CAP_USD

@@ -75,6 +75,18 @@ locals {
     # No compone ningun ARN en este root: prod no instancia el modulo y no hay
     # permiso que alinear. Su unico consumidor es esta variable de entorno.
     AI_PROPOSAL_MODEL_ID = var.bedrock_inference_profile_id
+    # APAGADO, Y ESCRITO EN VEZ DE OMITIDO. Prod no instancia el modulo de
+    # Bedrock, asi que el rol de tarea no tiene el statement InvokeBedrockModels:
+    # encender la aplicacion aqui solo conseguiria un AccessDeniedException en la
+    # primera propuesta. El literal es la verdad de este entorno.
+    #
+    # Se publica en vez de dejar que el backend caiga a su defecto -que tambien es
+    # false- por el mismo motivo que las dos lineas de arriba: un defecto que hace
+    # lo correcto por casualidad es peor que un valor escrito, porque el dia que
+    # ese defecto cambie en el otro repositorio nadie mirara aqui. Y ademas deja
+    # el interruptor a la vista: encender prod es cambiar esta cadena Y anadir el
+    # modulo, no descubrir que faltaba una variable.
+    AI_PROPOSAL_BEDROCK_ENABLED = "false"
     # Los cuatro UUID de plantilla de Resend del producto. Hasta ahora eran default
     # commiteado en el application.yml del backend: el identificador viajaba dentro de la
     # imagen y los tres entornos apuntaban siempre a la misma plantilla. Entran por
