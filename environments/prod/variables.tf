@@ -487,7 +487,7 @@ variable "ai_proposal_link_base_url" {
 variable "bedrock_inference_profile_id" {
   description = "Perfil de inferencia con el que la aplicacion invoca al modelo, publicado al contenedor como AI_PROPOSAL_MODEL_ID, y unico sitio donde prod elige el modelo. Prod no instancia el modulo de Bedrock, asi que aqui NO compone ningun ARN: su unico consumidor es la variable de entorno. Cambiar de familia de modelo es cambiar este valor."
   type        = string
-  default     = "us.anthropic.claude-sonnet-5"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   # (1) La garantia regional, identica a la de dev. No nombra ninguna familia
   # -solo la geografia-, asi que vale igual para Anthropic, DeepSeek, Amazon

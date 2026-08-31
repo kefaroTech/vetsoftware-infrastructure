@@ -119,5 +119,6 @@ output "ai_proposal_runtime" {
   value = {
     model_id            = local.backend_environment.AI_PROPOSAL_MODEL_ID
     daily_spend_cap_env = local.backend_environment.AI_PROPOSAL_DAILY_SPEND_CAP_USD
+    bedrock_enabled_env = local.backend_environment.AI_PROPOSAL_BEDROCK_ENABLED
   }
 }

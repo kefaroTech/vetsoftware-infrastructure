@@ -1113,6 +1113,22 @@ run "bedrock_concede_los_cuatro_arn_y_ninguno_mas" {
     error_message = "El ARN de perfil concedido al rol de tarea tiene que terminar en el MISMO identificador que se publica como AI_PROPOSAL_MODEL_ID, y en la region desde la que se invoca. Si se mueve uno sin el otro, el apply sale verde y la primera invocacion real devuelve AccessDeniedException."
   }
 
+  # Y que la aplicacion va a USAR ese permiso. Las dos aserciones de arriba
+  # comprueban que lo que se invoca y lo que se permite son la misma cosa; esta
+  # comprueba que se invoca algo. Mientras AI_PROPOSAL_BEDROCK_ENABLED no
+  # viajaba, el backend caia a su defecto `false` y respondia con
+  # ModelAccessNotEnabledInvoker: todo este contrato pasaba en verde sobre un
+  # asistente que no llamaba a Bedrock ni una vez.
+  #
+  # Se compara contra el booleano formateado y no contra el literal "true": lo
+  # que se afirma es que la variable publicada SIGUE a bedrock_enabled, no que
+  # valga una cosa concreta. Asi el mismo contrato sirve en el run del
+  # interruptor, mas abajo, sin escribir dos veces la misma regla.
+  assert {
+    condition     = output.bedrock.published_enabled_env == tostring(output.bedrock.enabled)
+    error_message = "AI_PROPOSAL_BEDROCK_ENABLED tiene que llegar al contenedor siguiendo a bedrock_enabled. Si no viaja, el backend cae a su defecto false y responde con ModelAccessNotEnabledInvoker: el permiso concedido, el modelo publicado, el presupuesto armado y ni una sola invocacion. Si viaja pero no sigue a la bandera, se puede llegar al unico par sin sentido -aplicacion invocando sin permiso-, que falla en la primera propuesta de un prospecto y no antes."
+  }
+
   # El permiso llego al modulo, no solo al local del root: esto es el cable.
   assert {
     condition = (
@@ -1247,6 +1263,15 @@ run "el_interruptor_de_bedrock_retira_el_permiso_y_deja_armado_el_gasto" {
       output.bedrock.access.statement_sid == null
     )
     error_message = "Con bedrock_enabled = false el rol de tarea no debe conservar ningun permiso de Bedrock, ni siquiera un statement con la lista vacia."
+  }
+
+  # Y la aplicacion tampoco intenta invocar. Retirar el permiso sin apagar la
+  # aplicacion dejaria al asistente pidiendole a Bedrock algo que IAM le niega:
+  # el prospecto veria un fallo en vez de la propuesta determinista, que es la
+  # respuesta correcta cuando el modelo no esta disponible.
+  assert {
+    condition     = output.bedrock.published_enabled_env == "false"
+    error_message = "Con bedrock_enabled = false la aplicacion tiene que recibir AI_PROPOSAL_BEDROCK_ENABLED=false y volver al camino determinista. Retirar solo el permiso convierte el kill switch en una averia: cada propuesta acabaria en AccessDeniedException."
   }
 
   # Y los dos controles de gasto siguen en pie.
