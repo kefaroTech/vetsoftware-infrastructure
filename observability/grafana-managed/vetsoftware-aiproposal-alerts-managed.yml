@@ -1,0 +1,427 @@
+# Alertas del ASISTENTE COMERCIAL (generación de propuestas con IA) — Grafana-managed.
+#
+# Las seis reglas de este fichero responden a una sola pregunta del dueño del producto:
+# «avísame cuando el asistente no sirva propuestas, tanto si la petición no llegó a la IA
+# como si la IA no respondió». Las seis salen del MISMO contador y se separan por el valor
+# de `ai_outcome`, porque cada desenlace tiene un dueño y una acción distinta y colapsarlos
+# en un «el asistente falla» obligaría a repetir el diagnóstico entero — que es exactamente
+# lo que costó horas la primera vez.
+#
+# ── POR QUÉ AQUÍ Y NO EN EL STACK LOCAL (evaluado y DESCARTADO a propósito) ──────────────
+#
+# El README de `../mimir-rules/` obliga a evaluar el gemelo en el plano local
+# (`VetSoftware/docker/prometheus-*.yml`) y a dejar la decisión escrita, en cualquiera de
+# los dos sentidos. Evaluado: **NO se crea gemelo local**, por tres razones y no por olvido.
+#
+#   1. El plano local NO NOTIFICA A NADIE. Su Alertmanager no está expuesto, lo verifica el
+#      job «Verify alerting rules and runbook» del backend y su salida es un check verde, no
+#      un mensaje de Slack. El encargo era «que me avise por Slack»; una regla ahí lo
+#      incumple mientras aparenta cumplirlo. Hay precedente caro y documentado en el README
+#      de este directorio: 25 alertas vivieron en el ruler de Mimir DISPARANDO AL VACÍO.
+#   2. El stack local NO TIENE LA SEÑAL. Sin credenciales de Bedrock y sin tráfico de
+#      prospectos, `vetsoftware_business_ai_proposal_generated_total` no se incrementa nunca
+#      allí: el contador de Micrometer se crea de forma perezosa en el primer incremento, así
+#      que la serie ni siquiera existe. Una regla sobre una serie inexistente no es cobertura,
+#      es una entrada más en una lista que alguien leerá como cobertura.
+#   3. La ausencia inversa YA ESTÁ DOCUMENTADA en el runbook («Las cuatro alertas de negocio
+#      retiradas»): cuatro reglas viven en el plano local y no tienen gemelo en cloud. Esta es
+#      la simétrica y se deja escrita con el mismo detalle, para que nadie tenga que volver a
+#      tomar la decisión dentro de seis meses.
+#
+# ── LAS TRES DECISIONES TÉCNICAS QUE NO SE PUEDEN TOCAR SIN ROMPER LA ALERTA ─────────────
+#
+# 1. NADA DE `increase()`. NI AQUÍ NI EN UNA REFACTORIZACIÓN FUTURA.
+#    El contador de Micrometer se registra PEREZOSAMENTE, en el primer incremento. Con las
+#    1–3 peticiones diarias que recibe dev, una serie que NACE valiendo 1 y se queda plana
+#    hace que `increase(...[15m])` devuelva 0: el único evento que va a haber sería
+#    literalmente invisible. Por eso las seis expresiones usan el CONTADOR CRUDO COMO ESTADO
+#    —«desde que este proceso arrancó, ¿ha pasado esto?»— y no una tasa ni un incremento.
+#    (Contraste deliberado con `VetSoftwareEntitlementResolutionEmpty`, que sí usa
+#    `increase()`: aquel contador se registra de forma ANSIOSA y en cero en el arranque, así
+#    que allí la ventana funciona. La diferencia es del backend, no del gusto de quien
+#    escribe la regla.)
+#
+# 2. SE AGRUPA TAMBIÉN POR `ai_outcome`, aunque el filtro ya lo fije a un único valor.
+#    No es redundante: `sum by (...)` decide qué etiquetas SOBREVIVEN a la agregación, y la
+#    plantilla de Slack imprime las etiquetas de la instancia. Sin ese `by`, el mensaje
+#    llegaría sin la causa y el dueño tendría que abrir Grafana para saber cuál de los seis
+#    desenlaces es — que es justo lo que estas alertas existen para evitar.
+#
+# 3. NI UNA SOLA REGLA AGRUPA NI FILTRA POR `ai_presentation`.
+#    Hay una rama del backend que mueve esa etiqueta de `deterministic` a `no_catalog` para
+#    el camino sin tarifa. Eso NO renombra una serie: CREA UNA NUEVA Y ABANDONA LA VIEJA. Una
+#    regla que la usara se quedaría muda EXACTAMENTE EL DÍA DEL DESPLIEGUE, sin error, sin
+#    NoData y sin nada que lo dijera. `ai_outcome` no se mueve en esa rama, y es la única
+#    etiqueta que estas reglas necesitan.
+#
+# 4. (Y la de siempre) NADA DE `_seconds_`. El backend exporta por OTLP en MILISEGUNDOS. Aquí
+#    no hay ningún timer, pero queda escrito porque es el error que más veces se ha colado.
+#    El gate `check-grafana-alert-quality.ps1` lo prohíbe explícitamente (C5).
+#
+# ── POR QUÉ EL UMBRAL ES 1 (o 2) Y NO UN PORCENTAJE ──────────────────────────────────────
+#
+# Dev recibe 1–3 peticiones AL DÍA al asistente. Una regla de «tasa de fallo > X %» necesita
+# ≥ 20 eventos por ventana para que el estadístico exista (1/0,05), y con ese volumen es
+# ARITMÉTICAMENTE IMPOSIBLE. Escribirla reproduciría el defecto que este mismo runbook ya
+# documenta siete veces: `VetSoftwareHttp5xxRateHigh` y las dos de latencia están MUDAS en dev
+# por exactamente eso.
+#
+# Pero aquí no hace falta una tasa, y esa es la parte que hay que entender antes de «mejorar»
+# el umbral: NINGUNO de estos desenlaces es un fallo proporcional. Son fallos TOTALES. No hay
+# tarifa publicada, o no hay acceso al modelo, o el cupo está agotado: la causa es GLOBAL, así
+# que un solo evento significa que el 100 % de los prospectos está recibiendo lo mismo. Un
+# umbral de 1 no es pereza estadística, es la traducción correcta de «esto le pasa a todo el
+# mundo». Estas van a ser las primeras alertas del proyecto que SÍ funcionan en dev.
+#
+# ── LO QUE EL CONTADOR CRUDO IMPLICA, DICHO SIN ADORNOS ──────────────────────────────────
+#
+# Un contador es monótono: no baja. Publicar la tarifa DETIENE los incrementos nuevos pero NO
+# devuelve la serie a cero, así que la alerta NO se resuelve al arreglar la causa: se resuelve
+# cuando el proceso reinicia (en dev, el apagado de EventBridge de las 20:00; en prod, el
+# siguiente despliegue). Es el precio de la decisión 1 y se paga a sabiendas.
+#
+# La cuenta del ruido, que es lo que hace el precio aceptable: la notification policy da
+# `repeat_interval: 4h` a los críticos, o sea como mucho 6 recordatorios en 24 h y menos en
+# dev por el apagado nocturno — del orden de 4 mensajes al día mientras el problema siga sin
+# resolver. El dueño lo asumió explícitamente para `no_catalog`. Si molesta antes de que se
+# arregle, la salida es SILENCIAR desde el enlace que trae el propio mensaje de Slack, no
+# subir el umbral.
+#
+# ── CONVENCIONES HEREDADAS DEL RESTO DEL DIRECTORIO ──────────────────────────────────────
+#
+#   - `noDataState: OK` en las seis. Dev se apaga a las 20:00 y todas estas series desaparecen
+#     cada noche; con `NoData` como estado de alerta el ruido nocturno estaría garantizado. Y
+#     además es correcto de fondo: que no haya serie significa que nadie pidió una propuesta,
+#     no que el asistente esté roto. Que el backend viva lo vigilan el heartbeat y las alarmas
+#     de infraestructura, no estas.
+#   - `for` como ANTIRREBOTE, no como ventana. Sobre un contador monótono el `for` solo retrasa
+#     la primera notificación; no acumula ni promedia nada. Los valores (5m / 10m / 15m) están
+#     escalados por urgencia, no por estadística.
+#   - `uid` estable en kebab-case con prefijo `vetsw-`: es la CLAVE DE UPSERT del pipeline.
+#     Cambiarlo duplica la regla en el stack en vez de actualizarla. Los seis están holgados
+#     bajo el límite de 40 caracteres de la API de Grafana (el más largo mide 35); ver C8 del
+#     gate y el incidente del PR #162.
+#   - `relativeTimeRange.from: 600` por consistencia con el resto del directorio. Ninguna
+#     expresión de aquí usa un selector de rango, así que la consulta instantánea no lo
+#     necesita; se deja el mismo valor para que no parezca que aquí se decidió otra cosa.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: vetsoftware-aiproposal
+    folder: VetSoftware
+    # 1m como el resto de las reglas de producto. El coste de evaluar es despreciable y la
+    # latencia de detección importa: entre «el asistente empezó a servir vacío» y «alguien lo
+    # sabe» no debería haber más que el `for`.
+    interval: 1m
+    rules:
+      # ───────────────────────── 1. NO HAY TARIFA PUBLICADA ─────────────────────────
+      #
+      # El peor de los seis y el que motivó todo esto: el endpoint responde 200 con CERO
+      # LÍNEAS a todos los prospectos a la vez, sin error y sin que nada falle. Durante mucho
+      # tiempo la única evidencia fue que nadie compraba.
+      #
+      # DESDE 2026-08-31 SÍ HAY LOG, y el runbook lo usa como procedimiento: un WARN de
+      # `JpaSellableCatalogQueryPort` con VENTANA DE 5 MINUTOS que además dice cuántas
+      # peticiones se silenciaron desde el aviso anterior. Ojo al matiz operativo: al no ser
+      # «una vez por proceso», NO basta con mirar el arranque — hay línea en la ventana de la
+      # petición que falla, que es donde de verdad se busca.
+      - uid: vetsw-ai-proposal-no-catalog
+        title: VetSoftwareAiProposalNoCatalog
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              # El `by (deployment_environment_name, ai_outcome)` no es decorativo: el primero
+              # separa dev de prod (comparten `job`, ver la cabecera de las reglas HTTP) y el
+              # segundo hace que la CAUSA viaje hasta el título del mensaje de Slack.
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="no_catalog"}
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El asistente comercial responde sin ni una línea: no hay lista de precios publicada. Hay que publicar la tarifa"
+          description: >-
+            El asistente sirvió al menos una propuesta con `ai_outcome=no_catalog` en el
+            entorno indicado por `deployment_environment_name`: no existe ninguna lista de
+            precios publicada, así que el caso de uso responde 200 con cero líneas SIN llegar
+            a invocar el modelo. No es un fallo proporcional: la causa es global y afecta al
+            100 % de los prospectos que escriban mientras dure. Solo lo resuelve una persona
+            publicando la tarifa; no se cura solo ni con un reintento. El contador es
+            monótono, así que la alerta seguirá firing hasta que el proceso reinicie aunque
+            la tarifa ya esté publicada.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalnocatalog"
+
+      # ───────────────────── 2. HAY TARIFA, PERO NADA VENDIBLE ─────────────────────
+      #
+      # ⚠️ DESENLACE QUE TODAVÍA NO SE EMITE. `empty_catalog` lo está creando el backend en
+      # la rama `feature/el-asistente-callado-cuando-no-hay-tarifa`, separándolo de
+      # `no_catalog` (hoy los dos caminos llaman a `sinCatalogo()` y se cuentan como
+      # `no_catalog`). Se escribe la regla igual y a propósito: una regla cuya serie aún no
+      # existe simplemente evalúa vacío → NoData → OK, no molesta a nadie, y está lista el
+      # día que se despliegue sin que haya que acordarse de volver. Lo que NO se puede hacer
+      # es darla por vigente antes de tiempo; el runbook lo dice en su sección.
+      - uid: vetsw-ai-proposal-empty-catalog
+        title: VetSoftwareAiProposalEmptyCatalog
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="empty_catalog"}
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El asistente comercial responde sin ni una línea: la tarifa publicada no tiene nada vendible. Hay que añadir ítems a la lista de precios vigente"
+          description: >-
+            El asistente sirvió al menos una propuesta con `ai_outcome=empty_catalog` en el
+            entorno indicado por `deployment_environment_name`: SÍ hay una lista de precios
+            publicada, pero al cargarla no quedó ni un ítem vendible, así que el prospecto
+            recibe 200 con cero líneas igual que en `no_catalog`. El efecto para el cliente es
+            idéntico y la acción es DISTINTA: allí falta publicar la tarifa, aquí la tarifa
+            está publicada y lo que falta son ítems vendibles dentro de ella (o el ciclo de
+            facturación pedido no tiene precio en esa lista). Por eso son dos alertas y no una.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalemptycatalog"
+
+      # ───────────────────── 3. NO HAY ACCESO AL MODELO ─────────────────────
+      #
+      # Palanca apagada o variable de entorno ausente. Falla el 100 % de las peticiones hasta
+      # que alguien corrija el despliegue.
+      #
+      # ESTE CAMINO ERA MUDO Y YA NO LO ES (2026-08-31). Ahora deja DOS rastros, los dos una
+      # sola vez por proceso —correcto aquí, porque la propiedad se lee al arrancar y no se
+      # mueve—: un INFO de `BedrockDisabledInvoker` al arrancar y un ERROR de
+      # `BedrockProposalGenerator` en la primera petición degradada. Los dos nombran la
+      # propiedad `vetsoftware.ai.proposal.bedrock.enabled` y la variable
+      # `AI_PROPOSAL_BEDROCK_ENABLED`, y los dos advierten EXPLÍCITAMENTE de que no afirman
+      # nada sobre el acceso al modelo en la cuenta de AWS. Esa advertencia no es adorno: el
+      # fallo real fue la variable ausente en tres revisiones seguidas de la definición de
+      # tarea, y se depuró contra la consola de AWS pidiendo un acceso ya concedido.
+      #
+      # La serie sigue siendo lo que vigila que el estado no dure meses; el log dice qué hacer.
+      - uid: vetsw-ai-proposal-model-unavailable
+        title: VetSoftwareAiProposalModelUnavailable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="degraded_model_unavailable"}
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El asistente comercial no está llamando a la IA: no hay acceso al modelo. Hay que revisar la palanca y las credenciales de Bedrock del despliegue"
+          description: >-
+            El asistente sirvió al menos una propuesta con
+            `ai_outcome=degraded_model_unavailable` en el entorno indicado por
+            `deployment_environment_name`: no hay acceso al modelo, así que la propuesta sale
+            por el camino determinista y sin nada de lo que aporta la IA. Las dos causas son
+            de configuración y las dos son globales —la palanca de invocación apagada o la
+            variable de entorno del modelo ausente—, de modo que afecta al 100 % de las
+            peticiones hasta que se corrija el despliegue. NO se recupera solo. Desde el
+            2026-08-31 el estado además se anuncia en el registro una vez por proceso
+            (`BedrockDisabledInvoker` al arrancar y `BedrockProposalGenerator` en la primera
+            petición degradada), y ese texto nombra la propiedad y la variable de entorno que
+            hay que revisar: el runbook lleva los literales.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalmodelunavailable"
+
+      # ───────────────────── 4. SE INVOCÓ, SE PAGÓ Y NO SIRVIÓ ─────────────────────
+      #
+      # ÚNICO umbral distinto de 1, y la razón es que este SÍ tiene un fallo suelto plausible:
+      # un timeout, un throttle, una salida que no pasó la validación. `>= 2` separa el
+      # incidente aislado —que el siguiente prospecto no nota— del sistémico.
+      #
+      # El `>= 2` VA DENTRO DE refId A, igual que en `VetSoftwareScheduledJobFailing`: al
+      # threshold de C se le deja un `> 0` que solo pregunta «¿quedó algo tras aplicar la
+      # guarda?». Es la convención del directorio, y evita depender de un evaluador `gte` que
+      # no está entre los tipos que usa ninguna otra regla del proyecto.
+      - uid: vetsw-ai-proposal-model-failed
+        title: VetSoftwareAiProposalModelFailed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="model_failed"}
+                ) >= 2
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "La IA del asistente comercial falla de forma repetida y cada llamada se paga: hay que revisar el proveedor del modelo"
+          description: >-
+            El asistente acumula 2 o más propuestas con `ai_outcome=model_failed` desde que
+            arrancó el proceso, en el entorno indicado por `deployment_environment_name`: el
+            modelo SE INVOCÓ, SE PAGÓ la llamada y la salida no sirvió (excepción, timeout o
+            una respuesta que no pasó la validación). Es la única población de las seis con
+            coste directo, y por eso es crítica pese a que el prospecto sigue recibiendo su
+            propuesta determinista. El umbral es 2 y no 1 a propósito: aquí un fallo aislado
+            es plausible y no es un incidente; dos ya no se explican por mala suerte.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalmodelfailed"
+
+      # ───────────────────── 5. PROPUESTA MUDA: SIN PISTAS DE CATÁLOGO ─────────────────────
+      #
+      # Warning y no critical: la propuesta SALE y lleva sus líneas. Lo que se degrada es la
+      # calidad del texto, no la capacidad de vender. Nadie tiene que levantarse por esto.
+      - uid: vetsw-ai-proposal-no-hints
+        title: VetSoftwareAiProposalNoHints
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="degraded_no_hints"}
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El asistente comercial responde sin IA por falta de pistas de catálogo: hay que sembrar catalog_item_ai_hints"
+          description: >-
+            El asistente sirvió al menos una propuesta con `ai_outcome=degraded_no_hints` en el
+            entorno indicado por `deployment_environment_name`: la tabla
+            `catalog_item_ai_hints` está vacía, así que no hay prompt que enviar y el modelo
+            no se invoca — deliberadamente no se inventa uno. La propuesta SALE y lleva sus
+            líneas: lo que se pierde es el texto que las justifica. Es un estado legítimo de
+            una base recién migrada (el changeset que las siembra no inserta nada si no hay
+            usuarios de sistema), no una avería, y por eso es warning y no crítica.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalnohints"
+
+      # ───────────────────── 6. TOPE DE GASTO DIARIO AGOTADO ─────────────────────
+      #
+      # Warning, y de las seis es la única que es una DECISIÓN DEL SISTEMA funcionando como se
+      # diseñó, no una avería. Se cura sola al cambiar el día. Se vigila igual porque «se
+      # gastó el cupo» y «se gastó el cupo TODOS los días» son cosas distintas, y sin señal
+      # solo se distinguen mirando la factura.
+      - uid: vetsw-ai-proposal-spend-cap
+        title: VetSoftwareAiProposalSpendCap
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: grafanacloud-prom
+            model:
+              refId: A
+              instant: true
+              expr: |
+                sum by (deployment_environment_name, ai_outcome) (
+                  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware",ai_outcome="degraded_spend_cap"}
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+          domain: backend
+          service: vetsoftware
+        annotations:
+          summary: "El asistente comercial dejó de llamar a la IA: se agotó el tope de gasto diario. Se cura solo mañana; subir el tope solo si es habitual"
+          description: >-
+            El asistente sirvió al menos una propuesta con `ai_outcome=degraded_spend_cap` en
+            el entorno indicado por `deployment_environment_name`: el tope de gasto diario del
+            modelo está agotado y la guarda es fail-closed, así que no se invoca y la propuesta
+            sale por el camino determinista. Es la protección funcionando, no una avería, y se
+            resuelve sola al cambiar el día. Lo que hay que mirar no es el evento suelto sino
+            la repetición: si aparece varios días seguidos, o el tope se quedó corto para el
+            tráfico real o alguien está consumiéndolo, y las dos respuestas son distintas.
+          runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalspendcap"

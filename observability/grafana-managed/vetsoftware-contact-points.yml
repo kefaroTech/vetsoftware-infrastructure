@@ -53,7 +53,7 @@
 # ── Mensaje: por qué hay plantillas propias y qué decide cada parte ──────────────────────
 # Las plantillas por defecto de Grafana producen un mensaje que NO dice lo que pasa: ponen
 # en el título el nombre de la regla más un revoltijo de valores de labels sin sus claves,
-# y NO imprimen `summary` ni `description` — que en este proyecto existen en las 27 reglas,
+# y NO imprimen `summary` ni `description` — que en este proyecto existen en las 38 reglas,
 # están escritas en español y son justamente la explicación del incidente. El valor sale
 # además en crudo, con el ruido de coma flotante del cálculo (`99.99999999999991`). Por eso
 # aquí se fija `title` y `text` a mano:
@@ -69,7 +69,7 @@
 #     la API, y un ASCII puro no puede romperse por el camino. Slack los renderiza igual.
 #   - VALOR formateado con `printf "%.2f"`. El ruido de coma flotante no es información y
 #     hace dudar del dato entero.
-#   - Se omite el refId `C` de `.Values`: en las 27 reglas `condition: C` es el umbral
+#   - Se omite el refId `C` de `.Values`: en las 38 reglas `condition: C` es el umbral
 #     (expresión `threshold`), que vale 1 siempre que la alerta dispara. Imprimirlo es ruido
 #     constante. Si alguna regla futura usa otra letra como condición, aparecerá un `1.00`
 #     de más — molesto, no peligroso.
@@ -82,7 +82,7 @@
 #     ya rellenos). `.DashboardURL` se imprime SOLO si existe: hoy ninguna regla trae las
 #     anotaciones `__dashboardUid__`/`__panelId__`, así que no saldrá — está puesto para que
 #     funcione el día que alguna las lleve, sin tocar la plantilla.
-#   - CON enlace al runbook. Las 27 reglas traen la anotación `runbook`, y desde el PR #81 el
+#   - CON enlace al runbook. Las 38 reglas traen la anotación `runbook`, y desde el PR #81 el
 #     fichero `docs/ALERTAMIENTO_OPERATIVO.md` existe con una sección por alerta y sus anclas
 #     verificadas una a una. La anotación es URL ABSOLUTA porque una ruta relativa no es
 #     clicable en Slack, y apunta a la rama `develop` a propósito: es donde el documento entra

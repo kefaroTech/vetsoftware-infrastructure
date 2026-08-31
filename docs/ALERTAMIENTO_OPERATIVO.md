@@ -1,6 +1,6 @@
 # Alertamiento operativo — alertas de Grafana Cloud
 
-Runbook de las **27 alertas Grafana-managed** definidas en `observability/grafana-managed/`.
+Runbook de las **35 alertas Grafana-managed** (38 reglas: `VetSoftwareScheduledJobFailing` tiene tres variantes por familia de cadencia y `VetSoftwareEmailSendFailing` dos por severidad) definidas en `observability/grafana-managed/`.
 Cada regla enlaza aquí desde su anotación `runbook`, y el ancla es el nombre de la regla en
 minúsculas: la sección `### VetSoftwareSloFastBurn` responde a `#vetsoftwareslofastburn`.
 **Si renombras una regla, renombra su encabezado o rompes el enlace.**
@@ -232,10 +232,12 @@ propósito: el antirrebote real ya lo da la doble ventana, y esta alerta es `cri
 - **TEL-37 — los logs de dev no llevan `service_version`.** «¿Empezó con el último despliegue?»
   no se responde filtrando en Loki: hay que triangular por hora contra las métricas, que sí lo
   llevan.
-- **TEL-04 — el filtro de cardinalidad descarta métricas sin dejar rastro.**
-  `BusinessMetricCardinalityFilter.java:97-100` tira el meter completo, sin contador ni log,
-  cuando aparece un valor fuera de la allowlist. Si el denominador de un SLI de negocio cae de
-  golpe sin causa aparente, sospecha de esto antes que de una caída de tráfico.
+- **TEL-04 — el filtro de cardinalidad tira el medidor completo cuando aparece un valor fuera de
+  la allowlist.** Si el denominador de un SLI de negocio cae de golpe sin causa aparente, sospecha
+  de esto antes que de una caída de tráfico. **Ya no es invisible**: desde `origin/develop` deja
+  contador (`vetsoftware_observability_metrics_denied_total`) y un `ERROR` que nombra la etiqueta y
+  el valor. Detalle completo, con la trampa del tope de log, en el defecto TEL-04 de
+  `VetSoftwareSloSeriesAbsent`.
 
 ---
 
@@ -330,8 +332,9 @@ ruta de warning añade `group_wait: 5m`: unos ~20 minutos hasta Slack, con recor
   FastBurn **no** silencia el SlowBurn de otro SLO. Lo que sí ocurre es la **agrupación**: todas
   las instancias de este `alertname` se compactan en una notificación.
 - **TEL-28** — sin exemplars, del p99 alto no se salta a una traza de ejemplo.
-- **TEL-04** — un valor nuevo fuera de la allowlist hace desaparecer el meter sin contador, lo
-  que se ve como una caída de denominador y no como un error.
+- **TEL-04** — un valor nuevo fuera de la allowlist hace desaparecer el medidor entero, lo que se
+  ve como una caída de denominador y no como un error. Se confirma en un vistazo con
+  `vetsoftware_observability_metrics_denied_total`, que hoy sí existe.
 
 ---
 
@@ -418,7 +421,9 @@ este umbral. Si alguien quiere actuar de madrugada, la señal que lo justifica e
   tienen prueba»). Una regresión en esta expresión pasaría el gate sin ruido. Y las pruebas que sí
   existen validan la **edición local** (nombres `_seconds_`): no cubren estos gemelos cloud.
 - **TEL-05** — la misma trampa de `result="rejected"` en DIAN.
-- **TEL-04** — descartes del filtro de cardinalidad sin contador.
+- **TEL-04** — descartes del filtro de cardinalidad; hoy los cuenta
+  `vetsoftware_observability_metrics_denied_total`, pero **ninguna regla lo vigila**, así que hay
+  que mirarlo a mano.
 
 ---
 
@@ -705,7 +710,10 @@ pérdida de medición. Una hora la distingue de un hueco real. Es `warning`, con
    correcto es: primero se añade el borde en `management.metrics.distribution.slo` del backend,
    después se toca la regla.
 4. **La métrica se está descartando por el filtro de cardinalidad** (TEL-04): un valor nuevo fuera
-   de la allowlist tira el meter completo, sin contador y sin log.
+   de la allowlist tira el meter **completo** —no recorta la etiqueta, deniega el medidor entero—.
+   **Sí deja rastro, y hay que ir a buscarlo**: el contador
+   `vetsoftware_observability_metrics_denied_total{metric="<nombre>"}` y un `ERROR` del propio
+   filtro que nombra la etiqueta y el valor culpables. Ver el defecto TEL-04 más abajo.
 5. **El backend lleva más de 24 h sin arrancar.**
 
 **Qué hacer**
@@ -752,10 +760,38 @@ pérdida de medición. Una hora la distingue de un hueco real. Es `warning`, con
   como hueco aceptado. En prod lo cubre parcialmente el heartbeat (`vetsoftware-heartbeat-prod.yml`,
   que vigila `target_info` y `jvm_threads_live`); **en dev no lo cubre nada**, y no debe cubrirlo:
   dev se apaga a diario a propósito.
-- **TEL-04 — el filtro de cardinalidad descarta sin dejar rastro.**
-  `BusinessMetricCardinalityFilter.java:97-100` tira el meter completo sin contador, sin log y sin
-  test de paridad con los enums de origen. Es la única causa de esta alerta que **no** deja ninguna
-  huella en ningún sitio: si los pasos 2–5 dicen que hay tráfico y la métrica no aparece, es esto.
+- **TEL-04 — el filtro de cardinalidad descarta el medidor entero, pero YA NO lo hace en
+  silencio.** Sigue siendo la causa a mirar cuando los pasos 2–5 dicen que hay tráfico y la métrica
+  no aparece; lo que ha cambiado es que ahora **hay dos sitios donde comprobarlo**, y el consejo
+  anterior —«no deja ninguna huella en ningún sitio»— haría abandonar la búsqueda justo cuando hay
+  algo que encontrar. Verificado contra `origin/develop` el 2026-08-31, o sea en lo desplegado y no
+  en una rama:
+
+  1. **Un contador.** `vetsoftware.observability.metrics.denied` → en Prometheus
+     `vetsoftware_observability_metrics_denied_total`, con una etiqueta `metric` por cada nombre de
+     `BusinessMetricNames` (leídos por reflexión) más un cubo `other`. **Cualquier valor mayor que
+     cero es un panel ciego.** Y no hay problema de «quién vigila al vigilante»: el filtro solo mira
+     nombres que empiezan por `vetsoftware.business.`, y este contador no empieza por ahí, así que
+     no puede denegarse a sí mismo.
+  2. **Un `ERROR` en el log**, en dos variantes que ya distinguen el diagnóstico: *clave* no
+     declarada (dice que si es un identificador la corrección es **dejar de emitirlo**, nunca
+     añadirlo a la lista) y *valor* no declarado (dice qué valor y qué etiqueta añadir a
+     `ALLOWED_VALUES`). Las dos imprimen el medidor completo.
+
+  **La trampa que queda, y es la que hay que conocer**: el log está **acotado a los primeros 100
+  identificadores distintos**; al llegar a ese tope escribe una única línea anunciando la supresión
+  y deja de registrar. **El contador sigue contándolos todos.** O sea: contador a cero y log vacío
+  significan «no está pasando»; contador subiendo y log vacío significan «pasa, y ya se pasó del
+  tope» — no «no hay rastro».
+
+  **Y hay test de paridad**, también en `origin/develop`: `BusinessMetricEnumAllowlistParityTest`,
+  28 casos `@EnumSource` que recorren los enums de origen —incluido `ai.outcome`— y exigen que el
+  filtro los acepte. Borrar una entrada de la lista blanca rompe el build. Lo que **no** cubre es
+  cualquier etiqueta que no venga de un enum, que sigue sin red.
+
+  (La referencia anterior a `BusinessMetricCardinalityFilter.java:97-100` estaba obsoleta: esas
+  líneas son hoy entradas de la lista blanca. La decisión de denegar vive en `accept()`, líneas
+  220-234 de `origin/develop`.)
 - **Discrepancia observada y no resuelta (2026-08-19).** `POST /auth/login/employee` y
   `POST /auth/login/system` **sí** tienen serie en las últimas 24 h, y aun así
   `auth-login/availability` no produce `sli_total_events:rate1d` y la alerta dispara para él. Las
@@ -2236,7 +2272,7 @@ Fuera de esas dos franjas, considéralo un incidente real.
 
 - **Ángulo muerto: el fallo total de Valkey no dispara esta alerta.** Si Valkey no responde en el arranque, la aplicación muere antes de emitir una sola métrica de Lettuce; con `noDataState: OK` la regla se queda en Normal. El caso `WRONGPASS` de §4 de `docs/ALERTAS_OPERATIVAS.md` es exactamente ese: «el backend arranca y muere». Lo detectan `cache-auth-failures` y `ecs-task-failed` en CloudWatch, no esta regla. **Verde aquí no significa Valkey sano.**
 - **Cardinalidad sin cota en `lettuce_*`.** Confirmado contra el stack: las series llevan `db_operation`, `db_system`, `error`, `net_sock_peer_addr`, `net_sock_peer_port`, `net_transport` más el recurso. Ninguna está acotada por el `MeterFilter` del backend, que solo cubre el prefijo `vetsoftware.business.` — es el punto (d) del hallazgo **TEL-18** y la misma familia que **TEL-04**. `error` toma el nombre de clase de cualquier excepción y `db_operation` el de cualquier comando Redis: una tormenta de errores heterogéneos multiplica series justo en el peor momento. Hoy son 6 valores de `db_operation` y 1 de `error`; en un incidente no hay techo declarado. Acotar `error` a un enum en un `MeterFilter` que cubra también `lettuce` es el arreglo.
-- Relacionado, **TEL-04**: cuando el filtro de cardinalidad deniega un meter lo tira entero sin contador, sin log y sin test de paridad. Si algún día se extiende el filtro a `lettuce`, un valor nuevo desaparecería del panel sin que nadie se entere. El arreglo del filtro (contador `vetsoftware.observability.metrics.denied`) es previo a extenderlo.
+- Relacionado, **TEL-04**: cuando el filtro de cardinalidad deniega un medidor lo tira entero. **El prerrequisito que aquí se pedía ya está hecho** — verificado contra `origin/develop` el 2026-08-31: el filtro publica el contador `vetsoftware.observability.metrics.denied` y escribe un `ERROR` con la etiqueta y el valor culpables, así que un valor nuevo **ya no desaparecería del panel sin que nadie se entere**. Extender el filtro a `lettuce` ha dejado de estar bloqueado por eso. Lo que **sigue faltando** es lo específico de aquí: `BusinessMetricEnumAllowlistParityTest` protege etiquetas **respaldadas por un enum**, y `error` no lo es —toma el nombre de clase de cualquier excepción—, así que acotarla exige primero convertirla en vocabulario cerrado. Ese sigue siendo el orden correcto: enum primero, filtro después.
 
 ---
 
@@ -3208,13 +3244,25 @@ en ningún stack. Son ~10–15 series por instancia de coste puro.
 - **La alerta te dice que creciste, no quién creció.** Es agregada por diseño (una serie de uso por
   instancia), así que los pasos 3–5 son manuales. No hay panel ni regla que atribuya el
   crecimiento a una familia de métricas.
-- **El filtro de cardinalidad descarta métricas sin dejar rastro (TEL-04).**
-  `BusinessMetricCardinalityFilter.java:97-100` aplica `DENY` al meter completo **sin contador, sin
-  log y sin test de paridad con los enums de origen**. `MicrometerBusinessMetrics` deriva valores
-  dinámicamente (`lower(status)`, `lower(movementType)`): un valor nuevo en `AppointmentStatus` o
-  `StockMovementType` cae fuera de la allowlist y sus incrementos **desaparecen**. En un incidente
-  no podrás distinguir «el filtro se la comió» de «no se está emitiendo». Toda ruta de descarte
-  debería incrementar una métrica propia y tener alerta.
+- **El filtro de cardinalidad aplica `DENY` al medidor completo (TEL-04), y la mitad de este
+  defecto ya está arreglada.** `MicrometerBusinessMetrics` deriva valores dinámicamente
+  (`lower(status)`, `lower(movementType)`): un valor nuevo en `AppointmentStatus` o
+  `StockMovementType` cae fuera de la allowlist y sus incrementos **desaparecen** de la serie.
+
+  **Lo que ya NO es cierto** —verificado contra `origin/develop` el 2026-08-31, o sea en lo
+  desplegado—: el descarte **sí** incrementa una métrica propia
+  (`vetsoftware_observability_metrics_denied_total`, una etiqueta `metric` por nombre de negocio
+  más un cubo `other`), **sí** escribe un `ERROR` que nombra etiqueta y valor, y **sí** hay test de
+  paridad con los enums de origen (`BusinessMetricEnumAllowlistParityTest`, 28 casos
+  `@EnumSource`, que cubre `AppointmentStatus` y `StockMovementType` entre otros y rompe el build
+  si se borra una entrada). Así que en un incidente **sí** se puede distinguir «el filtro se la
+  comió» de «no se está emitiendo»: se mira el contador.
+
+  **Lo que sigue pendiente, y es la otra mitad**: *«toda ruta de descarte debería incrementar una
+  métrica propia **y tener alerta**»* — la métrica llegó, **la alerta no**. Comprobado: ninguna
+  regla de `observability/` referencia ese contador, así que sube en silencio y solo lo ve quien
+  vaya a mirarlo. Sumado al tope de 100 identificadores distintos del log, un descarte que empiece
+  hoy puede pasar semanas sin que nadie se entere aunque el rastro exista.
 - **Depende de un tenant que no controlamos.** Si el datasource `grafanacloud-usage` falla, la
   regla entra en `execErrState: Error` y la alerta que protege a todas las demás se queda ciega —
   con la agravante de que su fallo llega como alerta de error de datasource, con otro nombre.
@@ -3522,7 +3570,480 @@ implemente el candado de los otros cuatro. El filtro que los excluye es la etiqu
 forma legítima. Por eso el `for` de esta regla en cloud es de 15 minutos y no de 5 como en el plano
 local. Quince minutos de solape ya no son un despliegue, son un escalado.
 
-## 5. Qué NO se vigila aquí, y por decisión
+## 5. Asistente comercial de propuestas (IA)
+
+Las seis alertas de este apartado responden a una sola pregunta: **¿el asistente comercial está
+sirviendo propuestas de verdad?** Cubren las dos mitades del encargo —«la petición no llegó a la
+IA» y «la IA no respondió»— y salen todas del **mismo contador**,
+`vetsoftware_business_ai_proposal_generated_total`, separadas por el valor de `ai_outcome`.
+
+**Por qué son seis y no una.** El endpoint responde **200 siempre**: ninguno de estos desenlaces
+es un error HTTP, ni lo será, porque el prospecto no puede hacer nada con un 500 y en varios casos
+ya se pagó por la llamada. Eso significa que ninguna alerta de HTTP ni de latencia puede verlos.
+Y los seis tienen **dueño y acción distintos**: publicar una tarifa, añadirle ítems, corregir el
+despliegue, mirar al proveedor del modelo, sembrar una tabla o revisar el cupo de gasto. Una única
+alerta «el asistente falla» obligaría a repetir el diagnóstico entero cada vez, que es exactamente
+lo que costó horas la primera vez que pasó.
+
+### Cinco cosas que hay que saber antes de tocar cualquiera de las seis
+
+**1. Ninguna usa `increase()`, y no es un descuido.** El contador de Micrometer se registra
+**perezosamente, en el primer incremento**. Con las 1–3 peticiones diarias que recibe dev, una
+serie que nace valiendo 1 y se queda plana hace que `increase(...[15m])` devuelva **0**: el único
+evento que va a haber sería literalmente invisible. Las seis reglas usan el **contador crudo como
+estado** — «desde que este proceso arrancó, ¿ha pasado esto?».
+
+Contraste útil, porque la regla de la casa no es «nunca uses `increase()`»:
+`VetSoftwareEntitlementResolutionEmpty` **sí** lo usa, y hace bien, porque *aquel* contador el
+backend lo registra de forma **ansiosa y en cero** en el arranque. La diferencia está en el
+backend, no en el gusto de quien escribe la regla. Si algún día `AiProposalMetrics` registrara sus
+seis series en cero al arrancar, estas reglas podrían pasar a ventana; hasta entonces, no.
+
+**2. El umbral es 1 (o 2), y eso NO es pereza estadística.** Una regla de «tasa de fallo > X %»
+necesita ≥ 20 eventos por ventana para que el estadístico exista (1/0,05). Dev recibe 1–3
+peticiones **al día**: es **aritméticamente imposible**, y escribirla reproduciría el defecto que
+este mismo documento ya narra siete veces —`VetSoftwareHttp5xxRateHigh` y las dos de latencia están
+**mudas en dev** justo por eso—.
+
+Pero aquí **no hace falta una tasa**, y esta es la parte que hay que entender antes de «mejorar» el
+umbral: ninguno de estos desenlaces es un fallo **proporcional**. Son fallos **totales**. No hay
+tarifa publicada, o no hay acceso al modelo, o el cupo está agotado: la causa es **global**, así que
+un solo evento significa que el **100 %** de los prospectos que escriban mientras dure está
+recibiendo lo mismo. El umbral de 1 es la traducción correcta de «esto le pasa a todo el mundo».
+
+**Consecuencia que conviene decir en voz alta: estas van a ser las primeras alertas del proyecto que
+sí funcionan en dev.** Las tres HTTP, las de latencia y `VetSoftwareScheduledJobOverdue` están
+calibradas para prod y en dev no suenan. Estas seis sí.
+
+**3. Un contador no baja, así que la alerta NO se resuelve al arreglar la causa.** Publicar la
+tarifa **detiene los incrementos nuevos** pero no devuelve la serie a cero. La alerta sigue
+*firing* hasta que **reinicia el proceso**: en dev, con el apagado de EventBridge de las 20:00; en
+prod, con el siguiente despliegue. Es el precio de la decisión 1 y se paga a sabiendas.
+
+La cuenta del ruido, que es lo que lo hace aceptable: la notification policy da
+`repeat_interval: 4h` a los críticos, o sea como mucho 6 recordatorios en 24 h, y menos en dev por
+el apagado nocturno — **del orden de 4 mensajes al día** mientras el problema siga abierto. El
+dueño lo asumió explícitamente para `no_catalog`. **Si molesta antes de arreglarlo, la salida es
+silenciar desde el enlace que trae el propio mensaje de Slack, no subir el umbral.**
+
+**4. Ninguna regla agrupa ni filtra por `ai_presentation`.** Una rama del backend mueve esa etiqueta
+de `deterministic` a `no_catalog` para el camino sin tarifa. Eso **no renombra** una serie: **crea
+una nueva y abandona la vieja**. Una regla que la usara se quedaría muda **exactamente el día del
+despliegue**, sin error, sin `NoData` y sin nada que lo dijera. `ai_outcome` no se mueve en esa
+rama, y es la única etiqueta que estas reglas necesitan.
+
+**5. `sum by (deployment_environment_name, ai_outcome)` agrupa por `ai_outcome` aunque el filtro ya
+lo fije a un solo valor.** No es redundante: `sum by (...)` decide qué etiquetas **sobreviven** a la
+agregación, y la plantilla de Slack imprime las etiquetas de la instancia. Sin ese `by`, el mensaje
+llegaría **sin la causa** y habría que abrir Grafana para saber cuál de los seis desenlaces es —
+que es justo lo que estas alertas existen para evitar.
+
+Para ver el estado de los seis a la vez, la consulta de cabecera:
+
+```promql
+sum by (deployment_environment_name, ai_outcome) (
+  vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware"}
+)
+```
+
+### VetSoftwareAiProposalNoCatalog
+
+**Qué significa** — **No hay ninguna lista de precios publicada.** El asistente responde **200 con
+cero líneas** a todos los prospectos, sin error y sin que nada falle. Durante mucho tiempo la única
+evidencia de este estado fue que **nadie compraba**.
+
+Es el peor de los seis y el que motivó todo el apartado. El caso de uso consulta la lista de precios
+publicada **antes de invocar nada**: si no la encuentra, sale por el camino de la propuesta vacía y
+ni siquiera llega al modelo. El prospecto ve un formulario que «funciona» y devuelve una propuesta
+sin nada dentro.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="no_catalog"}) > 0`
+con `for: 5m`, severidad **critical**.
+
+**Primero mirar** — Si hay **una `price_lists` en estado publicado** para el entorno que dice
+`deployment_environment_name`. No hace falta más: no es un problema de red, de la IA, de Bedrock ni
+del despliegue, y perseguir cualquiera de esos es tiempo perdido.
+
+**El registro, y OJO CON LA VENTANA.** `JpaSellableCatalogQueryPort` escribe un `WARN` cuyo texto es
+este, literal (el backend escribe sin tildes):
+
+```text
+No hay ninguna lista de precios PUBLISHED vigente: el asistente comercial responde sin una sola
+linea a todos los prospectos. ... Se resuelve publicando la tarifa desde la consola de plataforma
+con una cuenta real. Otras N peticiones dieron lo mismo desde el aviso anterior y no se
+escribieron; este aviso no se repite antes de 5 minutos.
+```
+
+**Ya NO es «una vez por proceso», y el consejo viejo de buscarlo en el arranque ha dejado de valer.**
+Desde el 31-08-2026 el aviso tiene **ventana de 5 minutos** y dice **cuántas peticiones se
+silenciaron** desde el anterior. El cambio es a mejor: **hay línea dentro de la ventana de la
+petición que falla**, no solo al arrancar, así que se acota por la hora del incidente en vez de
+tener que rebuscar en el arranque del contenedor. Y el número de suprimidas es el dato de volumen
+que la alerta no da: distingue «una petición suelta» de «esto le está pasando a todo el mundo ahora
+mismo».
+
+Recordatorio de Loki: desde el 18-08-2026 los atributos viajan **dentro del cuerpo** y no como
+etiquetas, así que hay que atravesarlo con `| json` (ver el aviso de
+`VetSoftwareEntitlementResolutionEmpty`). Filtrar por la subcadena `PUBLISHED vigente` es suficiente
+y no depende de ningún atributo estructurado.
+
+**Causas habituales** — La tarifa nunca se publicó (entorno recién sembrado); alguien la
+despublicó o publicó una versión nueva dejando la anterior fuera; una migración que recreó el
+catálogo sin dejar ninguna lista en estado publicado.
+
+**Qué hacer** — **Publicar la tarifa.** Solo lo arregla una persona: no hay reintento, no hay
+recuperación automática y ningún redespliegue lo cambia. Mientras no se haga, cada prospecto nuevo
+recibe una propuesta vacía.
+
+**Cuándo no es un incidente** — En un entorno recién creado y aún sin sembrar, mientras nadie use
+el asistente. En cuanto haya una sola petición, sí lo es.
+
+**Defectos conocidos de la señal** —
+
+- **No dice qué entorno hay que arreglar más allá de `deployment_environment_name`**, ni qué lista
+  de precios falta: la métrica no lleva empresa ni identificador, y eso es deliberado (una etiqueta
+  por empresa multiplicaría las series por el número de clínicas y el plan Free rechaza la ingesta
+  al llegar a 15.000 series, perdiendo **toda** la telemetría en silencio).
+- **No se resuelve sola al publicar la tarifa** (ver el punto 3 de la cabecera del apartado).
+- **Hasta que se despliegue la rama del backend que separa `empty_catalog`, esta alerta cubre los
+  dos casos**: hoy tanto «no hay lista publicada» como «la lista publicada no tiene nada vendible»
+  llaman al mismo camino y se cuentan como `no_catalog`. Si esta alerta suena y la tarifa **sí**
+  está publicada, el caso real es el de la sección siguiente.
+
+### VetSoftwareAiProposalEmptyCatalog
+
+> ⚠️ **Este desenlace todavía NO se emite.** `empty_catalog` lo está creando el backend en la rama
+> `feature/el-asistente-callado-cuando-no-hay-tarifa` (verificado el 2026-08-31: el valor **no está
+> en `origin/develop`**, ni en el enum de telemetría ni en la lista blanca de cardinalidad). La
+> regla está escrita y desplegada a propósito: **una regla cuya serie no existe evalúa vacío →
+> `NoData` → OK**, no molesta a nadie y queda lista el día del despliegue sin que haya que acordarse
+> de volver aquí. Hasta ese día, este caso llega por `VetSoftwareAiProposalNoCatalog`.
+>
+> **Dos cosas tienen que llegar juntas** para que empiece a medir: el valor nuevo en el enum
+> `Outcome` **y** su entrada en la lista blanca de `BusinessMetricCardinalityFilter`. Ese filtro no
+> recorta la etiqueta: **deniega el medidor entero** si el valor no está declarado, así que un
+> despliegue con lo primero y sin lo segundo dejaría la serie sin publicar y esta alerta muda sin
+> avisar.
+>
+> **Ese escenario ya NO puede salir del repositorio del backend**, y eso cambia lo que aquí se puede
+> prometer. `BusinessMetricEnumAllowlistParityTest` recorre con `@EnumSource` cada valor de
+> `AiProposalMetrics.Outcome`, cada `GenerationOutcome` traducido por `Outcome.from(...)` y cada
+> `FailureKind`, y exige que el filtro los acepte. Borrar cualquiera de las entradas **rompe el
+> build** — comprobado mutando las tres. Sigue haciendo falta un despliegue para que la serie
+> exista; lo que ha dejado de ser posible es desplegar una mitad sin la otra. Aquí no lo comprueba
+> nadie, y no hace falta: lo impide el repositorio de origen.
+>
+> La verificación desde este lado sigue costando un segundo y conviene hacerla igual, porque
+> responde a otra pregunta —«¿ha llegado ya el despliegue?»— y no a «¿está bien el código?»:
+>
+> ```promql
+> count by (ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware"})
+> ```
+>
+> Mientras no aparezca `empty_catalog` entre los valores devueltos, esta alerta no puede dispararse.
+>
+> **RETIRAR ESTE AVISO CUANDO** la consulta de arriba devuelva `empty_catalog` en el entorno de
+> prod. El PR del backend que lo publica está abierto en `kefaroTech/vetsoftware-backend`; una vez
+> fusionado y desplegado, este bloque entero sobra y la sección se lee como cualquier otra. Hay
+> tres avisos de este tipo en el apartado —aquí, en `VetSoftwareAiProposalModelUnavailable` y en
+> `VetSoftwareAiProposalModelFailed`—; se buscan con `RETIRAR ESTE AVISO CUANDO` y **se retiran los
+> tres a la vez**, porque los tres dependen del mismo despliegue.
+
+**Qué significa** — **Sí hay una tarifa publicada, pero al cargarla no quedó ni un ítem vendible**
+(o ninguno con precio para el ciclo de facturación que pidió el prospecto). El resultado para el
+cliente es **idéntico** al de la alerta anterior: 200 con cero líneas.
+
+**Por qué es una alerta aparte y no un caso de la anterior.** El efecto es el mismo y **la acción
+no**. Allí falta publicar una tarifa; aquí la tarifa está publicada y lo que falta son artículos
+vendibles dentro de ella. Quien recibe el aviso hace dos cosas distintas, y colapsarlas en un
+mensaje obligaría a averiguar cuál de las dos es antes de empezar.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="empty_catalog"}) > 0`
+con `for: 5m`, severidad **critical**.
+
+**Primero mirar** — **El log ya trae el diagnóstico hecho, con la lista y el ciclo dentro**, que es
+justo lo que evita reproducir el caso para saber cuál de los dos fallaba.
+`JpaSellableCatalogQueryPort` escribe un `WARN` con este texto literal (misma ventana de 5 minutos y
+mismo recuento de suprimidas que el aviso de «sin tarifa»):
+
+```text
+La lista de precios {id} esta PUBLISHED y vigente pero no cuelga de ella ni un articulo vendible
+para el ciclo {ciclo}: el asistente comercial responde sin una sola linea a todos los prospectos.
+OJO, NO es el mismo estado que 'no hay tarifa publicada': aqui la tarifa ya esta bien y lo que hay
+que revisar es el catalogo -articulos en ACTIVE y enabled, y con tramo de precio para ESE ciclo-.
+```
+
+Con la lista y el ciclo en la mano, las **tres** condiciones que hay que comprobar **a la vez** son
+las que dice el propio mensaje: artículos en `ACTIVE` **y** `enabled`, que la lista tenga tramos, y
+que los tenga **para ese ciclo de facturación**. Una tarifa solo con tramos anuales deja mudo al
+asistente para quien pide mensual, y esa asimetría no se ve mirando la tabla por encima.
+
+**Causas habituales** — Una lista publicada vacía (se creó y se publicó antes de cargarla); todos
+los artículos marcados como no vendibles o no autoservicio; precios cargados solo para un ciclo de
+facturación y el prospecto pidiendo el otro.
+
+**Qué hacer** — Añadir artículos vendibles a la lista vigente, o precios para el ciclo que falta.
+Igual que la anterior: **es trabajo de una persona**, no se recupera solo.
+
+**Cuándo no es un incidente** — Durante la carga inicial de un catálogo, si ya se sabe que está a
+medias y nadie está usando el asistente.
+
+**Defectos conocidos de la señal** —
+
+- **Hoy no existe** (ver el aviso de arriba). Antes de dar por bueno que «no está pasando», hay que
+  comprobar que el desenlace se emite; si no se emite, la ausencia de alerta no prueba nada.
+- **No distingue «lista vacía» de «ciclo sin precio»**, que son dos arreglos distintos. Esa
+  distinción vive en el registro, no en la métrica.
+- No se resuelve sola al arreglar el catálogo (punto 3 de la cabecera).
+
+### VetSoftwareAiProposalModelUnavailable
+
+**Qué significa** — **No hay acceso al modelo.** La propuesta sale por el camino determinista, con
+sus líneas, pero **sin nada de lo que aporta la IA**. Es un estado de **configuración**, no una
+avería: la palanca de invocación está apagada o falta la variable de entorno del modelo.
+
+**Es global y no se recupera solo.** Mientras dure, el **100 %** de las peticiones sale degradada.
+Ningún reintento, ninguna hora del día y ningún prospecto distinto lo cambia.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="degraded_model_unavailable"}) > 0`
+con `for: 5m`, severidad **critical**.
+
+**Primero mirar** — **El registro, que desde el 31-08-2026 nombra la propiedad y la variable
+exactas.** Hay dos líneas, las dos **una sola vez por proceso** —y aquí eso es lo correcto, a
+diferencia del aviso de «sin tarifa»: aquel depende del contenido de la base de datos y puede
+cambiar con el sistema en marcha, mientras que esto depende de una propiedad que se lee al arrancar
+y no se mueve en toda la vida del proceso—:
+
+- `INFO` de **`BedrockDisabledInvoker`** al arrancar, cuando el bean se instala.
+- `ERROR` de **`BedrockProposalGenerator`** en la primera petición que sale degradada:
+
+```text
+La invocacion del modelo esta apagada y el asistente comercial servira el 100 % de las propuestas
+por el camino determinista, sin leer el texto del prospecto. La propiedad es
+vetsoftware.ai.proposal.bedrock.enabled y la publica la variable de entorno
+AI_PROPOSAL_BEDROCK_ENABLED: si no aparece en la definicion de tarea, no vale 'true' y este es el
+resultado. NO dice nada sobre el acceso al modelo en la cuenta de AWS, que este proceso no consulta.
+```
+
+**La última frase es parte del procedimiento, no una coletilla.** El fallo real fue la variable
+`AI_PROPOSAL_BEDROCK_ENABLED` ausente en **tres revisiones seguidas** de la definición de tarea, y
+se depuró contra la consola de AWS **pidiendo un acceso al modelo que ya estaba concedido**, porque
+el sistema no decía lo que le pasaba. Con este texto delante, el orden correcto es: **primero la
+definición de tarea, después la consola de AWS.**
+
+⛔ **No busques `no esta habilitado en esta cuenta` en Loki: esa cadena ya no se escribe.** Era el
+texto de la clase anterior, `ModelAccessNotEnabledInvoker`, **que se borró**; hoy la clase es
+`BedrockDisabledInvoker`, y hay un test que prohíbe explícitamente que el mensaje vuelva a afirmar
+eso (`BedrockProposalGeneratorTest`, `.doesNotContain("no esta habilitado en esta cuenta")`).
+Buscar la cadena vieja no devuelve nada, y **vacío se lee igual que «no ha pasado»**.
+
+**Lo que NO se renombró, a propósito:** el código de fallo sigue siendo el literal
+`MODEL_ACCESS_NOT_ENABLED`. Es vocabulario cerrado, viaja como `ai.failure.code` a la telemetría y
+queda escrito en `ai_proposal_turns`; cambiarlo partiría en dos cualquier serie histórica. Si lo ves
+en un span o en esa tabla, es este estado, aunque el nombre hable de «acceso».
+
+**Después, la configuración** del servicio en el entorno que dice `deployment_environment_name`: la
+palanca que habilita la invocación real y la variable con el identificador de modelo. Las dos viajan
+en la definición de tarea; un despliegue que las pierda produce este estado desde la primera
+petición.
+
+**Causas habituales** — La palanca quedó apagada tras un despliegue; el identificador de modelo
+ausente o vacío; el acceso al modelo de Bedrock no concedido en la cuenta o en la región (el
+formulario de habilitación sin completar es el estado histórico de este proyecto); credenciales o
+permisos de invocación retirados del rol de la tarea.
+
+**Qué hacer** — Corregir el despliegue y volver a desplegar. **Hasta entonces el asistente sigue
+respondiendo**, así que no hay urgencia de corte de servicio, pero sí de producto: se está
+vendiendo con la mitad del producto apagada.
+
+**Cuándo no es un incidente** — Si la invocación real está apagada **a propósito** (por ejemplo,
+en un entorno donde no se quiere gasto de Bedrock). En ese caso la decisión correcta no es ignorar
+la alerta: es **silenciarla con un motivo escrito**, para que el silencio caduque y alguien lo
+revise, en vez de aprender a no mirar los mensajes.
+
+**Defectos conocidos de la señal** —
+
+- **Esta alerta ya no es la única señal, y eso mejora el procedimiento sin sustituirlo.** El camino
+  era **mudo** —devolvía la degradación sin escribir una sola línea— y desde el 31-08-2026 deja las
+  dos líneas de arriba. Reparto de papeles: **el log dice qué hacer** (nombra la propiedad y la
+  variable), **la serie vigila que el estado no dure meses**. Ojo a la contrapartida de que sea una
+  vez por proceso: si el contenedor lleva días arriba, la línea está **en el arranque** y no en el
+  momento en que llegó la alerta, así que la búsqueda no se puede acotar a la última hora.
+- **No distingue las tres causas** —palanca apagada, variable ausente y acceso a Bedrock no
+  concedido— porque todas colapsan en el mismo desenlace. Se separan mirando la configuración, no
+  la métrica. El log **sí** descarta una de las tres: dice explícitamente que no consultó la cuenta
+  de AWS.
+- **El texto de arriba es el de la rama del backend, no el de lo desplegado hoy.** Misma disciplina
+  que «Corregido no es vigente» de la cabecera de este documento: verificado el 2026-08-31,
+  `origin/develop` todavía trae la clase antigua `ModelAccessNotEnabledInvoker`, con un `INFO` de
+  arranque que **sí** afirma que el acceso no está habilitado en la cuenta —justo la imprecisión que
+  costó la depuración contra la consola de AWS— y **sin** el `ERROR` de la primera petición. Mientras
+  el despliegue no llegue, el procedimiento válido es el de la configuración, la cadena nueva no
+  aparecerá en Loki y la vieja sí. **RETIRAR ESTE AVISO CUANDO** una búsqueda en Loki de
+  `vetsoftware.ai.proposal.bedrock.enabled` devuelva líneas de prod: entonces el literal nuevo es
+  el vigente y este bullet sobra entero.
+
+### VetSoftwareAiProposalModelFailed
+
+**Qué significa** — El modelo **se invocó, se pagó la llamada y la salida no sirvió**: excepción,
+timeout o una respuesta que no pasó la validación. Es la única población de las seis con **coste
+directo**, y por eso es crítica aunque el prospecto siga recibiendo su propuesta determinista.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="model_failed"}) >= 2`
+con `for: 10m`, severidad **critical**.
+
+**Por qué el umbral es 2 y no 1**, siendo el único de los seis que se sale de la regla: aquí un
+fallo aislado **es plausible y no es un incidente** —un timeout, un throttle puntual— y el prospecto
+siguiente no lo nota. En los otros cinco la causa es global y un evento ya prueba el fallo total;
+en este, no. Dos ya no se explican por mala suerte.
+
+**Detalle de forma, para quien edite la regla**: el `>= 2` vive **dentro de refId A** y el
+threshold de refId C se queda con un `> 0` que solo pregunta «¿quedó algo tras aplicar la guarda?».
+Es la misma convención que `VetSoftwareScheduledJobFailing`, y evita depender de un evaluador `gte`
+que no usa ninguna otra regla del proyecto.
+
+**Primero mirar** — El registro del invocador del modelo, filtrando por el campo `ai.failure.code`
+**dentro del cuerpo del mensaje** (ver el aviso de Loki en
+`VetSoftwareEntitlementResolutionEmpty`: desde el 18-08-2026 los atributos ya no son etiquetas de
+Loki y hay que atravesar el cuerpo con `| json`). Ese código separa el throttle del timeout, del
+acceso denegado y de la salida inválida, que es la primera bifurcación real del diagnóstico.
+
+**Causas habituales** — Throttling del proveedor por ráfaga; timeouts bajo carga; una salida del
+modelo que no pasa la validación de forma sistemática (típico tras cambiar de modelo o de versión
+de prompt); acceso al modelo revocado a mitad de camino.
+
+**Qué hacer** — Si el código apunta a throttle o timeout y no se repite, no hay nada que hacer más
+que anotarlo. Si es sistemático, **desactivar la invocación real es una salida legítima y barata**:
+el asistente sigue sirviendo propuestas deterministas y se deja de pagar por llamadas que no
+sirven. Eso hará aparecer `VetSoftwareAiProposalModelUnavailable`, que en ese contexto es el estado
+buscado y no un problema nuevo.
+
+**Cuándo no es un incidente** — Dos fallos sueltos y espaciados en un día de pruebas contra un
+modelo nuevo. La señal a vigilar es la repetición.
+
+**Defectos conocidos de la señal** —
+
+- **HOY LA MÉTRICA NO SEPARA EL FALLO TRANSITORIO DEL SISTÉMICO.** Un throttle puntual y un modelo
+  que rechaza todas las salidas incrementan **el mismo contador**, y esta alerta los distingue solo
+  por el número de eventos. La distinción real está en el registro (`ai.failure.code`), o sea que
+  hay que salir de la métrica para hacerla.
+- **Va a mejorar, y la regla no depende de ello.** La misma rama del backend
+  (`feature/el-asistente-callado-cuando-no-hay-tarifa`) añade la etiqueta `ai.failure.kind`, que en
+  Prometheus se lee **`ai_failure_kind`**, con **tres** valores: `none`, `transient` y `systemic`.
+  **Son tres y no dos por una exigencia del registro, no por gusto**: `PrometheusMeterRegistry`
+  obliga a que todas las muestras de un mismo medidor lleven el mismo juego de claves, así que los
+  turnos que no fallaron tienen que traer la etiqueta igualmente, y su valor es `none`. Verificado
+  el 2026-08-31: **no está en `origin/develop` todavía**. Cuando llegue, esta alerta seguirá
+  funcionando **sin tocarla**, porque `sum by (deployment_environment_name, ai_outcome)` agrega
+  sobre cualquier etiqueta que no nombre — una etiqueta nueva no la rompe ni la deja muda. Esa
+  independencia es deliberada: la regla **no debe** llevar `ai_failure_kind` en su filtro ni en su
+  `by` hasta que la etiqueta esté desplegada, o se quedaría muda el día anterior al despliegue.
+- **Cuando `ai_failure_kind` esté vivo**, el refinamiento natural es partir esta alerta en dos, y el
+  filtro del lado grave es exactamente `ai_failure_kind="systemic"`:
+
+  ```promql
+  sum by (deployment_environment_name, ai_outcome, ai_failure_kind) (
+    vetsoftware_business_ai_proposal_generated_total{
+      job="mainvet/vetsoftware", ai_outcome="model_failed", ai_failure_kind="systemic"
+    }
+  ) > 0
+  ```
+
+  Con umbral 1 para `systemic` y uno más alto para `transient`; entonces sí habrá que revisar el
+  `>= 2` de aquí. **No antes**, y no se adelanta «para dejarlo preparado»: un filtro por una
+  etiqueta que todavía no existe devuelve vacío y deja la alerta muda desde el minuto uno.
+- El acoplamiento entre la etiqueta y la lista blanca de cardinalidad **está atado por un test**
+  —`BusinessMetricEnumAllowlistParityTest` recorre `FailureKind` con `@EnumSource` y exige que el
+  filtro acepte los tres valores—, así que el escenario «se despliega la etiqueta, el filtro deniega
+  el medidor y la serie no se publica nunca» **no puede salir del repositorio del backend**. (Ese
+  test ya cubre `ai.outcome` en `origin/develop`; lo que llega con la rama es la rama `FailureKind`
+  del mismo test.)
+- **RETIRAR EL AVISO DE «no está en develop todavía»** de los dos puntos anteriores cuando
+  `count by (ai_failure_kind) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware"})`
+  devuelva los tres valores. Mientras devuelva vacío o un solo valor, el aviso sigue vigente.
+- El contador es **acumulado desde el arranque del proceso**, no una ventana: «2 fallos» puede
+  significar dos seguidos o dos separados por horas del mismo día. Es una consecuencia asumida de no
+  usar `increase()` (punto 1 de la cabecera del apartado).
+
+### VetSoftwareAiProposalNoHints
+
+**Qué significa** — La tabla `catalog_item_ai_hints` está **vacía**: no hay pistas con las que
+construir el prompt, así que el modelo **no se invoca** —deliberadamente no se inventa uno— y la
+propuesta sale muda. **Sale, y lleva sus líneas**: lo que se pierde es el texto que las justifica.
+
+**Por qué es warning y no critical.** Degrada la **calidad** de la propuesta sin romper la
+capacidad de vender, y es un estado **legítimo** de una base recién migrada: el changeset que
+siembra las pistas no inserta nada si no existen los usuarios de sistema. Nadie tiene que
+levantarse por esto.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="degraded_no_hints"}) > 0`
+con `for: 15m`, severidad **warning**.
+
+**Primero mirar** — Cuántas filas tiene `catalog_item_ai_hints` en el entorno indicado. Si son
+cero, ya está el diagnóstico entero.
+
+**Causas habituales** — Base recién migrada y nunca sembrada; el changeset de siembra que no
+insertó por faltarle su precondición; alguien vació la tabla al recargar el catálogo.
+
+**Qué hacer** — Sembrar las pistas. No corre prisa el mismo día, pero **cada propuesta servida
+mientras tanto sale peor de lo que podría**, y eso no deja rastro en ningún sitio salvo aquí.
+
+**Cuándo no es un incidente** — En un entorno de pruebas recién levantado, o mientras se rehace el
+catálogo a propósito.
+
+**Defectos conocidos de la señal** —
+
+- **No distingue «la tabla está vacía» de «la tabla tiene filas pero ninguna aplica a los artículos
+  de esta propuesta»**, si el segundo caso llegara a existir. Hoy el desenlace se emite por el
+  primero; si algún día se afina la selección de pistas, esta alerta empezaría a mezclar dos cosas
+  y habría que volver aquí.
+- No se resuelve sola al sembrar la tabla (punto 3 de la cabecera).
+
+### VetSoftwareAiProposalSpendCap
+
+**Qué significa** — El **tope de gasto diario** del modelo está agotado. La guarda es
+*fail-closed*: no se invoca y la propuesta sale por el camino determinista.
+
+**De las seis, es la única que es una decisión del sistema funcionando como se diseñó**, no una
+avería. Se cura sola al cambiar el día. Se vigila igual porque «se gastó el cupo» y «se gasta el
+cupo **todos** los días» son cosas distintas, y sin señal solo se distinguen mirando la factura de
+AWS a fin de mes.
+
+**Qué la dispara** —
+`sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="degraded_spend_cap"}) > 0`
+con `for: 15m`, severidad **warning**.
+
+**Primero mirar** — El gasto del día contra el tope configurado, y **cuántos días seguidos** viene
+apareciendo. El evento suelto no es la pregunta; la racha sí.
+
+**Causas habituales** — Tope calibrado para un tráfico menor del real; un pico legítimo de
+prospectos; peticiones repetidas de la misma fuente consumiendo el cupo (ver
+`VetSoftwareAuthFailureSpike` y el resto del apartado de seguridad si se sospecha abuso); un modelo
+más caro que el anterior tras un cambio de configuración.
+
+**Qué hacer** — Si es un día puntual, nada: mañana se restablece. Si se repite, decidir entre
+**subir el tope** (si el tráfico real lo justifica) o **averiguar quién lo consume**. Son respuestas
+distintas y la métrica sola no elige entre ellas.
+
+**Cuándo no es un incidente** — El día de una demo, una campaña o una prueba de carga del
+asistente. Ahí el tope hizo exactamente lo que debía.
+
+**Defectos conocidos de la señal** —
+
+- **No dice cuánto se gastó ni cuánto falta para el tope**: solo que se cruzó. El importe lo publica
+  el guardián de gasto en su propia métrica, que es donde hay que mirar para calibrar el tope; esta
+  alerta solo avisa de que la calibración importa hoy.
+- **No distingue el consumo legítimo del abuso.** Con un tope compartido, un solo origen puede
+  agotarlo para todos los demás, y en la métrica se ve igual que un buen día de ventas.
+- No se resuelve sola dentro del mismo día aunque el problema haya pasado (punto 3 de la cabecera):
+  el contador no baja hasta que reinicia el proceso.
+
+## 6. Qué NO se vigila aquí, y por decisión
 
 No todo hueco de cobertura es un olvido. Este apartado existe para que una decisión ya tomada no
 haya que volver a tomarla cada seis meses, y para que quien la reabra lo haga con el expediente
