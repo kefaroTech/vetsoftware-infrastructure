@@ -19,6 +19,44 @@ del qué y del porqué vive en `README.md` y en `docs/`; la política de ramas y
 `environments/dev` y `environments/prod` son **roots independientes**: se validan y planifican
 por separado, y nunca se ejecuta `apply` desde una sesión — eso es de los workflows.
 
+## Comentarios en el código
+
+**El comentario es la última opción.** Antes van un nombre que diga lo que hace, un método
+pequeño y un flujo que se lea de arriba abajo. Si un comentario existe porque el código
+cuesta de leer, **arregla el código**.
+
+- **Nunca narres QUÉ hace el código.** `# Crea el bucket` sobra: la línea de
+  debajo ya lo dice. Igual `# Comprueba si existe` o `# Devuelve el resultado`.
+- **Nunca guardes en un comentario** hallazgos de implementación, análisis, contexto de la
+  tarea o del ticket, tu razonamiento, notas de depuración, narración histórica («antes este
+  método…») ni la descripción del cambio que acabas de hacer. Eso va en la respuesta final,
+  no en el código fuente. Las formas que más se cuelan: `# Añadido porque el ticket pide…`,
+  `# Según mi análisis…`, `# Esto corrige el problema de…`, `# Esto asegura que…`.
+- **Sí se gana su sitio cuando explica POR QUÉ existe algo no obvio**: una regla de negocio
+  que no se deduce del código, el límite de una API externa, una restricción de
+  compatibilidad, una suposición de concurrencia, una decisión de seguridad, una invariante,
+  un workaround necesario, o código que parece incorrecto y es intencionadamente así.
+
+```hcl
+# ElastiCache no admite stop: apagar dev obliga a destruir y recrear, y eso
+# cambia el endpoint y rompe REDIS_URL en silencio.
+```
+
+**Cierre de toda tarea de implementación:** repasa el `git diff`, borra los comentarios que
+añadiste y no expliquen un porqué, y simplifica el código cuando el comentario solo existía
+para descifrarlo. No toques comentarios previos ajenos al cambio, salvo que este los haya
+vuelto incorrectos.
+
+El objetivo no es cero comentarios: es que sean **excepcionales y valiosos** en vez de
+rutinarios y descriptivos. La versión larga, con el alcance completo y las excepciones, está
+en `.claude/rules/code-comments.md` del directorio de coordinación.
+
+**Alcance en este repo.** Casi todo aquí es configuración (`.tf`, `.yml`, `.ps1`), donde un
+comentario que explica un porqué —un límite del proveedor, un valor que no se puede cambiar
+en caliente, el motivo de un `lifecycle` o de un `ignore_changes`— sí sirve y se queda. Lo
+que no cambia es lo otro: ni narración de la tarea, ni hallazgos de la investigación, ni
+descripción del cambio que acabas de hacer. `README.md` y `docs/` quedan fuera de esta regla.
+
 ## Cierre obligatorio — nada abierto sin issue
 
 **Regla dura del proyecto, sin excepciones y sin pedir permiso.** Todo lo que quede abierto al
