@@ -172,7 +172,7 @@ groups:
             la tarifa ya esté publicada.
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalnocatalog"
 
-      # ───────────────────── 2. HAY TARIFA, PERO NADA VENDIBLE ─────────────────────
+      # ───────────────── 2. HAY TARIFA, PERO CON ELLA NO SE COTIZA ─────────────────
       #
       # ⚠️ DESENLACE QUE TODAVÍA NO SE EMITE. `empty_catalog` lo está creando el backend en
       # la rama `feature/el-asistente-callado-cuando-no-hay-tarifa`, separándolo de
@@ -181,6 +181,23 @@ groups:
       # existe simplemente evalúa vacío → NoData → OK, no molesta a nadie, y está lista el
       # día que se despliegue sin que haya que acordarse de volver. Lo que NO se puede hacer
       # es darla por vigente antes de tiempo; el runbook lo dice en su sección.
+      #
+      # ⚠️ Y DESDE `feature/el-nucleo-no-es-un-bit-ambiguo` SON DOS CAUSAS, NO UNA. Ese
+      # arreglo enruta a ESTE desenlace un tercer estado que antes salía como 200 mudo sin
+      # contarse: la tarifa tiene artículos, pero ninguno es un módulo `is_core` cotizable,
+      # así que `ProposalCart` no tiene de dónde partir. Se encaminó aquí a propósito -al
+      # desenlace que ya está vigilado- en vez de inventar uno nuevo, y la consecuencia cae
+      # de este lado: el mensaje de esta regla NO puede seguir diciendo solo «añade ítems»,
+      # porque en esa causa ítems hay y esa acción manda a revisar lo que ya está bien.
+      #
+      # POR QUÉ NO SE PARTE EN DOS ALERTAS, aunque el criterio de «efecto idéntico, acción
+      # distinta» lo pediría. Una serie nueva exige un valor nuevo de `ai_outcome`, y ese
+      # valor tiene que entrar en la lista blanca cerrada de `BusinessMetricCardinalityFilter`
+      # -que vive en el repositorio del backend y DENIEGA EL MEDIDOR ENTERO si el valor no
+      # está declarado-. Hasta que ese cambio se desplegara, la alerta nueva nacería muda: no
+      # habría serie que evaluar y nadie lo notaría. Una alerta que no dispara es peor que un
+      # mensaje mejorable, así que la distinción se resuelve donde SÍ está disponible hoy
+      # -el mensaje y el registro-, y el procedimiento para discriminarlas está en el runbook.
       - uid: vetsw-ai-proposal-empty-catalog
         title: VetSoftwareAiProposalEmptyCatalog
         condition: C
@@ -211,15 +228,25 @@ groups:
           domain: backend
           service: vetsoftware
         annotations:
-          summary: "El asistente comercial responde sin ni una línea: la tarifa publicada no tiene nada vendible. Hay que añadir ítems a la lista de precios vigente"
+          summary: "El asistente comercial responde sin ni una línea: hay tarifa publicada pero con ella no se cotiza. DOS causas y DOS acciones: (a) no cuelga de ella ni un ítem vendible para el ciclo → añadir ítems o precios a la lista vigente; (b) ítems sí hay pero ninguno es un módulo is_core cotizable → arreglar la fila del módulo núcleo, añadir ítems no sirve. El WARN de JpaSellableCatalogQueryPort dice cuál de las dos es"
           description: >-
             El asistente sirvió al menos una propuesta con `ai_outcome=empty_catalog` en el
             entorno indicado por `deployment_environment_name`: SÍ hay una lista de precios
-            publicada, pero al cargarla no quedó ni un ítem vendible, así que el prospecto
-            recibe 200 con cero líneas igual que en `no_catalog`. El efecto para el cliente es
-            idéntico y la acción es DISTINTA: allí falta publicar la tarifa, aquí la tarifa
-            está publicada y lo que falta son ítems vendibles dentro de ella (o el ciclo de
-            facturación pedido no tiene precio en esa lista). Por eso son dos alertas y no una.
+            publicada y aun así no se pudo cotizar nada, así que el prospecto recibe 200 con
+            cero líneas igual que en `no_catalog`. Frente a esa otra alerta el efecto para el
+            cliente es idéntico y la acción es DISTINTA -allí falta publicar la tarifa-, y por
+            eso son dos reglas. AQUÍ DENTRO HAY DOS CAMINOS Y TAMPOCO SE ARREGLAN IGUAL.
+            (a) La lista no tiene ni un ítem vendible para el ciclo de facturación pedido:
+            faltan ítems, o faltan precios para ese ciclo, en la lista vigente.
+            (b) Ítems SÍ hay, pero ninguno es un módulo `is_core` cotizable: la lista está
+            poblada y lo que falta es la fila del módulo núcleo, así que «añadir ítems» manda
+            a revisar lo que ya está bien y no arregla nada. CUÁL DE LOS DOS ES NO LO DICE LA
+            MÉTRICA, lo dice el `WARN` de `JpaSellableCatalogQueryPort` de esa misma ventana:
+            si contiene `ninguno es un modulo is_core cotizable` es (b); si contiene
+            `ni un articulo vendible` es (a). No se separan en dos series porque un valor
+            nuevo de `ai_outcome` tendría que declararse en la lista blanca cerrada del filtro
+            de cardinalidad, que vive en el repositorio del backend, y hasta que se desplegara
+            la alerta nueva nacería sin serie que vigilar. El runbook trae la consulta.
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwareaiproposalemptycatalog"
 
       # ───────────────────── 3. NO HAY ACCESO AL MODELO ─────────────────────

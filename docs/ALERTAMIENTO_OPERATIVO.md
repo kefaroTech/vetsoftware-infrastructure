@@ -3812,9 +3812,10 @@ el asistente. En cuanto haya una sola petición, sí lo es.
   al llegar a 15.000 series, perdiendo **toda** la telemetría en silencio).
 - **No se resuelve sola al publicar la tarifa** (ver el punto 3 de la cabecera del apartado).
 - **Hasta que se despliegue la rama del backend que separa `empty_catalog`, esta alerta cubre los
-  dos casos**: hoy tanto «no hay lista publicada» como «la lista publicada no tiene nada vendible»
-  llaman al mismo camino y se cuentan como `no_catalog`. Si esta alerta suena y la tarifa **sí**
-  está publicada, el caso real es el de la sección siguiente.
+  tres casos**: hoy «no hay lista publicada», «la lista publicada no tiene nada vendible» y «la
+  lista tiene artículos pero ninguno es un módulo `is_core` cotizable» llaman al mismo camino y se
+  cuentan como `no_catalog`. Si esta alerta suena y la tarifa **sí** está publicada, el caso real es
+  el de la sección siguiente, que ya trae escrito cómo distinguir los dos que le tocan.
 
 ### VetSoftwareAiProposalEmptyCatalog
 
@@ -3848,30 +3849,81 @@ el asistente. En cuanto haya una sola petición, sí lo es.
 >
 > Mientras no aparezca `empty_catalog` entre los valores devueltos, esta alerta no puede dispararse.
 >
+> **Y este desenlace ya no tiene una sola causa.** La rama del backend
+> `feature/el-nucleo-no-es-un-bit-ambiguo` —posterior a la anterior— encamina a `empty_catalog` un
+> **tercer** estado que hasta ahora salía como un 200 mudo y no se contaba en ninguna parte: la
+> tarifa tiene artículos, pero **ninguno es un módulo `is_core` cotizable**, así que el carrito no
+> tiene de dónde partir. Encaminarlo al desenlace que **ya está vigilado**, en vez de inventar uno
+> nuevo, es lo correcto; lo que obliga es a que **este procedimiento sepa distinguir las dos
+> causas**, porque la acción no es la misma. Todo lo que sigue está escrito ya para las dos, y por
+> eso se puede leer antes de que el despliegue llegue.
+>
 > **RETIRAR ESTE AVISO CUANDO** la consulta de arriba devuelva `empty_catalog` en el entorno de
-> prod. El PR del backend que lo publica está abierto en `kefaroTech/vetsoftware-backend`; una vez
-> fusionado y desplegado, este bloque entero sobra y la sección se lee como cualquier otra. Hay
+> prod. **Y solo entonces: fusionado no es desplegado.** El PR que publica el desenlace
+> —`kefaroTech/vetsoftware-backend`#695, rama `feature/el-asistente-callado-cuando-no-hay-tarifa`—
+> **ya está fusionado desde el 2026-08-31**, y aun así este aviso sigue en pie, porque lo que hace
+> que la serie exista es el despliegue y no el merge. Por eso lo que decide es la consulta de
+> arriba y **nunca** el estado del PR. Una vez desplegado, este bloque entero sobra y la sección se
+> lee como cualquier otra. Hay
 > tres avisos de este tipo en el apartado —aquí, en `VetSoftwareAiProposalModelUnavailable` y en
 > `VetSoftwareAiProposalModelFailed`—; se buscan con `RETIRAR ESTE AVISO CUANDO` y **se retiran los
 > tres a la vez**, porque los tres dependen del mismo despliegue.
 
-**Qué significa** — **Sí hay una tarifa publicada, pero al cargarla no quedó ni un ítem vendible**
-(o ninguno con precio para el ciclo de facturación que pidió el prospecto). El resultado para el
-cliente es **idéntico** al de la alerta anterior: 200 con cero líneas.
+**Qué significa** — **Sí hay una tarifa publicada y aun así con ella no se cotiza nada.** El
+resultado para el cliente es **idéntico** al de la alerta anterior: 200 con cero líneas.
 
-**Por qué es una alerta aparte y no un caso de la anterior.** El efecto es el mismo y **la acción
-no**. Allí falta publicar una tarifa; aquí la tarifa está publicada y lo que falta son artículos
-vendibles dentro de ella. Quien recibe el aviso hace dos cosas distintas, y colapsarlas en un
-mensaje obligaría a averiguar cuál de las dos es antes de empezar.
+**⚠️ Este desenlace lo producen DOS estados distintos, y se arreglan distinto.** No son matices del
+mismo problema: son dos filas de base de datos diferentes y dos personas distintas pueden ser quien
+lo arregle. Antes de tocar nada hay que saber cuál de los dos es —el apartado «Primero mirar» dice
+cómo, sin adivinar—:
+
+| | **(a) Nada vendible** | **(b) Sin módulo núcleo** |
+| --- | --- | --- |
+| Qué pasa | De la lista no cuelga **ni un artículo vendible** para el ciclo pedido | Artículos **sí hay**, pero **ninguno es un módulo `is_core` cotizable** |
+| Qué hacer | **Añadir artículos** a la lista vigente, o precios para el ciclo que falta | **Arreglar la fila del módulo núcleo** (`CORE`). Añadir artículos **no arregla nada** |
+| La trampa | — | El mensaje corto dice «no cotiza» y el impulso es cargar más artículos: se revisa lo que ya está bien |
+
+**Por qué es una alerta aparte de `VetSoftwareAiProposalNoCatalog`.** El efecto es el mismo y **la
+acción no**. Allí falta publicar una tarifa; aquí la tarifa está publicada. Quien recibe el aviso
+hace cosas distintas, y colapsarlas en un mensaje obligaría a averiguar cuál es antes de empezar.
+
+**Por qué (a) y (b) NO son a su vez dos alertas, aunque ese mismo criterio lo pediría.** Se evaluó y
+se descartó, y la razón no es de estilo: una serie aparte exige un valor nuevo de `ai_outcome`, y
+**ese valor tiene que estar declarado en la lista blanca cerrada de
+`BusinessMetricCardinalityFilter`, que vive en el repositorio del backend** y que —como explica el
+aviso de arriba— **deniega el medidor entero** cuando el valor no está en ella. Es decir: la alerta
+nueva se podría escribir hoy aquí, pero **no tendría serie que evaluar hasta un despliegue del otro
+repositorio**, y hasta entonces estaría en `OK` permanente sin vigilar nada. **Una alerta que no
+dispara es peor que un mensaje mejorable.** La distinción se resuelve donde sí está disponible desde
+el primer minuto: en el **mensaje** de la alerta, que nombra las dos acciones, y en el **registro**,
+que dice cuál de las dos toca. Si algún día se abre la lista blanca, esto se puede revisar; mientras
+tanto, dividir sería regalar cobertura a cambio de nada.
 
 **Qué la dispara** —
 `sum by (deployment_environment_name, ai_outcome) (vetsoftware_business_ai_proposal_generated_total{job="mainvet/vetsoftware", ai_outcome="empty_catalog"}) > 0`
 con `for: 5m`, severidad **critical**.
 
-**Primero mirar** — **El log ya trae el diagnóstico hecho, con la lista y el ciclo dentro**, que es
-justo lo que evita reproducir el caso para saber cuál de los dos fallaba.
-`JpaSellableCatalogQueryPort` escribe un `WARN` con este texto literal (misma ventana de 5 minutos y
-mismo recuento de suprimidas que el aviso de «sin tarifa»):
+**Primero mirar — CUÁL DE LAS DOS ES, y no se adivina: lo dice el log.** `JpaSellableCatalogQueryPort`
+escribe un `WARN` **distinto por cada causa**, los dos con la lista y el ciclo dentro, y los dos con
+la misma ventana de 5 minutos y el mismo recuento de suprimidas que el aviso de «sin tarifa». La
+métrica no distingue —es el mismo `ai_outcome`—, así que **este paso no es opcional**: es lo único
+que separa «añadir artículos» de «arreglar el módulo núcleo».
+
+Esta consulta devuelve el que haya, sea cual sea (cambie `prod` por el valor que traiga
+`deployment_environment_name` en la notificación):
+
+```logql
+{service_name="vetsoftware", deployment_environment_name="prod"}
+  | json
+  | level="WARN"
+  |~ "ni un articulo vendible|ninguno es un modulo is_core cotizable"
+```
+
+**El literal que discrimina es `is_core`**, y con eso basta: solo el mensaje de la causa (b) lo
+contiene. Si hace falta acotar a una sola, `|= "is_core"` deja (b) y `!= "is_core"` deja (a).
+
+**(a) Si el `WARN` dice «no cuelga de ella ni un articulo vendible»** (el backend escribe sin
+tildes):
 
 ```text
 La lista de precios {id} esta PUBLISHED y vigente pero no cuelga de ella ni un articulo vendible
@@ -3885,12 +3937,42 @@ las que dice el propio mensaje: artículos en `ACTIVE` **y** `enabled`, que la l
 que los tenga **para ese ciclo de facturación**. Una tarifa solo con tramos anuales deja mudo al
 asistente para quien pide mensual, y esa asimetría no se ve mirando la tabla por encima.
 
-**Causas habituales** — Una lista publicada vacía (se creó y se publicó antes de cargarla); todos
-los artículos marcados como no vendibles o no autoservicio; precios cargados solo para un ciclo de
-facturación y el prospecto pidiendo el otro.
+**(b) Si el `WARN` dice «ninguno es un modulo is_core cotizable»**, la lista **no está vacía** y
+cargarle más artículos no cambia nada:
 
-**Qué hacer** — Añadir artículos vendibles a la lista vigente, o precios para el ciclo que falta.
-Igual que la anterior: **es trabajo de una persona**, no se recupera solo.
+```text
+La lista de precios {id} tiene articulos para el ciclo {ciclo} pero ninguno es un modulo is_core
+cotizable, asi que el asistente comercial no puede cotizar nada y responde como si el catalogo
+estuviera vacio (ai_outcome=empty_catalog). Los is_core que si llegaron son [...] -si ahi no esta
+CORE, revisa esa fila de catalog_items (item_type MODULE, status ACTIVE, enabled) y su tramo en
+catalog_prices para ESE ciclo; si esta pero no se cotiza, es que no cuelga de ningun BUNDLE ACTIVE
+y por eso no es autoservicio-.
+```
+
+**La lista entre corchetes es el diagnóstico, no un adorno.** Enumera los `is_core` que **sí**
+llegaron: si salen `CAPACITY_USER` y `CAPACITY_BRANCH` pero **no** `CORE`, lo que falta es la fila
+del módulo o su tramo de precio, no la tarifa entera. Y si `CORE` **sí** aparece y aun así no se
+cotiza, la causa es que no cuelga de ningún `BUNDLE` en `ACTIVE`, que es lo que lo hace
+autoservicio.
+
+⛔ **No «limpies» la lista desmarcando `is_core` en `CAPACITY_USER` ni en `CAPACITY_BRANCH`.** Es el
+atajo que parece arreglar (b) y rompe otra cosa: ese bit lo usa el alta de empresas como predicado
+de conjunto, y quitarlo hace que la creación de empresas empiece a fallar con
+`PLATFORM_CATALOG_NOT_CONFIGURED`. El arreglo es **añadir o reparar el módulo núcleo**, nunca quitar
+marcas a los demás.
+
+**Causas habituales** — De (a): una lista publicada vacía (se creó y se publicó antes de cargarla);
+todos los artículos marcados como no vendibles o no autoservicio; precios cargados solo para un
+ciclo de facturación y el prospecto pidiendo el otro. De (b): la fila del módulo núcleo ausente,
+retirada o deshabilitada; el módulo sin tramo de precio para ese ciclo; el módulo presente pero sin
+colgar de ningún paquete `ACTIVE`, con lo que no es autoservicio; o el bit `is_core` puesto solo en
+artículos que no son `MODULE`.
+
+**Qué hacer** — **Depende de cuál sea, y por eso el paso anterior va primero.** En (a), añadir
+artículos vendibles a la lista vigente o precios para el ciclo que falta. En (b), reparar la fila
+del módulo núcleo —`item_type MODULE`, `status ACTIVE`, `enabled`, con tramo para ese ciclo y
+colgando de un `BUNDLE ACTIVE`—. Igual que la alerta anterior: **es trabajo de una persona**, no se
+recupera solo.
 
 **Cuándo no es un incidente** — Durante la carga inicial de un catálogo, si ya se sabe que está a
 medias y nadie está usando el asistente.
@@ -3899,8 +3981,13 @@ medias y nadie está usando el asistente.
 
 - **Hoy no existe** (ver el aviso de arriba). Antes de dar por bueno que «no está pasando», hay que
   comprobar que el desenlace se emite; si no se emite, la ausencia de alerta no prueba nada.
-- **No distingue «lista vacía» de «ciclo sin precio»**, que son dos arreglos distintos. Esa
-  distinción vive en el registro, no en la métrica.
+- **No distingue las dos causas —(a) nada vendible y (b) sin módulo núcleo— ni, dentro de (a),
+  «lista vacía» de «ciclo sin precio».** Son tres arreglos distintos bajo un solo `ai_outcome`. Esa
+  distinción vive **en el registro, no en la métrica**, y es deliberado: partirla en series
+  separadas exigiría declarar valores nuevos en la lista blanca de cardinalidad del backend (ver
+  arriba). Consecuencia práctica: **quien reciba la notificación y no abra el log no puede saber qué
+  arreglar**, y el mensaje de la alerta le da las dos opciones justamente para que sepa que tiene
+  que mirarlo.
 - No se resuelve sola al arreglar el catálogo (punto 3 de la cabecera).
 
 ### VetSoftwareAiProposalModelUnavailable
