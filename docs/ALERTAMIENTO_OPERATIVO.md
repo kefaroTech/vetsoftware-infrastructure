@@ -3859,8 +3859,12 @@ el asistente. En cuanto haya una sola petición, sí lo es.
 > eso se puede leer antes de que el despliegue llegue.
 >
 > **RETIRAR ESTE AVISO CUANDO** la consulta de arriba devuelva `empty_catalog` en el entorno de
-> prod. El PR del backend que lo publica está abierto en `kefaroTech/vetsoftware-backend`; una vez
-> fusionado y desplegado, este bloque entero sobra y la sección se lee como cualquier otra. Hay
+> prod. **Y solo entonces: fusionado no es desplegado.** El PR que publica el desenlace
+> —`kefaroTech/vetsoftware-backend`#695, rama `feature/el-asistente-callado-cuando-no-hay-tarifa`—
+> **ya está fusionado desde el 2026-08-31**, y aun así este aviso sigue en pie, porque lo que hace
+> que la serie exista es el despliegue y no el merge. Por eso lo que decide es la consulta de
+> arriba y **nunca** el estado del PR. Una vez desplegado, este bloque entero sobra y la sección se
+> lee como cualquier otra. Hay
 > tres avisos de este tipo en el apartado —aquí, en `VetSoftwareAiProposalModelUnavailable` y en
 > `VetSoftwareAiProposalModelFailed`—; se buscan con `RETIRAR ESTE AVISO CUANDO` y **se retiran los
 > tres a la vez**, porque los tres dependen del mismo despliegue.
