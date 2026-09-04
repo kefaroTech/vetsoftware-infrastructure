@@ -9,7 +9,7 @@ backend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/vetsoftware-ba
 grafana_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
 
 cors_allowed_origins          = ["https://app.example.com"]
-email_from                    = "VetSoftware <noreply@example.com>"
+email_from                    = "Lumbre <noreply@example.com>"
 # Pie de los correos y tope diario del asistente. Los tres enlaces conservan el
 # destino que traia el backend por defecto; el tope se publica al contenedor.
 # email_help_url              = "https://vetsoftware.co/ayuda"
