@@ -73,6 +73,6 @@ groups:
           domain: availability
           service: vetsoftware
         annotations:
-          summary: "El backend de VetSoftware lleva 15 minutos sin enviar telemetría"
+          summary: "El backend de Lumbre lleva 15 minutos sin enviar telemetría"
           description: "Ni target_info ni jvm_threads_live han recibido muestras en 15 minutos: o el proceso está caído, o el export OTLP está roto de extremo a extremo. Comprobar primero el servicio ECS y después el pipeline de export (credenciales OTLP, red de salida, estado de Grafana Cloud)."
           runbook: "https://github.com/kefaroTech/vetsoftware-infrastructure/blob/develop/docs/ALERTAMIENTO_OPERATIVO.md#vetsoftwarebackendtelemetryabsent"
