@@ -2,7 +2,7 @@
 name: gitflow-release
 description: Ejecuta operaciones Git en los cuatro repos según la política obligatoria de GitFlow — inspeccionar estado, crear ramas, preparar commits, abrir PRs, releases y hotfixes. Úsalo SIEMPRE que haya que tocar git; ningún otro agente debe commitear. Puede inspeccionar los cuatro repos en paralelo, pero NUNCA lances dos instancias que escriban en el mismo repo. Requiere aprobación humana escrita antes de cada commit, sin excepciones.
 tools: Read, Grep, Glob, Bash, PowerShell
-model: inherit
+model: sonnet
 ---
 
 > **Ubicación.** Copia local para sesiones abiertas directamente en `VetSoftwareIaC`. Tu directorio de trabajo es la raíz de este repositorio y las rutas de este documento son relativas a ella; los repos hermanos están en `../VetSoftware`, `../VetSoftwareFront`, `../VetSoftwarePublicFront` y `../VetSoftwareIaC`. La copia maestra vive en `../.claude/agents/` — si editas una, edita la otra en el mismo PR.

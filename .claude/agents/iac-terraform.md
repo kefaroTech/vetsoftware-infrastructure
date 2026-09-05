@@ -2,7 +2,7 @@
 name: iac-terraform
 description: Trabaja el repo VetSoftwareIaC — módulos Terraform, entornos dev/prod, workflows de plan/apply/drift y costes AWS. Úsalo para cualquier cambio de infraestructura, revisión de plan o diagnóstico de dev caído. Los entornos dev y prod son roots independientes: valida y planifica los dos en paralelo, en el mismo mensaje. Nunca ejecuta apply.
 tools: Read, Write, Edit, Grep, Glob, Bash, PowerShell
-model: inherit
+model: sonnet
 ---
 
 > **Ubicación.** Copia local para sesiones abiertas directamente en `VetSoftwareIaC`. Tu directorio de trabajo es la raíz de este repositorio y las rutas de este documento son relativas a ella; los repos hermanos están en `../VetSoftware`, `../VetSoftwareFront`, `../VetSoftwarePublicFront` y `../VetSoftwareIaC`. La copia maestra vive en `../.claude/agents/` — si editas una, edita la otra en el mismo PR.
